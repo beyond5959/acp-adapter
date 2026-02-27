@@ -24,8 +24,10 @@ const (
 	methodSessionCancel            = "session/cancel"
 	methodSessionUpdate            = "session/update"
 	methodSessionRequestPermission = "session/request_permission"
+	methodFSWriteTextFile          = "fs/write_text_file"
 
 	defaultPermissionTimeout = 30 * time.Second
+	defaultFSWriteTimeout    = 10 * time.Second
 
 	rpcErrMethodNotFound = -32601
 	rpcErrInvalidParams  = -32602
@@ -50,6 +52,19 @@ const (
 	permissionOutcomeCancelled permissionOutcome = "cancelled"
 )
 
+type patchApplyMode string
+
+const (
+	patchApplyModeAppServer patchApplyMode = "appserver"
+	patchApplyModeACPFS     patchApplyMode = "acp_fs"
+)
+
+type fsWriteTextFileResult struct {
+	OK       bool   `json:"ok,omitempty"`
+	Conflict bool   `json:"conflict,omitempty"`
+	Message  string `json:"message,omitempty"`
+}
+
 type turnLifecycle struct {
 	sessionID       string
 	turnID          string
@@ -60,8 +75,14 @@ type turnLifecycle struct {
 type appClient interface {
 	ThreadStart(ctx context.Context, cwd string) (string, error)
 	TurnStart(ctx context.Context, threadID, input string) (string, <-chan appserver.TurnEvent, error)
+	ReviewStart(ctx context.Context, threadID, instructions string) (string, <-chan appserver.TurnEvent, error)
 	TurnInterrupt(ctx context.Context, threadID, turnID string) error
 	ApprovalRespond(ctx context.Context, approvalID string, decision appserver.ApprovalDecision) error
+}
+
+// ServerOptions configures optional ACP server behaviors.
+type ServerOptions struct {
+	PatchApplyMode string
 }
 
 // Server handles ACP JSON-RPC requests over stdio.
@@ -70,6 +91,7 @@ type Server struct {
 	app      appClient
 	sessions *bridge.Store
 	logger   *slog.Logger
+	options  ServerOptions
 
 	pendingMu     sync.Mutex
 	pendingClient map[string]chan RPCMessage
@@ -77,12 +99,23 @@ type Server struct {
 }
 
 // NewServer creates an ACP request router.
-func NewServer(codec *StdioCodec, app appClient, sessions *bridge.Store, logger *slog.Logger) *Server {
+func NewServer(
+	codec *StdioCodec,
+	app appClient,
+	sessions *bridge.Store,
+	logger *slog.Logger,
+	options ServerOptions,
+) *Server {
+	if normalizePatchApplyMode(options.PatchApplyMode) == "" {
+		options.PatchApplyMode = string(patchApplyModeAppServer)
+	}
+
 	return &Server{
 		codec:         codec,
 		app:           app,
 		sessions:      sessions,
 		logger:        logger,
+		options:       options,
 		pendingClient: make(map[string]chan RPCMessage),
 		nextClientID:  0,
 	}
@@ -213,9 +246,21 @@ func (s *Server) handleSessionPrompt(ctx context.Context, id json.RawMessage, pa
 	turnCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	turnID, events, err := s.app.TurnStart(turnCtx, threadID, prompt)
+	isReview, reviewInstructions := parseReviewPrompt(prompt)
+
+	var turnID string
+	var events <-chan appserver.TurnEvent
+	if isReview {
+		turnID, events, err = s.app.ReviewStart(turnCtx, threadID, reviewInstructions)
+	} else {
+		turnID, events, err = s.app.TurnStart(turnCtx, threadID, prompt)
+	}
 	if err != nil {
-		s.writeInternalError(id, "turn/start failed", map[string]any{
+		method := "turn/start"
+		if isReview {
+			method = "review/start"
+		}
+		s.writeInternalError(id, method+" failed", map[string]any{
 			"error":     err.Error(),
 			"sessionId": params.SessionID,
 			"threadId":  threadID,
@@ -342,12 +387,52 @@ func (s *Server) handleApprovalEvent(
 		decision = permissionOutcomeCancelled
 	}
 
-	outcomeUpdates := lifecycle.toolCallOutcomeUpdates(event, decision)
-	updates = append(updates, outcomeUpdates...)
+	toolStatus := "failed"
+	toolMessage := fmt.Sprintf("permission %s", decision)
+	respondDecision := mapDecisionToAppServer(decision)
+	if decision == permissionOutcomeApproved {
+		toolStatus = "completed"
+	}
+
+	mode := normalizePatchApplyMode(s.options.PatchApplyMode)
+	if mode == patchApplyModeACPFS && event.Approval.Kind == appserver.ApprovalKindFile && decision == permissionOutcomeApproved {
+		if err := s.applyPatchViaACPFS(ctx, lifecycle.sessionID, lifecycle.turnID, event.Approval); err != nil {
+			toolStatus = "failed"
+			toolMessage = fmt.Sprintf("permission approved but ACP fs apply failed: %v", err)
+			respondDecision = appserver.ApprovalDecisionDeclined
+			updates = append(updates, SessionUpdateParams{
+				SessionID: lifecycle.sessionID,
+				TurnID:    lifecycle.turnID,
+				Type:      "status",
+				Phase:     string(turnPhaseStreaming),
+				Status:    "review_apply_failed",
+				Message:   toolMessage,
+			})
+		} else {
+			updates = append(updates, SessionUpdateParams{
+				SessionID: lifecycle.sessionID,
+				TurnID:    lifecycle.turnID,
+				Type:      "status",
+				Phase:     string(turnPhaseStreaming),
+				Status:    "review_apply_applied",
+				Message:   "patch applied via ACP fs",
+			})
+		}
+	}
+
+	updates = append(
+		updates,
+		lifecycle.toolCallOutcomeUpdate(
+			event,
+			decision,
+			toolStatus,
+			toolMessage,
+		),
+	)
 
 	respondCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if respondErr := s.app.ApprovalRespond(respondCtx, event.Approval.ApprovalID, mapDecisionToAppServer(decision)); respondErr != nil {
+	if respondErr := s.app.ApprovalRespond(respondCtx, event.Approval.ApprovalID, respondDecision); respondErr != nil {
 		updates = append(updates, SessionUpdateParams{
 			SessionID: lifecycle.sessionID,
 			TurnID:    lifecycle.turnID,
@@ -418,6 +503,53 @@ func (s *Server) requestPermission(
 		return permissionOutcomeCancelled, err
 	}
 	return normalizePermissionOutcome(result), nil
+}
+
+func (s *Server) applyPatchViaACPFS(
+	ctx context.Context,
+	sessionID string,
+	turnID string,
+	approval appserver.ApprovalRequest,
+) error {
+	path := approval.WritePath
+	if path == "" && len(approval.Files) > 0 {
+		path = approval.Files[0]
+	}
+	if path == "" {
+		return fmt.Errorf("missing file path for ACP fs apply")
+	}
+	if strings.TrimSpace(approval.WriteText) == "" {
+		return fmt.Errorf("missing write text for ACP fs apply")
+	}
+
+	callCtx, cancel := context.WithTimeout(ctx, defaultFSWriteTimeout)
+	defer cancel()
+
+	params := map[string]any{
+		"sessionId": sessionID,
+		"turnId":    turnID,
+		"path":      path,
+		"text":      approval.WriteText,
+		"patch":     approval.Patch,
+	}
+
+	var result fsWriteTextFileResult
+	if err := s.callClient(callCtx, methodFSWriteTextFile, params, &result); err != nil {
+		return err
+	}
+	if result.Conflict {
+		if result.Message != "" {
+			return fmt.Errorf("patch conflict: %s", result.Message)
+		}
+		return fmt.Errorf("patch conflict")
+	}
+	if result.OK {
+		return nil
+	}
+	if result.Message != "" {
+		return fmt.Errorf("fs write rejected: %s", result.Message)
+	}
+	return nil
 }
 
 func (s *Server) callClient(ctx context.Context, method string, params any, out any) error {
@@ -509,6 +641,19 @@ func fallbackPrompt(raw json.RawMessage) string {
 	return ""
 }
 
+func parseReviewPrompt(prompt string) (bool, string) {
+	trimmed := strings.TrimSpace(prompt)
+	if trimmed != "/review" && !strings.HasPrefix(trimmed, "/review ") {
+		return false, ""
+	}
+
+	instructions := strings.TrimSpace(strings.TrimPrefix(trimmed, "/review"))
+	if instructions == "" {
+		instructions = "review workspace changes"
+	}
+	return true, instructions
+}
+
 func normalizeStopReason(reason string) string {
 	switch reason {
 	case "cancelled":
@@ -517,6 +662,17 @@ func normalizeStopReason(reason string) string {
 		return "error"
 	default:
 		return "end_turn"
+	}
+}
+
+func normalizePatchApplyMode(raw string) patchApplyMode {
+	switch strings.TrimSpace(strings.ToLower(raw)) {
+	case string(patchApplyModeACPFS):
+		return patchApplyModeACPFS
+	case string(patchApplyModeAppServer):
+		return patchApplyModeAppServer
+	default:
+		return ""
 	}
 }
 
@@ -573,24 +729,22 @@ func (t *turnLifecycle) toolCallInProgressUpdates(event appserver.TurnEvent) []S
 	}
 }
 
-func (t *turnLifecycle) toolCallOutcomeUpdates(event appserver.TurnEvent, outcome permissionOutcome) []SessionUpdateParams {
-	status := "failed"
-	if outcome == permissionOutcomeApproved {
-		status = "completed"
-	}
-
-	return []SessionUpdateParams{
-		{
-			SessionID:          t.sessionID,
-			TurnID:             t.turnID,
-			Type:               "tool_call_update",
-			Phase:              string(t.phase),
-			Status:             status,
-			ToolCallID:         event.Approval.ToolCallID,
-			Approval:           string(event.Approval.Kind),
-			PermissionDecision: string(outcome),
-			Message:            fmt.Sprintf("permission %s", outcome),
-		},
+func (t *turnLifecycle) toolCallOutcomeUpdate(
+	event appserver.TurnEvent,
+	outcome permissionOutcome,
+	status string,
+	message string,
+) SessionUpdateParams {
+	return SessionUpdateParams{
+		SessionID:          t.sessionID,
+		TurnID:             t.turnID,
+		Type:               "tool_call_update",
+		Phase:              string(t.phase),
+		Status:             status,
+		ToolCallID:         event.Approval.ToolCallID,
+		Approval:           string(event.Approval.Kind),
+		PermissionDecision: string(outcome),
+		Message:            message,
 	}
 }
 
@@ -643,6 +797,28 @@ func (t *turnLifecycle) apply(event appserver.TurnEvent) ([]SessionUpdateParams,
 				ItemID:    event.ItemID,
 				ItemType:  event.ItemType,
 				Status:    "item_completed",
+			},
+		}, false, ""
+	case appserver.TurnEventTypeReviewModeEntered:
+		t.phase = turnPhaseStreaming
+		return []SessionUpdateParams{
+			{
+				SessionID: t.sessionID,
+				TurnID:    event.TurnID,
+				Type:      "status",
+				Phase:     string(t.phase),
+				Status:    "review_mode_entered",
+			},
+		}, false, ""
+	case appserver.TurnEventTypeReviewModeExited:
+		t.phase = turnPhaseStreaming
+		return []SessionUpdateParams{
+			{
+				SessionID: t.sessionID,
+				TurnID:    event.TurnID,
+				Type:      "status",
+				Phase:     string(t.phase),
+				Status:    "review_mode_exited",
 			},
 		}, false, ""
 	case appserver.TurnEventTypeCompleted:

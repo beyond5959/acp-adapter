@@ -12,6 +12,7 @@ type Config struct {
 	AppServerArgs    []string
 	TraceJSON        bool
 	LogLevel         string
+	PatchApplyMode   string
 }
 
 // Parse reads command-line flags with environment variable defaults.
@@ -23,6 +24,7 @@ func Parse() Config {
 	}
 
 	defaultLogLevel := firstNonEmpty(os.Getenv("LOG_LEVEL"), "info")
+	defaultPatchApplyMode := firstNonEmpty(os.Getenv("PATCH_APPLY_MODE"), "appserver")
 
 	var cfg Config
 	var argsRaw string
@@ -30,6 +32,12 @@ func Parse() Config {
 	flag.StringVar(&argsRaw, "app-server-args", defaultArgsRaw, "app server args, space separated")
 	flag.BoolVar(&cfg.TraceJSON, "trace-json", false, "enable raw json tracing")
 	flag.StringVar(&cfg.LogLevel, "log-level", defaultLogLevel, "log level: debug|info|warn|error")
+	flag.StringVar(
+		&cfg.PatchApplyMode,
+		"patch-apply-mode",
+		defaultPatchApplyMode,
+		"patch apply mode: appserver|acp_fs",
+	)
 	flag.Parse()
 
 	cfg.AppServerArgs = splitArgs(argsRaw)

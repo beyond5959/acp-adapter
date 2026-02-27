@@ -46,6 +46,9 @@ func main() {
 		supervisor,
 		bridge.NewStore(),
 		logger,
+		acp.ServerOptions{
+			PatchApplyMode: cfg.PatchApplyMode,
+		},
 	)
 
 	if err := server.Serve(ctx); err != nil && !errors.Is(err, io.EOF) {

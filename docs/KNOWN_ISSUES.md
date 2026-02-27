@@ -14,6 +14,7 @@
 - KI-0008：不同 ACP client 的 capabilities 差异导致功能不可用
 - KI-0009：真实 App Server 与 fake server 事件形态可能不完全一致
 - KI-0010：审批超时默认取消可能影响长时间人工确认场景
+- KI-0011：Mode B（ACP fs 落盘）依赖客户端 `fs/write_text_file` 契约
 
 ---
 
@@ -77,3 +78,16 @@
   - 需要长审批窗口时，分批拆分任务降低单次审批等待。
 - 后续计划：
   - 后续增加 timeout 配置与审计字段，便于按场景调优。
+
+## KI-0011：Mode B（ACP fs 落盘）依赖客户端 `fs/write_text_file` 契约
+- 现象：PR4 的 ACP fs 落盘模式依赖上游实现 `fs/write_text_file` 并支持 path/text/冲突结果语义。
+- 影响：
+  - 不同 ACP client 若方法名或参数不一致，Mode B 会失败并触发 `review_apply_failed`。
+  - E2 在 fake harness 可通过，但真实客户端需联调确认。
+- 复现：
+  - 启用 `PATCH_APPLY_MODE=acp_fs`，让上游不实现 `fs/write_text_file` 或返回不兼容 payload。
+- Workaround：
+  - 默认使用 Mode A（`appserver`）以保证可用性。
+  - 在对接特定 ACP client 时适配其 fs RPC 形状。
+- 后续计划：
+  - PR5 增加 fs 方法适配层与 capability 检测，按客户端能力动态选择模式。

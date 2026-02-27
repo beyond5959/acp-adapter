@@ -65,6 +65,14 @@ type sessionRequestPermissionParams struct {
 	Message    string   `json:"message,omitempty"`
 }
 
+type fsWriteTextFileParams struct {
+	SessionID string `json:"sessionId,omitempty"`
+	TurnID    string `json:"turnId,omitempty"`
+	Path      string `json:"path"`
+	Text      string `json:"text"`
+	Patch     string `json:"patch,omitempty"`
+}
+
 type rpcReader struct {
 	t        *testing.T
 	messages chan rpcMessage
@@ -769,6 +777,260 @@ func TestE2EAcceptanceD1ToD5ApprovalsBridge(t *testing.T) {
 	h.assertStdoutPureJSONRPC()
 }
 
+func TestE2EAcceptanceE1ReviewWorkflow(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "/review check recent changes",
+	})
+
+	gotPromptResp := false
+	sawReviewEnter := false
+	sawReviewExit := false
+	sawDiff := false
+	for !gotPromptResp {
+		msg := h.nextMessage(responseTimeout)
+		switch msg.Method {
+		case "session/request_permission":
+			req := decodeSessionRequestPermission(t, msg)
+			if req.Approval != "file" {
+				t.Fatalf("review should request file permission, got %q", req.Approval)
+			}
+			h.sendResultResponse(messageID(msg), map[string]any{"outcome": "approved"})
+		case "session/update":
+			update := decodeSessionUpdate(t, msg)
+			if update.Status == "review_mode_entered" {
+				sawReviewEnter = true
+			}
+			if update.Status == "review_mode_exited" {
+				sawReviewExit = true
+			}
+			if update.Type == "message" && strings.Contains(update.Delta, "```diff") {
+				sawDiff = true
+			}
+		default:
+			if messageID(msg) != "3" {
+				continue
+			}
+			var result struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, msg, &result)
+			if result.StopReason != "end_turn" {
+				t.Fatalf("review prompt expected stopReason=end_turn, got %q", result.StopReason)
+			}
+			gotPromptResp = true
+		}
+	}
+
+	if !sawReviewEnter || !sawReviewExit {
+		t.Fatalf("review mode transitions missing: entered=%v exited=%v", sawReviewEnter, sawReviewExit)
+	}
+	if !sawDiff {
+		t.Fatalf("review workflow expected readable diff output")
+	}
+}
+
+func TestE2EAcceptanceE2PatchModeAAppServer(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "/review mode appserver",
+	})
+
+	gotPromptResp := false
+	sawToolCompleted := false
+	sawApplyMessage := false
+	sawFSWriteCall := false
+	for !gotPromptResp {
+		msg := h.nextMessage(responseTimeout)
+		switch msg.Method {
+		case "session/request_permission":
+			req := decodeSessionRequestPermission(t, msg)
+			if req.Approval != "file" {
+				t.Fatalf("review permission expected file, got %q", req.Approval)
+			}
+			h.sendResultResponse(messageID(msg), map[string]any{"outcome": "approved"})
+		case "fs/write_text_file":
+			sawFSWriteCall = true
+			h.sendResultResponse(messageID(msg), map[string]any{"ok": true})
+		case "session/update":
+			update := decodeSessionUpdate(t, msg)
+			if update.Type == "message" && strings.Contains(update.Delta, "patch applied via appserver") {
+				sawApplyMessage = true
+			}
+			if update.Type == "tool_call_update" && update.Status == "completed" && update.PermissionDecision == "approved" {
+				sawToolCompleted = true
+			}
+		default:
+			if messageID(msg) != "3" {
+				continue
+			}
+			var result struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, msg, &result)
+			if result.StopReason != "end_turn" {
+				t.Fatalf("review apply mode A expected stopReason=end_turn, got %q", result.StopReason)
+			}
+			gotPromptResp = true
+		}
+	}
+
+	if sawFSWriteCall {
+		t.Fatalf("mode A should not call ACP fs/write_text_file")
+	}
+	if !sawToolCompleted || !sawApplyMessage {
+		t.Fatalf("mode A expected completed tool update and apply message")
+	}
+}
+
+func TestE2EAcceptanceE2PatchModeBACPFS(t *testing.T) {
+	h := startAdapter(t, "PATCH_APPLY_MODE=acp_fs")
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "/review mode acpfs",
+	})
+
+	gotPromptResp := false
+	sawFSWriteCall := false
+	sawApplyStatus := false
+	sawToolCompleted := false
+	for !gotPromptResp {
+		msg := h.nextMessage(responseTimeout)
+		switch msg.Method {
+		case "session/request_permission":
+			h.sendResultResponse(messageID(msg), map[string]any{"outcome": "approved"})
+		case "fs/write_text_file":
+			sawFSWriteCall = true
+			writeReq := decodeFSWriteTextFileParams(t, msg)
+			if writeReq.Path == "" || writeReq.Text == "" {
+				t.Fatalf("fs/write_text_file missing path or text: %+v", writeReq)
+			}
+			h.sendResultResponse(messageID(msg), map[string]any{"ok": true})
+		case "session/update":
+			update := decodeSessionUpdate(t, msg)
+			if update.Status == "review_apply_applied" {
+				sawApplyStatus = true
+			}
+			if update.Type == "tool_call_update" && update.Status == "completed" && update.PermissionDecision == "approved" {
+				sawToolCompleted = true
+			}
+		default:
+			if messageID(msg) != "3" {
+				continue
+			}
+			var result struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, msg, &result)
+			if result.StopReason != "end_turn" {
+				t.Fatalf("review apply mode B expected stopReason=end_turn, got %q", result.StopReason)
+			}
+			gotPromptResp = true
+		}
+	}
+
+	if !sawFSWriteCall {
+		t.Fatalf("mode B must call ACP fs/write_text_file")
+	}
+	if !sawApplyStatus || !sawToolCompleted {
+		t.Fatalf("mode B expected review_apply_applied and completed tool update")
+	}
+}
+
+func TestE2EReviewPatchConflictVisibleModeB(t *testing.T) {
+	h := startAdapter(t, "PATCH_APPLY_MODE=acp_fs")
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "/review conflict",
+	})
+
+	gotPromptResp := false
+	sawFailureStatus := false
+	sawToolFailed := false
+	for !gotPromptResp {
+		msg := h.nextMessage(responseTimeout)
+		switch msg.Method {
+		case "session/request_permission":
+			h.sendResultResponse(messageID(msg), map[string]any{"outcome": "approved"})
+		case "fs/write_text_file":
+			h.sendResultResponse(messageID(msg), map[string]any{
+				"conflict": true,
+				"message":  "merge conflict on docs/README.md",
+			})
+		case "session/update":
+			update := decodeSessionUpdate(t, msg)
+			if update.Status == "review_apply_failed" && strings.Contains(strings.ToLower(update.Message), "conflict") {
+				sawFailureStatus = true
+			}
+			if update.Type == "tool_call_update" && update.Status == "failed" && update.PermissionDecision == "approved" {
+				sawToolFailed = true
+			}
+		default:
+			if messageID(msg) != "3" {
+				continue
+			}
+			var result struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, msg, &result)
+			if result.StopReason != "end_turn" {
+				t.Fatalf("conflict review expected stopReason=end_turn, got %q", result.StopReason)
+			}
+			gotPromptResp = true
+		}
+	}
+
+	if !sawFailureStatus || !sawToolFailed {
+		t.Fatalf("conflict flow expected visible review_apply_failed and failed tool_call_update")
+	}
+}
+
 func TestRPCReaderDetectsInvalidStdoutLine(t *testing.T) {
 	reader := newRPCReader(t, strings.NewReader("not-json-rpc\n"))
 	time.Sleep(100 * time.Millisecond)
@@ -887,6 +1149,15 @@ func decodeSessionRequestPermission(t *testing.T, msg rpcMessage) sessionRequest
 	var params sessionRequestPermissionParams
 	if err := json.Unmarshal(msg.Params, &params); err != nil {
 		t.Fatalf("decode session/request_permission params: %v", err)
+	}
+	return params
+}
+
+func decodeFSWriteTextFileParams(t *testing.T, msg rpcMessage) fsWriteTextFileParams {
+	t.Helper()
+	var params fsWriteTextFileParams
+	if err := json.Unmarshal(msg.Params, &params); err != nil {
+		t.Fatalf("decode fs/write_text_file params: %v", err)
 	}
 	return params
 }

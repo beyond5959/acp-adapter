@@ -59,6 +59,17 @@ type TurnStartResult struct {
 	TurnID string `json:"turnId"`
 }
 
+// ReviewStartParams starts a review workflow in one thread.
+type ReviewStartParams struct {
+	ThreadID     string `json:"threadId"`
+	Instructions string `json:"instructions,omitempty"`
+}
+
+// ReviewStartResult returns review turn id.
+type ReviewStartResult struct {
+	TurnID string `json:"turnId"`
+}
+
 // TurnInterruptParams interrupts an active turn.
 type TurnInterruptParams struct {
 	ThreadID string `json:"threadId"`
@@ -109,6 +120,12 @@ type TurnCompletedNotification struct {
 	StopReason string `json:"stopReason,omitempty"`
 }
 
+// ReviewModeNotification indicates review mode lifecycle transitions.
+type ReviewModeNotification struct {
+	ThreadID string `json:"threadId"`
+	TurnID   string `json:"turnId"`
+}
+
 // ApprovalKind describes which side-effect type requires permission.
 type ApprovalKind string
 
@@ -143,6 +160,9 @@ type ApprovalRequest struct {
 	MCPServer  string       `json:"mcpServer,omitempty"`
 	MCPTool    string       `json:"mcpTool,omitempty"`
 	Message    string       `json:"message,omitempty"`
+	WritePath  string       `json:"writePath,omitempty"`
+	WriteText  string       `json:"writeText,omitempty"`
+	Patch      string       `json:"patch,omitempty"`
 }
 
 // ApprovalDecisionResult is sent as JSON-RPC result for approval request.
@@ -170,6 +190,10 @@ const (
 	TurnEventTypeError TurnEventType = "error"
 	// TurnEventTypeApprovalRequired indicates turn is blocked on permission.
 	TurnEventTypeApprovalRequired TurnEventType = "approval_required"
+	// TurnEventTypeReviewModeEntered indicates review mode entered.
+	TurnEventTypeReviewModeEntered TurnEventType = "review_mode_entered"
+	// TurnEventTypeReviewModeExited indicates review mode exited.
+	TurnEventTypeReviewModeExited TurnEventType = "review_mode_exited"
 )
 
 // TurnEvent is emitted to ACP session/prompt handler.
@@ -189,6 +213,7 @@ const (
 	methodInitialized   = "initialized"
 	methodThreadStart   = "thread/start"
 	methodTurnStart     = "turn/start"
+	methodReviewStart   = "review/start"
 	methodTurnInterrupt = "turn/interrupt"
 	methodApprovalReq   = "approval/request"
 
@@ -198,4 +223,6 @@ const (
 	notificationItemCompleted         = "item/completed"
 	notificationItemAgentMessageDelta = "item/agentMessage/delta"
 	notificationTurnCompleted         = "turn/completed"
+	notificationReviewModeEntered     = "review/mode_entered"
+	notificationReviewModeExited      = "review/mode_exited"
 )

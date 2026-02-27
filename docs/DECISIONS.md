@@ -17,6 +17,8 @@
 - ADR-0011：app-server Supervisor 恢复策略（异常退出后重建）
 - ADR-0012：ACP outbound `session/request_permission` 请求通道
 - ADR-0013：审批默认拒绝策略与 `tool_call_update` 状态约定
+- ADR-0014：`/review` 路由到 `review/start` + review mode 状态映射
+- ADR-0015：Patch 落盘双模式（AppServer / ACP fs）与失败可见性
 
 ---
 
@@ -129,3 +131,58 @@
 - 验证方式（测试/验收项）：
   - `TestE2EAcceptanceD1ToD5ApprovalsBridge`
   - 对应验收：D1、D2、D3、D4、D5
+
+### ADR-0014：`/review` 路由到 `review/start` + review mode 状态映射
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - PR4 要求 `/review` 工作流可见，且需要 entered/exited review mode（或等价）状态。
+  - 继续复用 `turn/start` 难以表达 review 专属状态与事件语义。
+- 决策：
+  - ACP server 在 `session/prompt` 中识别 `/review` 前缀，转调 app-server `review/start`。
+  - 新增 review mode notifications（entered/exited）并映射为 `session/update` status。
+  - review diff 通过 message delta 透传，保持可读展示。
+- 备选方案：
+  - 方案A：`/review` 仍走 `turn/start` 并人工拼接状态。
+  - 方案B：显式接入 `review/start` 并使用专属状态映射。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：语义更清晰，E1 可直接断言；便于后续扩展 review 事件。
+  - Cons：协议面增大，fake/real app-server 都需要对齐 review 事件。
+- 影响范围（文件/模块）：
+  - `internal/acp/server.go`
+  - `internal/appserver/types.go`
+  - `internal/appserver/client.go`
+  - `internal/appserver/supervisor.go`
+  - `testdata/fake_codex_app_server/main.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EAcceptanceE1ReviewWorkflow`
+  - 对应验收：E1
+
+### ADR-0015：Patch 落盘双模式（AppServer / ACP fs）与失败可见性
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - PR4 要求 E2：同时支持 AppServer 落盘与 ACP fs 落盘，并在冲突/失败时可见。
+  - 需要在保持 D2（permission gate）的同时提供可切换落盘路径。
+- 决策：
+  - 增加 `PATCH_APPLY_MODE`（`appserver|acp_fs`）配置，默认 `appserver`。
+  - Mode A：批准后由 app-server 执行落盘。
+  - Mode B：批准后由 adapter 调用上游 `fs/write_text_file` 执行落盘；失败时输出 `review_apply_failed`。
+  - Mode B 落盘失败时仍保持 fail-closed，不放行副作用执行。
+- 备选方案：
+  - 方案A：仅支持单一落盘模式（简化实现）。
+  - 方案B：双模式并用配置切换。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：满足 E2 全量要求，可适配不同客户端 ownership 模型。
+  - Cons：Mode B 依赖 ACP fs 方法契约，客户端兼容性风险上升。
+- 影响范围（文件/模块）：
+  - `internal/config/config.go`
+  - `cmd/codex-acp-go/main.go`
+  - `internal/acp/server.go`
+  - `test/integration/e2e_test.go`
+  - `testdata/fake_codex_app_server/main.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EAcceptanceE2PatchModeAAppServer`
+  - `TestE2EAcceptanceE2PatchModeBACPFS`
+  - `TestE2EReviewPatchConflictVisibleModeB`
+  - 对应验收：E2（并回归 D2）

@@ -110,6 +110,21 @@ func (s *fakeServer) handle(msg appserver.RPCMessage) {
 		})
 
 		go s.runTurn(params.ThreadID, turnID, params.Input, control)
+	case "review/start":
+		var params appserver.ReviewStartParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			s.writeError(msg.ID, -32602, "invalid params")
+			return
+		}
+		if params.ThreadID == "" {
+			s.writeError(msg.ID, -32602, "threadId required")
+			return
+		}
+
+		turnID, control := s.newTurn()
+		s.writeResult(msg.ID, appserver.ReviewStartResult{TurnID: turnID})
+
+		go s.runReviewTurn(params.ThreadID, turnID, params.Instructions, control)
 	case "turn/interrupt":
 		var params appserver.TurnInterruptParams
 		if err := json.Unmarshal(msg.Params, &params); err != nil {
@@ -277,6 +292,72 @@ func (s *fakeServer) runApprovalTurn(threadID, turnID, input string, control *tu
 	s.writeTurnCompleted(threadID, turnID, "end_turn")
 }
 
+func (s *fakeServer) runReviewTurn(threadID, turnID, instructions string, control *turnControl) {
+	defer s.removeTurn(turnID)
+
+	itemID := fmt.Sprintf("review-item-%s", turnID)
+	toolCallID := fmt.Sprintf("review-tool-%s", turnID)
+	approvalID := fmt.Sprintf("review-approval-%s", turnID)
+	lower := strings.ToLower(instructions)
+
+	approval := appserver.ApprovalRequest{
+		ThreadID:   threadID,
+		TurnID:     turnID,
+		ApprovalID: approvalID,
+		ToolCallID: toolCallID,
+		Kind:       appserver.ApprovalKindFile,
+		Files:      []string{"docs/README.md"},
+		WritePath:  "docs/README.md",
+		WriteText:  "# updated by review\n",
+		Patch:      "--- a/docs/README.md\n+++ b/docs/README.md\n@@\n-old\n+new\n",
+		Message:    "apply review patch to docs/README.md",
+	}
+
+	if strings.Contains(lower, "conflict") {
+		approval.WriteText = "# conflict\n"
+	}
+
+	s.writeTurnStarted(threadID, turnID)
+	s.writeReviewModeEntered(threadID, turnID)
+	s.writeItemStarted(threadID, turnID, itemID, "review")
+	s.writeAgentMessageDelta(
+		threadID,
+		turnID,
+		itemID,
+		"```diff\n- old line\n+ new line\n```",
+	)
+
+	select {
+	case <-control.cancel:
+		s.writeReviewModeExited(threadID, turnID)
+		s.writeTurnCompleted(threadID, turnID, "cancelled")
+		return
+	default:
+	}
+
+	decision, err := s.requestApproval(approval)
+	if err != nil {
+		s.writeAgentMessageDelta(threadID, turnID, itemID, "review apply failed: approval bridge error")
+		s.writeItemCompleted(threadID, turnID, itemID, "review")
+		s.writeReviewModeExited(threadID, turnID)
+		s.writeTurnCompleted(threadID, turnID, "error")
+		return
+	}
+
+	switch decision {
+	case appserver.ApprovalDecisionApproved:
+		s.writeAgentMessageDelta(threadID, turnID, itemID, "patch applied via appserver")
+	case appserver.ApprovalDecisionDeclined:
+		s.writeAgentMessageDelta(threadID, turnID, itemID, "patch not applied (declined)")
+	default:
+		s.writeAgentMessageDelta(threadID, turnID, itemID, "patch not applied (cancelled)")
+	}
+
+	s.writeItemCompleted(threadID, turnID, itemID, "review")
+	s.writeReviewModeExited(threadID, turnID)
+	s.writeTurnCompleted(threadID, turnID, "end_turn")
+}
+
 func (s *fakeServer) writeTurnStarted(threadID, turnID string) {
 	s.writeNotification("turn/started", appserver.TurnStartedNotification{
 		ThreadID: threadID,
@@ -316,6 +397,20 @@ func (s *fakeServer) writeTurnCompleted(threadID, turnID, stopReason string) {
 		ThreadID:   threadID,
 		TurnID:     turnID,
 		StopReason: stopReason,
+	})
+}
+
+func (s *fakeServer) writeReviewModeEntered(threadID, turnID string) {
+	s.writeNotification("review/mode_entered", appserver.ReviewModeNotification{
+		ThreadID: threadID,
+		TurnID:   turnID,
+	})
+}
+
+func (s *fakeServer) writeReviewModeExited(threadID, turnID string) {
+	s.writeNotification("review/mode_exited", appserver.ReviewModeNotification{
+		ThreadID: threadID,
+		TurnID:   turnID,
 	})
 }
 

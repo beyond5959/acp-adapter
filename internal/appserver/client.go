@@ -106,6 +106,24 @@ func (c *Client) TurnStart(ctx context.Context, threadID, input string) (string,
 	return result.TurnID, stream, nil
 }
 
+// ReviewStart starts one review workflow turn.
+func (c *Client) ReviewStart(ctx context.Context, threadID, instructions string) (string, <-chan TurnEvent, error) {
+	params := ReviewStartParams{
+		ThreadID:     threadID,
+		Instructions: instructions,
+	}
+	var result ReviewStartResult
+	if err := c.call(ctx, methodReviewStart, params, &result); err != nil {
+		return "", nil, err
+	}
+	if result.TurnID == "" {
+		return "", nil, fmt.Errorf("review/start returned empty turnId")
+	}
+
+	stream := c.registerTurnStream(result.TurnID)
+	return result.TurnID, stream, nil
+}
+
 // TurnInterrupt requests turn interruption.
 func (c *Client) TurnInterrupt(ctx context.Context, threadID, turnID string) error {
 	params := TurnInterruptParams{
@@ -396,8 +414,30 @@ func (c *Client) handleNotification(msg RPCMessage) {
 			TurnID:     note.TurnID,
 			StopReason: note.StopReason,
 		}, true)
+	case notificationReviewModeEntered:
+		var note ReviewModeNotification
+		if err := json.Unmarshal(msg.Params, &note); err != nil {
+			c.logger.Warn("ignore malformed review/mode_entered", slog.String("error", err.Error()))
+			return
+		}
+		c.pushTurnEvent(note.TurnID, TurnEvent{
+			Type:     TurnEventTypeReviewModeEntered,
+			ThreadID: note.ThreadID,
+			TurnID:   note.TurnID,
+		}, false)
+	case notificationReviewModeExited:
+		var note ReviewModeNotification
+		if err := json.Unmarshal(msg.Params, &note); err != nil {
+			c.logger.Warn("ignore malformed review/mode_exited", slog.String("error", err.Error()))
+			return
+		}
+		c.pushTurnEvent(note.TurnID, TurnEvent{
+			Type:     TurnEventTypeReviewModeExited,
+			ThreadID: note.ThreadID,
+			TurnID:   note.TurnID,
+		}, false)
 	default:
-		// Ignore notifications not used in PR1.
+		// Ignore notifications not used by the adapter.
 	}
 }
 

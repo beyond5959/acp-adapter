@@ -93,6 +93,25 @@ func (s *Supervisor) TurnStart(ctx context.Context, threadID, input string) (str
 	return turnID, events, nil
 }
 
+// ReviewStart starts one review workflow turn and returns event stream.
+func (s *Supervisor) ReviewStart(
+	ctx context.Context,
+	threadID string,
+	instructions string,
+) (string, <-chan TurnEvent, error) {
+	var turnID string
+	var events <-chan TurnEvent
+	err := s.call(ctx, methodReviewStart, func(client *Client) error {
+		var callErr error
+		turnID, events, callErr = client.ReviewStart(ctx, threadID, instructions)
+		return callErr
+	})
+	if err != nil {
+		return "", nil, err
+	}
+	return turnID, events, nil
+}
+
 // TurnInterrupt interrupts one running turn.
 func (s *Supervisor) TurnInterrupt(ctx context.Context, threadID, turnID string) error {
 	return s.call(ctx, methodTurnInterrupt, func(client *Client) error {
