@@ -47,6 +47,21 @@ type RunOptions struct {
 	SystemInstructions string `json:"systemInstructions,omitempty"`
 }
 
+// UserInput is one structured item inside turn/start input.
+type UserInput struct {
+	Type string `json:"type"`
+
+	// Text input payload.
+	Text string `json:"text,omitempty"`
+
+	// Remote image URL payload.
+	URL string `json:"url,omitempty"`
+
+	// Local image or mention payload.
+	Path string `json:"path,omitempty"`
+	Name string `json:"name,omitempty"`
+}
+
 // ThreadStartParams starts a new conversation thread.
 type ThreadStartParams struct {
 	CWD string `json:"cwd,omitempty"`
@@ -60,8 +75,8 @@ type ThreadStartResult struct {
 
 // TurnStartParams starts a turn under one thread.
 type TurnStartParams struct {
-	ThreadID string `json:"threadId"`
-	Input    string `json:"input"`
+	ThreadID string      `json:"threadId"`
+	Input    []UserInput `json:"input"`
 	RunOptions
 }
 

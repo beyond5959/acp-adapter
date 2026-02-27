@@ -41,18 +41,24 @@ type rpcError struct {
 }
 
 type sessionUpdateParams struct {
-	SessionID          string `json:"sessionId"`
-	TurnID             string `json:"turnId"`
-	Type               string `json:"type"`
-	Phase              string `json:"phase,omitempty"`
-	ItemID             string `json:"itemId,omitempty"`
-	ItemType           string `json:"itemType,omitempty"`
-	Delta              string `json:"delta,omitempty"`
-	Status             string `json:"status,omitempty"`
-	Message            string `json:"message,omitempty"`
-	ToolCallID         string `json:"toolCallId,omitempty"`
-	Approval           string `json:"approval,omitempty"`
-	PermissionDecision string `json:"permissionDecision,omitempty"`
+	SessionID          string     `json:"sessionId"`
+	TurnID             string     `json:"turnId"`
+	Type               string     `json:"type"`
+	Phase              string     `json:"phase,omitempty"`
+	ItemID             string     `json:"itemId,omitempty"`
+	ItemType           string     `json:"itemType,omitempty"`
+	Delta              string     `json:"delta,omitempty"`
+	Status             string     `json:"status,omitempty"`
+	Message            string     `json:"message,omitempty"`
+	ToolCallID         string     `json:"toolCallId,omitempty"`
+	Approval           string     `json:"approval,omitempty"`
+	PermissionDecision string     `json:"permissionDecision,omitempty"`
+	Todo               []todoItem `json:"todo,omitempty"`
+}
+
+type todoItem struct {
+	Text string `json:"text"`
+	Done bool   `json:"done"`
 }
 
 type sessionRequestPermissionParams struct {
@@ -76,6 +82,11 @@ type fsWriteTextFileParams struct {
 	Path      string `json:"path"`
 	Text      string `json:"text"`
 	Patch     string `json:"patch,omitempty"`
+}
+
+type fsReadTextFileParams struct {
+	SessionID string `json:"sessionId,omitempty"`
+	Path      string `json:"path"`
 }
 
 type rpcReader struct {
@@ -604,6 +615,322 @@ func TestE2ENotificationRoutingBySessionAndTurn(t *testing.T) {
 
 	if len(turnToSession) < 2 {
 		t.Fatalf("expected updates for two independent turns, got %d turn(s)", len(turnToSession))
+	}
+}
+
+func TestE2EAcceptanceC1MentionsResourcePreserved(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{
+		"capabilities": map[string]any{
+			"fs": map[string]any{
+				"read_text_file": true,
+			},
+		},
+	})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"content": []map[string]any{
+			{
+				"type": "text",
+				"text": "use mention context and summarize",
+			},
+			{
+				"type":     "mention",
+				"name":     "PROGRESS.md",
+				"path":     "PROGRESS.md",
+				"uri":      "file:///workspace/PROGRESS.md",
+				"mimeType": "text/markdown",
+				"range": map[string]any{
+					"start": 0,
+					"end":   128,
+				},
+			},
+		},
+	})
+
+	gotPromptResp := false
+	sawFSRead := false
+	sawMentionMessage := false
+	for !gotPromptResp {
+		msg := h.nextMessage(responseTimeout)
+		switch msg.Method {
+		case "fs/read_text_file":
+			req := decodeFSReadTextFileParams(t, msg)
+			if strings.TrimSpace(req.Path) == "" {
+				t.Fatalf("fs/read_text_file missing path")
+			}
+			sawFSRead = true
+			h.sendResultResponse(messageID(msg), map[string]any{
+				"text": "C1 resource inline content from fs",
+			})
+		case "session/update":
+			update := decodeSessionUpdate(t, msg)
+			if update.Type == "message" && strings.Contains(update.Delta, "mention[PROGRESS.md]") {
+				sawMentionMessage = true
+			}
+		default:
+			if messageID(msg) != "3" {
+				continue
+			}
+			var result struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, msg, &result)
+			if result.StopReason != "end_turn" {
+				t.Fatalf("mentions prompt expected stopReason=end_turn, got %q", result.StopReason)
+			}
+			gotPromptResp = true
+		}
+	}
+
+	if !sawFSRead {
+		t.Fatalf("mention context should attempt fs/read_text_file when capability is available")
+	}
+	if !sawMentionMessage {
+		t.Fatalf("mention prompt expected mention-aware response")
+	}
+}
+
+func TestE2EEdgeC1MentionWithoutFSCapabilityDegrades(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"content": []map[string]any{
+			{
+				"type": "text",
+				"text": "summarize mention",
+			},
+			{
+				"type": "mention",
+				"name": "SPEC.md",
+				"path": "docs/SPEC.md",
+			},
+		},
+	})
+
+	gotPromptResp := false
+	sawWarning := false
+	sawFSRead := false
+	for !gotPromptResp {
+		msg := h.nextMessage(responseTimeout)
+		switch msg.Method {
+		case "fs/read_text_file":
+			sawFSRead = true
+			h.sendResultResponse(messageID(msg), map[string]any{"text": "unexpected"})
+		case "session/update":
+			update := decodeSessionUpdate(t, msg)
+			if update.Type == "message" && strings.Contains(update.Delta, "missing mention context") {
+				sawWarning = true
+			}
+		default:
+			if messageID(msg) != "3" {
+				continue
+			}
+			var result struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, msg, &result)
+			if result.StopReason != "end_turn" {
+				t.Fatalf("degrade mention prompt expected stopReason=end_turn, got %q", result.StopReason)
+			}
+			gotPromptResp = true
+		}
+	}
+
+	if sawFSRead {
+		t.Fatalf("adapter should not call fs/read_text_file when capability is absent")
+	}
+	if !sawWarning {
+		t.Fatalf("adapter should emit missing-context warning when mention cannot be read")
+	}
+}
+
+func TestE2EAcceptanceC2ImageContentBlock(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	const tinyPNGBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5W9tQAAAAASUVORK5CYII="
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"content": []map[string]any{
+			{
+				"type": "text",
+				"text": "describe the image briefly",
+			},
+			{
+				"type":     "image",
+				"mimeType": "image/png",
+				"data":     tinyPNGBase64,
+			},
+		},
+	})
+
+	gotPromptResp := false
+	sawImageMessage := false
+	for !gotPromptResp {
+		msg := h.nextMessage(responseTimeout)
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.Type == "message" && strings.Contains(update.Delta, "image context received") {
+				sawImageMessage = true
+			}
+			continue
+		}
+		if messageID(msg) != "3" {
+			continue
+		}
+		var result struct {
+			StopReason string `json:"stopReason"`
+		}
+		unmarshalResult(t, msg, &result)
+		if result.StopReason != "end_turn" {
+			t.Fatalf("image prompt expected stopReason=end_turn, got %q", result.StopReason)
+		}
+		gotPromptResp = true
+	}
+
+	if !sawImageMessage {
+		t.Fatalf("image prompt expected image-aware streaming output")
+	}
+}
+
+func TestE2EEdgeC2InvalidImageBase64Rejected(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"content": []map[string]any{
+			{
+				"type": "text",
+				"text": "this should fail due to invalid image payload",
+			},
+			{
+				"type":     "image",
+				"mimeType": "image/png",
+				"data":     "%%%invalid-base64%%%",
+			},
+		},
+	})
+
+	resp := h.waitResponse("3", responseTimeout)
+	if resp.Error == nil {
+		t.Fatalf("invalid image payload should return error")
+	}
+	if resp.Error.Code != -32602 {
+		t.Fatalf("invalid image payload expected -32602, got %d", resp.Error.Code)
+	}
+	if !strings.Contains(strings.ToLower(resp.Error.Message), "invalid params") {
+		t.Fatalf("invalid image payload should surface invalid params, got %q", resp.Error.Message)
+	}
+}
+
+func TestE2EAcceptanceF1StructuredTODOAcrossTurns(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	runTodoTurn := func(requestID string, prompt string) ([]todoItem, string) {
+		t.Helper()
+		h.sendRequest(requestID, "session/prompt", map[string]any{
+			"sessionId": newResult.SessionID,
+			"prompt":    prompt,
+		})
+
+		gotPromptResp := false
+		var todos []todoItem
+		var deltas []string
+		for !gotPromptResp {
+			msg := h.nextMessage(responseTimeout)
+			if msg.Method == "session/update" {
+				update := decodeSessionUpdate(t, msg)
+				if update.Type == "message" && strings.TrimSpace(update.Delta) != "" {
+					deltas = append(deltas, update.Delta)
+				}
+				if len(update.Todo) > 0 {
+					todos = update.Todo
+				}
+				continue
+			}
+			if messageID(msg) != requestID {
+				continue
+			}
+			var result struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, msg, &result)
+			if result.StopReason != "end_turn" {
+				t.Fatalf("todo prompt expected stopReason=end_turn, got %q", result.StopReason)
+			}
+			gotPromptResp = true
+		}
+		return todos, strings.Join(deltas, "\n")
+	}
+
+	todos1, text1 := runTodoTurn("3", "generate todo checklist")
+	if !strings.Contains(text1, "- [ ]") {
+		t.Fatalf("first todo turn should include markdown checklist, got: %s", text1)
+	}
+	if len(todos1) < 2 {
+		t.Fatalf("first todo turn should include structured todo items, got %+v", todos1)
+	}
+
+	todos2, text2 := runTodoTurn("4", "continue todo and mark first done")
+	if !strings.Contains(text2, "- [x]") {
+		t.Fatalf("second todo turn should include updated checklist, got: %s", text2)
+	}
+	if len(todos2) < 3 {
+		t.Fatalf("second todo turn should include updated structured todo items, got %+v", todos2)
+	}
+	if !todos2[0].Done {
+		t.Fatalf("second todo turn should mark first item done, got %+v", todos2[0])
 	}
 }
 
@@ -1693,6 +2020,84 @@ func TestE2EAcceptanceJ1Stress100Turns(t *testing.T) {
 	h.assertStdoutPureJSONRPC()
 }
 
+func TestE2ERealCodexContentBlocksMentionsImagesAndTODO(t *testing.T) {
+	requireRealCodex(t)
+
+	h := startAdapterReal(t, nil)
+	sessionID := realCodexInitializeAndSession(t, h, nil)
+
+	root := repoRoot(t)
+	mentionPath := filepath.Join(root, "PROGRESS.md")
+	mentionURI := "file://" + filepath.ToSlash(mentionPath)
+	const tinyPNGBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5W9tQAAAAASUVORK5CYII="
+
+	h.sendRequest("real-content", "session/prompt", map[string]any{
+		"sessionId": sessionID,
+		"content": []map[string]any{
+			{
+				"type": "text",
+				"text": "Use the mention and image context, then output a markdown checklist with exactly two items.",
+			},
+			{
+				"type":     "mention",
+				"name":     "PROGRESS.md",
+				"path":     mentionPath,
+				"uri":      mentionURI,
+				"mimeType": "text/markdown",
+			},
+			{
+				"type":     "image",
+				"mimeType": "image/png",
+				"data":     tinyPNGBase64,
+			},
+		},
+	})
+
+	gotPromptResp := false
+	var deltas []string
+	sawStructuredTodo := false
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) && !gotPromptResp {
+		msg := h.nextMessage(time.Until(deadline))
+		switch msg.Method {
+		case "session/update":
+			update := decodeSessionUpdate(t, msg)
+			if update.Type == "message" && strings.TrimSpace(update.Delta) != "" {
+				deltas = append(deltas, update.Delta)
+			}
+			if len(update.Todo) > 0 {
+				sawStructuredTodo = true
+			}
+		case "session/request_permission":
+			h.sendResultResponse(messageID(msg), map[string]any{"outcome": "declined"})
+		default:
+			if messageID(msg) != "real-content" {
+				continue
+			}
+			var result struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, msg, &result)
+			if result.StopReason != "end_turn" {
+				t.Fatalf("real content prompt expected stopReason=end_turn, got %q", result.StopReason)
+			}
+			gotPromptResp = true
+		}
+	}
+
+	if !gotPromptResp {
+		t.Fatalf("timed out waiting for real content prompt response")
+	}
+
+	joined := strings.Join(deltas, "\n")
+	if !strings.Contains(joined, "- [ ]") && !strings.Contains(joined, "- [x]") {
+		t.Fatalf("real content prompt should return markdown checklist, got: %s", joined)
+	}
+	if !sawStructuredTodo {
+		t.Fatalf("real content prompt should emit structured TODO metadata")
+	}
+}
+
 func TestE2ERealCodexInitializePromptAndCancel(t *testing.T) {
 	requireRealCodex(t)
 
@@ -2140,6 +2545,15 @@ func decodeFSWriteTextFileParams(t *testing.T, msg rpcMessage) fsWriteTextFilePa
 	var params fsWriteTextFileParams
 	if err := json.Unmarshal(msg.Params, &params); err != nil {
 		t.Fatalf("decode fs/write_text_file params: %v", err)
+	}
+	return params
+}
+
+func decodeFSReadTextFileParams(t *testing.T, msg rpcMessage) fsReadTextFileParams {
+	t.Helper()
+	var params fsReadTextFileParams
+	if err := json.Unmarshal(msg.Params, &params); err != nil {
+		t.Fatalf("decode fs/read_text_file params: %v", err)
 	}
 	return params
 }

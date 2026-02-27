@@ -82,7 +82,7 @@ func (s *Supervisor) ThreadStart(ctx context.Context, cwd string, options RunOpt
 func (s *Supervisor) TurnStart(
 	ctx context.Context,
 	threadID string,
-	input string,
+	input []UserInput,
 	options RunOptions,
 ) (string, <-chan TurnEvent, error) {
 	var turnID string

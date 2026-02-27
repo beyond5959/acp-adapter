@@ -54,8 +54,10 @@ type SessionNewResult struct {
 
 // SessionPromptParams starts one prompt-turn.
 type SessionPromptParams struct {
-	SessionID string `json:"sessionId"`
-	Prompt    string `json:"prompt,omitempty"`
+	SessionID string               `json:"sessionId"`
+	Prompt    string               `json:"prompt,omitempty"`
+	Content   []PromptContentBlock `json:"content,omitempty"`
+	Resources []PromptResource     `json:"resources,omitempty"`
 	PromptConfig
 }
 
@@ -116,18 +118,55 @@ type SessionRequestPermissionResult struct {
 	Approved *bool  `json:"approved,omitempty"`
 }
 
+// ByteRange marks byte offsets for one referenced resource window.
+type ByteRange struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
+}
+
+// PromptResource is one referenced context resource from ACP client.
+type PromptResource struct {
+	Name     string     `json:"name,omitempty"`
+	URI      string     `json:"uri,omitempty"`
+	Path     string     `json:"path,omitempty"`
+	MimeType string     `json:"mimeType,omitempty"`
+	Text     string     `json:"text,omitempty"`
+	Data     string     `json:"data,omitempty"`
+	Range    *ByteRange `json:"range,omitempty"`
+}
+
+// PromptContentBlock is one ACP prompt content block (text/image/resource/mention).
+type PromptContentBlock struct {
+	Type     string          `json:"type,omitempty"`
+	Text     string          `json:"text,omitempty"`
+	Data     string          `json:"data,omitempty"`
+	URI      string          `json:"uri,omitempty"`
+	Path     string          `json:"path,omitempty"`
+	Name     string          `json:"name,omitempty"`
+	MimeType string          `json:"mimeType,omitempty"`
+	Range    *ByteRange      `json:"range,omitempty"`
+	Resource *PromptResource `json:"resource,omitempty"`
+}
+
+// TodoItem is one structured TODO line parsed from markdown checklist.
+type TodoItem struct {
+	Text string `json:"text"`
+	Done bool   `json:"done"`
+}
+
 // SessionUpdateParams is emitted via session/update notification.
 type SessionUpdateParams struct {
-	SessionID          string `json:"sessionId"`
-	TurnID             string `json:"turnId"`
-	Type               string `json:"type"`
-	Phase              string `json:"phase,omitempty"`
-	ItemID             string `json:"itemId,omitempty"`
-	ItemType           string `json:"itemType,omitempty"`
-	Delta              string `json:"delta,omitempty"`
-	Status             string `json:"status,omitempty"`
-	Message            string `json:"message,omitempty"`
-	ToolCallID         string `json:"toolCallId,omitempty"`
-	Approval           string `json:"approval,omitempty"`
-	PermissionDecision string `json:"permissionDecision,omitempty"`
+	SessionID          string     `json:"sessionId"`
+	TurnID             string     `json:"turnId"`
+	Type               string     `json:"type"`
+	Phase              string     `json:"phase,omitempty"`
+	ItemID             string     `json:"itemId,omitempty"`
+	ItemType           string     `json:"itemType,omitempty"`
+	Delta              string     `json:"delta,omitempty"`
+	Status             string     `json:"status,omitempty"`
+	Message            string     `json:"message,omitempty"`
+	ToolCallID         string     `json:"toolCallId,omitempty"`
+	Approval           string     `json:"approval,omitempty"`
+	PermissionDecision string     `json:"permissionDecision,omitempty"`
+	Todo               []TodoItem `json:"todo,omitempty"`
 }

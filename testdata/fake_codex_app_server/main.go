@@ -259,6 +259,60 @@ func (s *fakeServer) effectiveRunOptions(threadID string, turnOptions appserver.
 	return base
 }
 
+func flattenUserInputText(input []appserver.UserInput) string {
+	parts := make([]string, 0, len(input))
+	for _, item := range input {
+		switch strings.ToLower(strings.TrimSpace(item.Type)) {
+		case "text":
+			if text := strings.TrimSpace(item.Text); text != "" {
+				parts = append(parts, text)
+			}
+		case "mention":
+			parts = append(parts, fmt.Sprintf("mention:%s:%s", item.Name, item.Path))
+		case "image":
+			parts = append(parts, "image")
+		case "localimage":
+			parts = append(parts, fmt.Sprintf("localimage:%s", item.Path))
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+type mentionInput struct {
+	Name string
+	Path string
+}
+
+func extractMentionInputs(input []appserver.UserInput) []mentionInput {
+	mentions := make([]mentionInput, 0, len(input))
+	for _, item := range input {
+		if strings.ToLower(strings.TrimSpace(item.Type)) != "mention" {
+			continue
+		}
+		name := strings.TrimSpace(item.Name)
+		path := strings.TrimSpace(item.Path)
+		if name == "" && path == "" {
+			continue
+		}
+		if name == "" {
+			name = path
+		}
+		mentions = append(mentions, mentionInput{Name: name, Path: path})
+	}
+	return mentions
+}
+
+func countImageInputs(input []appserver.UserInput) int {
+	count := 0
+	for _, item := range input {
+		switch strings.ToLower(strings.TrimSpace(item.Type)) {
+		case "image", "localimage":
+			count++
+		}
+	}
+	return count
+}
+
 func (s *fakeServer) newTurn() (string, *turnControl) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -289,12 +343,14 @@ func (s *fakeServer) removeTurn(turnID string) {
 func (s *fakeServer) runTurn(
 	threadID string,
 	turnID string,
-	input string,
+	input []appserver.UserInput,
 	options appserver.RunOptions,
 	control *turnControl,
 ) {
 	defer s.removeTurn(turnID)
-	lowerInput := strings.ToLower(input)
+	lowerInput := strings.ToLower(flattenUserInputText(input))
+	mentions := extractMentionInputs(input)
+	imageCount := countImageInputs(input)
 	if strings.Contains(lowerInput, "approval command") ||
 		strings.Contains(lowerInput, "approval file") ||
 		strings.Contains(lowerInput, "approval network") ||
@@ -315,6 +371,23 @@ func (s *fakeServer) runTurn(
 		s.writeAgentMessageDelta(threadID, turnID, itemID, "working")
 	}
 
+	for _, mention := range mentions {
+		s.writeAgentMessageDelta(
+			threadID,
+			turnID,
+			itemID,
+			fmt.Sprintf("mention[%s] from %s", mention.Name, mention.Path),
+		)
+	}
+	if imageCount > 0 {
+		s.writeAgentMessageDelta(
+			threadID,
+			turnID,
+			itemID,
+			fmt.Sprintf("image context received (%d image)", imageCount),
+		)
+	}
+
 	if strings.Contains(lowerInput, "profile probe") {
 		s.writeAgentMessageDelta(
 			threadID,
@@ -331,8 +404,21 @@ func (s *fakeServer) runTurn(
 		)
 	}
 
+	if strings.Contains(lowerInput, "todo") {
+		checklist := "\n- [ ] capture requirements\n- [ ] implement mapping\n"
+		if strings.Contains(lowerInput, "continue") ||
+			strings.Contains(lowerInput, "update") ||
+			strings.Contains(lowerInput, "done") {
+			checklist = "\n- [x] capture requirements\n- [ ] implement mapping\n- [ ] run go test ./...\n"
+		}
+		s.writeAgentMessageDelta(threadID, turnID, itemID, checklist)
+		s.writeItemCompleted(threadID, turnID, itemID, "agent_message")
+		s.writeTurnCompleted(threadID, turnID, "end_turn")
+		return
+	}
+
 	duration := 120 * time.Millisecond
-	if strings.Contains(strings.ToLower(input), "slow") {
+	if strings.Contains(lowerInput, "slow") {
 		duration = 2 * time.Second
 	}
 

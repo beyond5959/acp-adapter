@@ -2,11 +2,15 @@ package acp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,13 +29,26 @@ const (
 	methodSessionUpdate            = "session/update"
 	methodSessionRequestPermission = "session/request_permission"
 	methodFSWriteTextFile          = "fs/write_text_file"
+	methodFSReadTextFile           = "fs/read_text_file"
 
 	defaultPermissionTimeout = 30 * time.Second
 	defaultFSWriteTimeout    = 10 * time.Second
+	defaultImageSizeLimit    = 4 * 1024 * 1024
+	defaultMentionTextLimit  = 64 * 1024
 
 	rpcErrMethodNotFound = -32601
 	rpcErrInvalidParams  = -32602
 	rpcErrInternal       = -32000
+)
+
+var (
+	todoChecklistPattern = regexp.MustCompile(`(?m)^\s*(?:[-*]|\d+\.)\s+\[([ xX])\]\s+(.+?)\s*$`)
+	allowedImageMimeType = map[string]struct{}{
+		"image/png":  {},
+		"image/jpeg": {},
+		"image/webp": {},
+		"image/gif":  {},
+	}
 )
 
 type turnPhase string
@@ -65,11 +82,22 @@ type fsWriteTextFileResult struct {
 	Message  string `json:"message,omitempty"`
 }
 
+type fsReadTextFileResult struct {
+	Text    string `json:"text,omitempty"`
+	Content string `json:"content,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+type adapterCapabilities struct {
+	canReadTextFile bool
+}
+
 type turnLifecycle struct {
 	sessionID       string
 	turnID          string
 	phase           turnPhase
 	cancelRequested bool
+	messageBuffer   strings.Builder
 }
 
 type runtimeOptions struct {
@@ -110,7 +138,7 @@ type appClient interface {
 	TurnStart(
 		ctx context.Context,
 		threadID string,
-		input string,
+		input []appserver.UserInput,
 		options appserver.RunOptions,
 	) (string, <-chan appserver.TurnEvent, error)
 	ReviewStart(
@@ -152,6 +180,12 @@ type Server struct {
 	sessionConfigMu sync.Mutex
 	sessionConfigs  map[string]runtimeOptions
 
+	capabilitiesMu sync.RWMutex
+	capabilities   adapterCapabilities
+
+	sessionTodosMu sync.Mutex
+	sessionTodos   map[string][]TodoItem
+
 	authMu       sync.Mutex
 	authMode     string
 	authLoggedIn bool
@@ -179,6 +213,7 @@ func NewServer(
 		pendingClient:  make(map[string]chan RPCMessage),
 		nextClientID:   0,
 		sessionConfigs: make(map[string]runtimeOptions),
+		sessionTodos:   make(map[string][]TodoItem),
 		authMode:       strings.TrimSpace(options.InitialAuthMode),
 		authLoggedIn:   strings.TrimSpace(options.InitialAuthMode) != "",
 	}
@@ -232,7 +267,7 @@ func (s *Server) handleRequest(ctx context.Context, msg RPCMessage) {
 
 	switch msg.Method {
 	case methodInitialize:
-		s.handleInitialize(rawID)
+		s.handleInitialize(rawID, msg.Params)
 	case methodSessionNew:
 		s.handleSessionNew(ctx, rawID, msg.Params)
 	case methodSessionPrompt:
@@ -246,7 +281,9 @@ func (s *Server) handleRequest(ctx context.Context, msg RPCMessage) {
 	}
 }
 
-func (s *Server) handleInitialize(id json.RawMessage) {
+func (s *Server) handleInitialize(id json.RawMessage, paramsRaw json.RawMessage) {
+	s.captureClientCapabilities(paramsRaw)
+
 	result := InitializeResult{
 		AgentCapabilities: AgentCapabilities{
 			Sessions:      true,
@@ -296,6 +333,9 @@ func (s *Server) handleSessionNew(ctx context.Context, id json.RawMessage, param
 
 	sessionID := s.sessions.Create(threadID)
 	s.setSessionConfig(sessionID, options)
+	s.sessionTodosMu.Lock()
+	s.sessionTodos[sessionID] = nil
+	s.sessionTodosMu.Unlock()
 	_ = s.codec.WriteResult(id, SessionNewResult{SessionID: sessionID})
 }
 
@@ -319,12 +359,13 @@ func (s *Server) handleSessionPrompt(ctx context.Context, id json.RawMessage, pa
 		return
 	}
 
-	prompt := strings.TrimSpace(params.Prompt)
-	if prompt == "" {
-		prompt = fallbackPrompt(paramsRaw)
+	preparedInput, prepWarnings, promptText, err := s.prepareTurnInput(ctx, params.SessionID, params, paramsRaw)
+	if err != nil {
+		s.writeInvalidParams(id, map[string]any{"error": err.Error()})
+		return
 	}
 
-	command, err := parseSlashCommand(prompt)
+	command, err := parseSlashCommand(promptText)
 	if err != nil {
 		s.writeInvalidParams(id, map[string]any{"error": err.Error()})
 		return
@@ -390,12 +431,12 @@ func (s *Server) handleSessionPrompt(ctx context.Context, id json.RawMessage, pa
 			toRunOptions(resolvedOptions),
 		)
 	case slashCommandInit:
-		turnID, events, err = s.app.TurnStart(turnCtx, threadID, command.turnInput, toRunOptions(resolvedOptions))
+		turnID, events, err = s.app.TurnStart(turnCtx, threadID, textTurnInput(command.turnInput), toRunOptions(resolvedOptions))
 	case slashCommandCompact:
 		method = "thread/compact/start"
 		turnID, events, err = s.app.CompactStart(turnCtx, threadID)
 	default:
-		turnID, events, err = s.app.TurnStart(turnCtx, threadID, prompt, toRunOptions(resolvedOptions))
+		turnID, events, err = s.app.TurnStart(turnCtx, threadID, preparedInput, toRunOptions(resolvedOptions))
 	}
 	if err != nil {
 		s.writeInternalError(id, method+" failed", map[string]any{
@@ -420,6 +461,7 @@ func (s *Server) handleSessionPrompt(ctx context.Context, id json.RawMessage, pa
 
 	lifecycle := newTurnLifecycle(params.SessionID, turnID)
 	s.emitUpdates(lifecycle.startedUpdate())
+	s.emitUpdates(warningUpdates(params.SessionID, turnID, prepWarnings))
 
 	for {
 		select {
@@ -446,6 +488,7 @@ func (s *Server) handleSessionPrompt(ctx context.Context, id json.RawMessage, pa
 			updates, done, stopReason := lifecycle.apply(event)
 			s.emitUpdates(updates)
 			if done {
+				s.clearTurnTodosOnFailure(params.SessionID, stopReason)
 				s.writePromptResult(id, stopReason)
 				return
 			}
@@ -605,6 +648,7 @@ func (s *Server) writeError(id json.RawMessage, code int, message string, data m
 
 func (s *Server) emitUpdates(updates []SessionUpdateParams) {
 	for _, update := range updates {
+		update = s.attachSessionTodos(update)
 		if err := s.codec.WriteNotification(methodSessionUpdate, update); err != nil {
 			s.logger.Warn("failed to write session/update", slog.String("error", err.Error()))
 			return
@@ -777,6 +821,575 @@ func fallbackPrompt(raw json.RawMessage) string {
 		}
 	}
 	return ""
+}
+
+func warningUpdates(sessionID string, turnID string, warnings []string) []SessionUpdateParams {
+	if len(warnings) == 0 {
+		return nil
+	}
+	updates := make([]SessionUpdateParams, 0, len(warnings))
+	for _, warning := range warnings {
+		warning = strings.TrimSpace(warning)
+		if warning == "" {
+			continue
+		}
+		updates = append(updates, SessionUpdateParams{
+			SessionID: sessionID,
+			TurnID:    turnID,
+			Type:      "message",
+			Phase:     string(turnPhaseStreaming),
+			Delta:     "[adapter warning] " + warning,
+		})
+	}
+	return updates
+}
+
+func (s *Server) prepareTurnInput(
+	ctx context.Context,
+	sessionID string,
+	params SessionPromptParams,
+	paramsRaw json.RawMessage,
+) ([]appserver.UserInput, []string, string, error) {
+	promptText := strings.TrimSpace(params.Prompt)
+	if promptText == "" {
+		promptText = strings.TrimSpace(extractTextPrompt(params.Content))
+	}
+	if promptText == "" {
+		promptText = strings.TrimSpace(fallbackPrompt(paramsRaw))
+	}
+
+	input := make([]appserver.UserInput, 0, len(params.Content)+len(params.Resources)+1)
+	warnings := make([]string, 0, 4)
+	hasPromptTextBlock := false
+
+	for _, block := range params.Content {
+		blockType := strings.ToLower(strings.TrimSpace(block.Type))
+		switch blockType {
+		case "", "text":
+			text := strings.TrimSpace(block.Text)
+			if text == "" {
+				continue
+			}
+			hasPromptTextBlock = true
+			input = append(input, appserver.UserInput{Type: "text", Text: text})
+		case "image":
+			imageInput, err := buildImageInput(block)
+			if err != nil {
+				return nil, nil, "", err
+			}
+			input = append(input, imageInput)
+		case "resource", "mention":
+			resource := resourceFromBlock(block)
+			resourceInput, resourceWarnings := s.resourceToInputs(ctx, sessionID, resource)
+			input = append(input, resourceInput...)
+			warnings = append(warnings, resourceWarnings...)
+		default:
+			// Unknown block types degrade to text when text payload exists.
+			if text := strings.TrimSpace(block.Text); text != "" {
+				hasPromptTextBlock = true
+				input = append(input, appserver.UserInput{Type: "text", Text: text})
+			}
+		}
+	}
+
+	for _, resource := range params.Resources {
+		resourceInput, resourceWarnings := s.resourceToInputs(ctx, sessionID, resource)
+		input = append(input, resourceInput...)
+		warnings = append(warnings, resourceWarnings...)
+	}
+
+	if strings.TrimSpace(promptText) != "" && !hasPromptTextBlock {
+		input = append([]appserver.UserInput{{Type: "text", Text: promptText}}, input...)
+	}
+
+	if len(input) == 0 {
+		if strings.TrimSpace(promptText) != "" {
+			return textTurnInput(promptText), warnings, promptText, nil
+		}
+		return nil, nil, "", fmt.Errorf("prompt or content is required")
+	}
+
+	if strings.TrimSpace(promptText) == "" {
+		promptText = strings.TrimSpace(extractTextFromInput(input))
+	}
+	return input, warnings, promptText, nil
+}
+
+func extractTextPrompt(content []PromptContentBlock) string {
+	parts := make([]string, 0, len(content))
+	for _, block := range content {
+		if strings.ToLower(strings.TrimSpace(block.Type)) != "text" {
+			continue
+		}
+		if text := strings.TrimSpace(block.Text); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func extractTextFromInput(input []appserver.UserInput) string {
+	parts := make([]string, 0, len(input))
+	for _, item := range input {
+		if strings.ToLower(strings.TrimSpace(item.Type)) != "text" {
+			continue
+		}
+		if text := strings.TrimSpace(item.Text); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func resourceFromBlock(block PromptContentBlock) PromptResource {
+	resource := PromptResource{
+		Name:     block.Name,
+		URI:      block.URI,
+		Path:     block.Path,
+		MimeType: block.MimeType,
+		Text:     block.Text,
+		Data:     block.Data,
+		Range:    block.Range,
+	}
+	if block.Resource != nil {
+		resource = *block.Resource
+		if resource.Name == "" {
+			resource.Name = block.Name
+		}
+		if resource.URI == "" {
+			resource.URI = block.URI
+		}
+		if resource.Path == "" {
+			resource.Path = block.Path
+		}
+		if resource.MimeType == "" {
+			resource.MimeType = block.MimeType
+		}
+		if resource.Text == "" && strings.ToLower(strings.TrimSpace(block.Type)) == "resource" {
+			resource.Text = block.Text
+		}
+		if resource.Data == "" {
+			resource.Data = block.Data
+		}
+		if resource.Range == nil {
+			resource.Range = block.Range
+		}
+	}
+	return resource
+}
+
+func (s *Server) resourceToInputs(
+	ctx context.Context,
+	sessionID string,
+	resource PromptResource,
+) ([]appserver.UserInput, []string) {
+	var warnings []string
+	path := strings.TrimSpace(resource.Path)
+	if path == "" {
+		path = pathFromURI(resource.URI)
+	}
+	name := strings.TrimSpace(resource.Name)
+	if name == "" {
+		switch {
+		case path != "":
+			name = filepath.Base(path)
+		case strings.TrimSpace(resource.URI) != "":
+			name = strings.TrimSpace(resource.URI)
+		default:
+			name = "resource"
+		}
+	}
+
+	input := make([]appserver.UserInput, 0, 2)
+	if path != "" || strings.TrimSpace(resource.URI) != "" {
+		mentionPath := path
+		if mentionPath == "" {
+			mentionPath = strings.TrimSpace(resource.URI)
+		}
+		input = append(input, appserver.UserInput{
+			Type: "mention",
+			Name: name,
+			Path: mentionPath,
+		})
+	}
+
+	text := strings.TrimSpace(resource.Text)
+	if text == "" && strings.TrimSpace(resource.Data) != "" {
+		if decoded, err := decodeBase64Payload(resource.Data); err == nil {
+			text = string(decoded)
+		} else {
+			text = strings.TrimSpace(resource.Data)
+		}
+	}
+	if text == "" && path != "" {
+		if !s.canReadTextFile() {
+			warnings = append(
+				warnings,
+				fmt.Sprintf("missing mention context for %s: client has no fs/read_text_file capability", name),
+			)
+		} else if readText, err := s.readTextFile(ctx, sessionID, path); err != nil {
+			warnings = append(
+				warnings,
+				fmt.Sprintf("failed to read mention context for %s via fs/read_text_file: %v", name, err),
+			)
+		} else {
+			text = readText
+		}
+	}
+
+	if text != "" {
+		truncatedText, truncated := truncateTextBytes(text, defaultMentionTextLimit)
+		if truncated {
+			warnings = append(
+				warnings,
+				fmt.Sprintf("mention %s text exceeded %d bytes and was truncated", name, defaultMentionTextLimit),
+			)
+		}
+		input = append(input, appserver.UserInput{
+			Type: "text",
+			Text: formatMentionContext(resource, name, path, truncatedText, truncated),
+		})
+	} else if len(input) == 0 {
+		warnings = append(warnings, "resource block had no usable uri/path/text")
+	}
+
+	return input, warnings
+}
+
+func formatMentionContext(
+	resource PromptResource,
+	name string,
+	path string,
+	text string,
+	truncated bool,
+) string {
+	var builder strings.Builder
+	builder.WriteString("[mention context]\n")
+	builder.WriteString("name: " + name + "\n")
+	if path != "" {
+		builder.WriteString("path: " + path + "\n")
+	}
+	if uri := strings.TrimSpace(resource.URI); uri != "" {
+		builder.WriteString("uri: " + uri + "\n")
+	}
+	if mime := strings.TrimSpace(resource.MimeType); mime != "" {
+		builder.WriteString("mimeType: " + mime + "\n")
+	}
+	if resource.Range != nil {
+		builder.WriteString(fmt.Sprintf("range: %d-%d\n", resource.Range.Start, resource.Range.End))
+	}
+	if truncated {
+		builder.WriteString("truncated: true\n")
+	}
+	builder.WriteString("content:\n")
+	builder.WriteString(text)
+	return builder.String()
+}
+
+func buildImageInput(block PromptContentBlock) (appserver.UserInput, error) {
+	if path := strings.TrimSpace(block.Path); path != "" {
+		return appserver.UserInput{Type: "localImage", Path: path}, nil
+	}
+
+	if data := strings.TrimSpace(block.Data); data != "" {
+		mime := normalizeImageMimeType(block.MimeType)
+		if mime == "" {
+			return appserver.UserInput{}, fmt.Errorf("image block requires mimeType")
+		}
+		if !isAllowedImageMimeType(mime) {
+			return appserver.UserInput{}, fmt.Errorf("unsupported image mimeType: %s", mime)
+		}
+		decoded, err := decodeBase64Payload(data)
+		if err != nil {
+			return appserver.UserInput{}, fmt.Errorf("invalid image base64 payload: %w", err)
+		}
+		if len(decoded) > defaultImageSizeLimit {
+			return appserver.UserInput{}, fmt.Errorf(
+				"image payload exceeds %d bytes limit",
+				defaultImageSizeLimit,
+			)
+		}
+		return appserver.UserInput{
+			Type: "image",
+			URL:  fmt.Sprintf("data:%s;base64,%s", mime, sanitizeBase64(data)),
+		}, nil
+	}
+
+	uri := strings.TrimSpace(block.URI)
+	if uri == "" {
+		return appserver.UserInput{}, fmt.Errorf("image block requires data, uri, or path")
+	}
+	if strings.HasPrefix(strings.ToLower(uri), "data:") {
+		mime, payload, err := splitDataImageURI(uri)
+		if err != nil {
+			return appserver.UserInput{}, err
+		}
+		if !isAllowedImageMimeType(mime) {
+			return appserver.UserInput{}, fmt.Errorf("unsupported image mimeType: %s", mime)
+		}
+		decoded, err := decodeBase64Payload(payload)
+		if err != nil {
+			return appserver.UserInput{}, fmt.Errorf("invalid image data URI payload: %w", err)
+		}
+		if len(decoded) > defaultImageSizeLimit {
+			return appserver.UserInput{}, fmt.Errorf(
+				"image payload exceeds %d bytes limit",
+				defaultImageSizeLimit,
+			)
+		}
+		return appserver.UserInput{
+			Type: "image",
+			URL:  uri,
+		}, nil
+	}
+	if strings.HasPrefix(strings.ToLower(uri), "http://") || strings.HasPrefix(strings.ToLower(uri), "https://") {
+		return appserver.UserInput{
+			Type: "image",
+			URL:  uri,
+		}, nil
+	}
+	return appserver.UserInput{
+		Type: "localImage",
+		Path: uri,
+	}, nil
+}
+
+func normalizeImageMimeType(mime string) string {
+	mime = strings.TrimSpace(strings.ToLower(mime))
+	if idx := strings.Index(mime, ";"); idx >= 0 {
+		mime = strings.TrimSpace(mime[:idx])
+	}
+	return mime
+}
+
+func isAllowedImageMimeType(mime string) bool {
+	_, ok := allowedImageMimeType[normalizeImageMimeType(mime)]
+	return ok
+}
+
+func splitDataImageURI(uri string) (string, string, error) {
+	parts := strings.SplitN(uri, ",", 2)
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("invalid image data URI")
+	}
+	header := strings.TrimPrefix(strings.ToLower(parts[0]), "data:")
+	if !strings.Contains(header, ";base64") {
+		return "", "", fmt.Errorf("image data URI must be base64 encoded")
+	}
+	mime := strings.TrimSpace(strings.TrimSuffix(header, ";base64"))
+	if mime == "" {
+		return "", "", fmt.Errorf("image data URI missing mimeType")
+	}
+	return mime, parts[1], nil
+}
+
+func sanitizeBase64(payload string) string {
+	payload = strings.TrimSpace(payload)
+	return strings.TrimRight(payload, "\n\r\t ")
+}
+
+func decodeBase64Payload(payload string) ([]byte, error) {
+	clean := sanitizeBase64(payload)
+	decoded, err := base64.StdEncoding.DecodeString(clean)
+	if err == nil {
+		return decoded, nil
+	}
+	return base64.RawStdEncoding.DecodeString(clean)
+}
+
+func truncateTextBytes(input string, maxBytes int) (string, bool) {
+	if maxBytes <= 0 || len(input) <= maxBytes {
+		return input, false
+	}
+
+	cut := maxBytes
+	for cut > 0 && (input[cut]&0xC0) == 0x80 {
+		cut--
+	}
+	if cut <= 0 {
+		cut = maxBytes
+	}
+	return input[:cut], true
+}
+
+func pathFromURI(uriRaw string) string {
+	uriRaw = strings.TrimSpace(uriRaw)
+	if uriRaw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(uriRaw)
+	if err != nil {
+		return ""
+	}
+	if strings.ToLower(parsed.Scheme) != "file" {
+		return ""
+	}
+	if parsed.Path == "" {
+		return ""
+	}
+	return parsed.Path
+}
+
+func (s *Server) canReadTextFile() bool {
+	s.capabilitiesMu.RLock()
+	defer s.capabilitiesMu.RUnlock()
+	return s.capabilities.canReadTextFile
+}
+
+func (s *Server) readTextFile(ctx context.Context, sessionID string, path string) (string, error) {
+	callCtx, cancel := context.WithTimeout(ctx, defaultFSWriteTimeout)
+	defer cancel()
+
+	var raw map[string]any
+	if err := s.callClient(callCtx, methodFSReadTextFile, map[string]any{
+		"sessionId": sessionID,
+		"path":      path,
+	}, &raw); err != nil {
+		return "", err
+	}
+
+	for _, key := range []string{"text", "content"} {
+		if text := strings.TrimSpace(valueAsString(raw[key])); text != "" {
+			return text, nil
+		}
+	}
+	if nested, ok := raw["result"].(map[string]any); ok {
+		for _, key := range []string{"text", "content"} {
+			if text := strings.TrimSpace(valueAsString(nested[key])); text != "" {
+				return text, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("empty fs/read_text_file result")
+}
+
+func valueAsString(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	default:
+		return ""
+	}
+}
+
+func (s *Server) captureClientCapabilities(paramsRaw json.RawMessage) {
+	var payload map[string]any
+	if err := decodeParams(paramsRaw, &payload); err != nil {
+		return
+	}
+	enabled := detectReadTextCapability(payload)
+	s.capabilitiesMu.Lock()
+	s.capabilities.canReadTextFile = enabled
+	s.capabilitiesMu.Unlock()
+}
+
+func detectReadTextCapability(payload map[string]any) bool {
+	if payload == nil {
+		return false
+	}
+	return detectReadTextCapabilityAny(payload)
+}
+
+func detectReadTextCapabilityAny(value any) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			normalized := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(key, "-", "_"), ".", "_"))
+			if strings.Contains(normalized, "read_text_file") || strings.Contains(normalized, "fs/read_text_file") {
+				if boolish(child) {
+					return true
+				}
+			}
+			if detectReadTextCapabilityAny(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if detectReadTextCapabilityAny(child) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func boolish(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "1", "true", "yes", "on", "enabled":
+			return true
+		}
+	case float64:
+		return typed != 0
+	case map[string]any:
+		for _, key := range []string{"enabled", "available", "supported"} {
+			if boolish(typed[key]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func parseMarkdownTodoItems(content string) []TodoItem {
+	matches := todoChecklistPattern.FindAllStringSubmatch(content, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	items := make([]TodoItem, 0, len(matches))
+	for _, match := range matches {
+		if len(match) < 3 {
+			continue
+		}
+		doneMark := strings.TrimSpace(match[1])
+		text := strings.TrimSpace(match[2])
+		if text == "" {
+			continue
+		}
+		items = append(items, TodoItem{
+			Text: text,
+			Done: strings.EqualFold(doneMark, "x"),
+		})
+	}
+	return items
+}
+
+func cloneTodoItems(items []TodoItem) []TodoItem {
+	if len(items) == 0 {
+		return nil
+	}
+	cp := make([]TodoItem, len(items))
+	copy(cp, items)
+	return cp
+}
+
+func (s *Server) attachSessionTodos(update SessionUpdateParams) SessionUpdateParams {
+	if update.SessionID == "" {
+		return update
+	}
+	if len(update.Todo) > 0 {
+		s.sessionTodosMu.Lock()
+		s.sessionTodos[update.SessionID] = cloneTodoItems(update.Todo)
+		s.sessionTodosMu.Unlock()
+		return update
+	}
+	return update
+}
+
+func (s *Server) clearTurnTodosOnFailure(sessionID string, stopReason string) {
+	if sessionID == "" {
+		return
+	}
+	if stopReason == "end_turn" {
+		return
+	}
+	s.sessionTodosMu.Lock()
+	delete(s.sessionTodos, sessionID)
+	s.sessionTodosMu.Unlock()
 }
 
 func (s *Server) currentAuthMode() string {
@@ -1330,16 +1943,19 @@ func (t *turnLifecycle) apply(event appserver.TurnEvent) ([]SessionUpdateParams,
 		}, false, ""
 	case appserver.TurnEventTypeUpdate, appserver.TurnEventTypeAgentMessageDelta:
 		t.phase = turnPhaseStreaming
-		return []SessionUpdateParams{
-			{
-				SessionID: t.sessionID,
-				TurnID:    event.TurnID,
-				Type:      "message",
-				Phase:     string(t.phase),
-				ItemID:    event.ItemID,
-				Delta:     event.Delta,
-			},
-		}, false, ""
+		t.messageBuffer.WriteString(event.Delta)
+		update := SessionUpdateParams{
+			SessionID: t.sessionID,
+			TurnID:    event.TurnID,
+			Type:      "message",
+			Phase:     string(t.phase),
+			ItemID:    event.ItemID,
+			Delta:     event.Delta,
+		}
+		if todos := parseMarkdownTodoItems(t.messageBuffer.String()); len(todos) > 0 {
+			update.Todo = todos
+		}
+		return []SessionUpdateParams{update}, false, ""
 	case appserver.TurnEventTypeItemStarted:
 		t.phase = turnPhaseStreaming
 		return []SessionUpdateParams{
@@ -1475,6 +2091,18 @@ func mapDecisionToAppServer(outcome permissionOutcome) appserver.ApprovalDecisio
 		return appserver.ApprovalDecisionDeclined
 	default:
 		return appserver.ApprovalDecisionCancelled
+	}
+}
+
+func textTurnInput(text string) []appserver.UserInput {
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	return []appserver.UserInput{
+		{
+			Type: "text",
+			Text: text,
+		},
 	}
 }
 

@@ -45,8 +45,8 @@
 - [x] B2 Schema 锁定（make schema）
 
 ### C. 内容能力
-- [ ] C1 @-mentions
-- [ ] C2 Images
+- [x] C1 @-mentions
+- [x] C2 Images
 
 ### D. 工具、审批与安全
 - [x] D1 命令执行审批
@@ -60,7 +60,7 @@
 - [x] E2 Patch 落盘两模式
 
 ### F. TODO lists
-- [ ] F1 结构化 TODO
+- [x] F1 结构化 TODO
 
 ### G. Slash commands
 - [x] G1 /review
@@ -121,7 +121,12 @@
      - `TestE2EAcceptanceA1ToA5AndB1`
      - `TestE2EAcceptanceB1AppServerCrashReturnsClearError`
      - `TestE2ENotificationRoutingBySessionAndTurn`
+     - `TestE2EAcceptanceC1MentionsResourcePreserved`
+     - `TestE2EEdgeC1MentionWithoutFSCapabilityDegrades`
+     - `TestE2EAcceptanceC2ImageContentBlock`
+     - `TestE2EEdgeC2InvalidImageBase64Rejected`
      - `TestE2EAcceptanceD1ToD5ApprovalsBridge`
+     - `TestE2EAcceptanceF1StructuredTODOAcrossTurns`
      - `TestE2EAcceptanceE1ReviewWorkflow`
      - `TestE2EAcceptanceE2PatchModeAAppServer`
      - `TestE2EAcceptanceE2PatchModeBACPFS`
@@ -136,6 +141,7 @@
      - `TestE2EAuthRequiredWithoutConfiguredMethod`
      - `TestE2ERealCodexInitializePromptAndCancel`（`E2E_REAL_CODEX=1`）
      - `TestE2ERealCodexPromptInteractions`（含真实 prompt：`What is this project?`）
+     - `TestE2ERealCodexContentBlocksMentionsImagesAndTODO`（`E2E_REAL_CODEX=1`）
      - `TestRPCReaderDetectsInvalidStdoutLine`
    - PR5 相关验收由 e2e 自动覆盖：G/H/I + MCP；J1 由脚本触发专项回归。
    - 测试中持续校验 adapter stdout 每行均为合法 JSON-RPC。
@@ -145,18 +151,17 @@
    - 预期：100 turns（含 approve/deny/cancel）完成，无崩溃、stdout 仍纯 JSON-RPC
 
 ## 遗留问题是什么
-1. C1/C2/F1 尚未完成：mentions、images、结构化 TODO 仍需实现。
-2. 当前崩溃恢复策略对“当次请求”返回可读失败，需要客户端重试一次（已在 KNOWN_ISSUES 记录）。
-3. `/logout` 当前仅清理适配器侧认证态，不含交互式重新登录入口（需外部重新配置/重启）。
-4. e2e 仍主要依赖 fake app-server，真实 codex app-server 的 mcp/auth/compact 行为仍需联调回归。
+1. 当前崩溃恢复策略对“当次请求”返回可读失败，需要客户端重试一次（已在 KNOWN_ISSUES 记录）。
+2. `/logout` 当前仅清理适配器侧认证态，不含交互式重新登录入口（需外部重新配置/重启）。
+3. e2e 仍主要依赖 fake app-server，真实 codex app-server 的 mcp/auth/compact 行为仍需联调回归。
 
 ## 当前阻塞（Blockers）
 - 无
 
 ## 下一步（Next）
-1. 完成 C1/C2/F1：mentions、images、TODO 结构化输出。
-2. 做真实 codex app-server 联调：重点覆盖 `/compact`、`mcpServer/*`、`auth/logout` 与 profile 参数映射。
-3. 在 CI 增加可选 `e2e-real` 作业（含 `make schema`）并固化环境前置检查。
+1. 做真实 codex app-server 联调：重点覆盖 `/compact`、`mcpServer/*`、`auth/logout` 与 profile 参数映射。
+2. 在 CI 增加可选 `e2e-real` 作业（含 `make schema`）并固化环境前置检查。
+3. 评估 `/logout` 的进程内 re-auth RPC，消除重启恢复依赖。
 
 ## 变更摘要（每 PR 一条）
 ### 2026-02-26 — PR1 工程骨架 + 双 codec + 最小 e2e harness
@@ -260,5 +265,26 @@
 - C. 验证:
   - `go test ./...` 通过
   - `E2E_REAL_CODEX=1 go test ./... -run TestE2E -count=1`（本机具备 codex/auth 环境时）
+- D. 文档:
+  - 更新 `PROGRESS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`
+
+### 2026-02-27 — C1/C2/F1 收尾（mentions + images + structured TODO）
+- A. 范围与目标:
+  - 覆盖 C1、C2、F1，并补齐 real/edge e2e 断言
+  - 保持 A1（stdout 纯协议）与 B1（真实 app-server 子进程）不回退
+- B. 实现:
+  - `session/prompt` 支持 ACP `content/resources`，映射到 app-server `turn/start input[]`
+  - mentions：保留 `uri/mimeType/range`，资源缺内容时按 capability 检测尝试 `fs/read_text_file`，失败/缺能力时降级告警
+  - images：支持 base64/data-uri/localImage 输入，增加 mime 白名单与 4MiB 大小限制
+  - TODO：从 message delta 解析 markdown checklist，并在 `session/update.todo` 返回结构化项（保留原文 delta）
+- C. 验证:
+  - 新增：
+    - `TestE2EAcceptanceC1MentionsResourcePreserved`
+    - `TestE2EEdgeC1MentionWithoutFSCapabilityDegrades`
+    - `TestE2EAcceptanceC2ImageContentBlock`
+    - `TestE2EEdgeC2InvalidImageBase64Rejected`
+    - `TestE2EAcceptanceF1StructuredTODOAcrossTurns`
+    - `TestE2ERealCodexContentBlocksMentionsImagesAndTODO`（`E2E_REAL_CODEX=1`）
+  - `go test ./...` 通过
 - D. 文档:
   - 更新 `PROGRESS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`

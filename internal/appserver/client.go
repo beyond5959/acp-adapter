@@ -96,9 +96,12 @@ func (c *Client) ThreadStart(ctx context.Context, cwd string, options RunOptions
 func (c *Client) TurnStart(
 	ctx context.Context,
 	threadID string,
-	input string,
+	input []UserInput,
 	options RunOptions,
 ) (string, <-chan TurnEvent, error) {
+	if len(input) == 0 {
+		return "", nil, fmt.Errorf("turn/start requires at least one input item")
+	}
 	params := TurnStartParams{
 		ThreadID:   threadID,
 		Input:      input,

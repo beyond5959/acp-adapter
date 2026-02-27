@@ -26,6 +26,7 @@
 - ADR-0020：真实 codex app-server e2e 开关与 schema 前置策略
 - ADR-0021：`--trace-json` 脱敏 JSONL 调试与 stdout 严格 JSON-RPC 校验
 - ADR-0022：真实 prompt 交互回归（多轮问答 smoke）
+- ADR-0023：C1/C2/F1 输入映射策略（mentions/images/todo + capability 降级）
 
 ---
 
@@ -378,3 +379,37 @@
   - `test/integration/e2e_test.go`
 - 验证方式（测试/验收项）：
   - `E2E_REAL_CODEX=1 go test ./... -run TestE2ERealCodexPromptInteractions -count=1`
+
+### ADR-0023：C1/C2/F1 输入映射策略（mentions/images/todo + capability 降级）
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - PR5 后仍缺 C1/C2/F1；现有 `session/prompt` 仅传单字符串，无法保留 ACP `content/resources` 结构。
+  - 需要在不破坏 A1/B1 的前提下，把 mentions/images 以 schema 对齐方式传入 app-server `turn/start input[]`。
+- 决策：
+  - `session/prompt` 新增 `content/resources` 解析并映射到 `turn/start` 的 `input[]`（`text/mention/image/localImage`）。
+  - mentions 优先使用 ACP 提供的 resource/content；无内联内容时仅在 capability 声明可用时调用 `fs/read_text_file`，否则降级为告警并继续。
+  - images 仅接受白名单 mime（png/jpeg/webp/gif），base64/data-uri 校验并限制 4MiB。
+  - TODO 通过解析 message delta 中 markdown checklist，并在 `session/update.todo` 输出结构化项，同时保留原文 delta。
+- 备选方案：
+  - 方案A：继续把 prompt 扁平化成文本并忽略结构化输入。
+  - 方案B：全量映射 content/resources 到 input[] 并做 capability-aware 降级。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：满足 C1/C2/F1 验收，资源元信息不丢失，客户端能力不足时仍可工作。
+  - Cons：实现复杂度提升；TODO 解析依赖 markdown checklist 形态，非 checklist 输出无法结构化。
+- 影响范围（文件/模块）：
+  - `internal/acp/types.go`
+  - `internal/acp/server.go`
+  - `internal/appserver/types.go`
+  - `internal/appserver/client.go`
+  - `internal/appserver/supervisor.go`
+  - `testdata/fake_codex_app_server/main.go`
+  - `test/integration/e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EAcceptanceC1MentionsResourcePreserved`
+  - `TestE2EEdgeC1MentionWithoutFSCapabilityDegrades`
+  - `TestE2EAcceptanceC2ImageContentBlock`
+  - `TestE2EEdgeC2InvalidImageBase64Rejected`
+  - `TestE2EAcceptanceF1StructuredTODOAcrossTurns`
+  - `TestE2ERealCodexContentBlocksMentionsImagesAndTODO`（`E2E_REAL_CODEX=1`）
+  - 对应验收：C1、C2、F1

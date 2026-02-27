@@ -21,6 +21,8 @@
 - KI-0015：MCP/compact/auth 方法名对真实 app-server 版本敏感
 - KI-0016：真实 codex e2e 依赖本机 codex 命令与认证态
 - KI-0017：trace-json 脱敏规则为启发式，可能存在漏网字段
+- KI-0018：mentions/images 输入有大小与能力门槛
+- KI-0019：TODO 结构化仅覆盖 markdown checklist 形态
 
 ---
 
@@ -164,3 +166,30 @@
   - 生产环境谨慎开启 trace；优先在本地调试使用并定期审查脱敏规则。
 - 后续计划：
   - 基于真实日志样本扩充脱敏词典，并支持可配置的自定义脱敏 key 列表。
+
+## KI-0018：mentions/images 输入有大小与能力门槛
+- 现象：
+  - mentions 无内联文本时，适配器仅在检测到 `fs/read_text_file` capability 后才会补读。
+  - 图片输入要求 mime 白名单（png/jpeg/webp/gif）且 base64/data-uri payload 不超过 4MiB。
+- 影响：
+  - client 未声明 fs 读能力时，mentions 会降级为“仅路径引用 + 缺上下文告警”。
+  - 超限或非法图片会在 `session/prompt` 返回 `invalid params`。
+- 复现：
+  - 发送无 text 的 mention block 且 initialize 不声明 fs/read capability。
+  - 发送 mime 不在白名单或超 4MiB 的 image block。
+- Workaround：
+  - 对 mentions：优先由 client 提供内联 `resource.text`，或显式声明并实现 `fs/read_text_file`。
+  - 对 images：在客户端先做压缩/重采样并保证 mime 合法。
+- 后续计划：
+  - 支持可配置的图片大小上限与 mime 白名单；补充更细粒度 capability 探测。
+
+## KI-0019：TODO 结构化仅覆盖 markdown checklist 形态
+- 现象：当前 TODO 结构化解析依赖 `- [ ]` / `- [x]`（含数字序号变体）markdown checklist。
+- 影响：
+  - 模型若返回自然语言计划、表格或其它格式，不会填充 `session/update.todo`，仅保留原文 delta。
+- 复现：
+  - 让模型输出“Step 1/Step 2”但不使用 checklist 语法。
+- Workaround：
+  - 在提示词中显式要求 markdown checklist 输出。
+- 后续计划：
+  - 评估接入 app-server 原生 plan/todo 事件（若可用）并扩展多格式解析器。
