@@ -1,0 +1,27 @@
+{
+  "name": "@beyond5959/codex-acp-go",
+  "version": "0.1.0",
+  "description": "ACP adapter launcher for codex-acp-go",
+  "bin": {
+    "codex-acp-go": "./bin/codex-acp-go.js"
+  },
+  "files": [
+    "bin/codex-acp-go.js",
+    "README.md"
+  ],
+  "optionalDependencies": {
+    "@beyond5959/codex-acp-go-darwin-arm64": "0.1.0",
+    "@beyond5959/codex-acp-go-darwin-x64": "0.1.0",
+    "@beyond5959/codex-acp-go-linux-arm64": "0.1.0",
+    "@beyond5959/codex-acp-go-linux-x64": "0.1.0",
+    "@beyond5959/codex-acp-go-win32-arm64": "0.1.0",
+    "@beyond5959/codex-acp-go-win32-x64": "0.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED"
+}

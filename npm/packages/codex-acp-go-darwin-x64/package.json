@@ -1,0 +1,18 @@
+{
+  "name": "@beyond5959/codex-acp-go-darwin-x64",
+  "version": "0.1.0",
+  "description": "darwin x64 binary for @beyond5959/codex-acp-go",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "bin/codex-acp-go"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "UNLICENSED"
+}

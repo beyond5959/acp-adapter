@@ -1,0 +1,569 @@
+# DECISIONS.md
+
+> 记录“关键决策与取舍”，用于防止上下文丢失导致反复争论/返工。  
+> 规则：任何影响架构、协议、默认安全策略、接口形状、或与客户端兼容性的改变都必须记录。
+
+## 决策索引（建议从这里开始）
+- ADR-0001：stdout/stderr 分离（ACP stdio 合规）
+- ADR-0002：下游采用 Codex App Server（stdio JSONL），不解析 CLI 文本
+- ADR-0003：Schema 锁定策略（generate-json-schema + 版本钉死）
+- ADR-0004：turn 并发策略（每 session 同时 1 个 active turn）
+- ADR-0005：审批桥（App Server approvals -> ACP session/request_permission）
+- ADR-0006：patch 落盘两模式（AppServer 落盘 / ACP fs 落盘）
+- ADR-0007：终端/PTY 策略（默认安全、避免交互死锁）
+- ADR-0008：Slash commands 处理策略（命令路由优先于普通 prompt）
+- ADR-0009：长期记忆外置（PROGRESS/DECISIONS/KNOWN_ISSUES）
+- ADR-0010：turn 生命周期状态机与 session/update 映射
+- ADR-0011：app-server Supervisor 恢复策略（异常退出后重建）
+- ADR-0012：ACP outbound `session/request_permission` 请求通道
+- ADR-0013：审批默认拒绝策略与 `tool_call_update` 状态约定
+- ADR-0014：`/review` 路由到 `review/start` + review mode 状态映射
+- ADR-0015：Patch 落盘双模式（AppServer / ACP fs）与失败可见性
+- ADR-0016：PR5 Slash 命令路由策略（review-branch/review-commit/init/compact/logout）
+- ADR-0017：Profiles 解析与运行参数优先级（default profile + per-session/per-turn override）
+- ADR-0018：认证状态模型（启动时检测 + `/logout` fail-closed）
+- ADR-0019：MCP 命令面（list/call/oauth）与 side-effect 审批上收至 ACP permission
+- ADR-0020：真实 codex app-server e2e 开关与 schema 前置策略
+- ADR-0021：`--trace-json` 脱敏 JSONL 调试与 stdout 严格 JSON-RPC 校验
+- ADR-0022：真实 prompt 交互回归（多轮问答 smoke）
+- ADR-0023：C1/C2/F1 输入映射策略（mentions/images/todo + capability 降级）
+- ADR-0024：app-server 中途崩溃时的“当次 turn 内部重试一次”策略
+- ADR-0025：`/logout` 恢复指引与 app-server auth 清理兼容策略
+- ADR-0026：go module 使用 GitHub canonical 路径
+- ADR-0027：协议形态兼容策略（prompt 多形态 + session/update 标准 envelope + app-server v2 嵌套返回）
+- ADR-0028：`initialize` 标准字段对齐（protocolVersion + 标准能力树）并保留 legacy 兼容
+
+---
+
+## ADR 模板（复制一份填写）
+### ADR-000X：<标题>
+- 日期：YYYY-MM-DD
+- 状态：Proposed / Accepted / Superseded
+- 背景：
+- 决策：
+- 备选方案：
+- 取舍（Pros/Cons）：
+- 影响范围（文件/模块）：
+- 验证方式（测试/验收项）：
+
+### ADR-0010：turn 生命周期状态机与 session/update 映射
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - PR2 需要把 App Server 流式 notifications 稳定映射到 ACP `session/update`，并保证 turn 有明确终态。
+  - 需要满足 A4/A5（强化）和 B1 稳定性目标。
+- 决策：
+  - 在 ACP server 引入显式 turn 状态机：`started -> streaming -> completed/cancelled/error`。
+  - 将 `turn/started`、`item/started`、`item/agentMessage/delta`、`item/completed`、`turn/completed` 统一转换为 `session/update`。
+  - `session/prompt` 响应的 `stopReason` 由状态机终态统一归一。
+- 备选方案：
+  - 方案A：仅做事件透传，不维护显式状态。
+  - 方案B：维护独立状态机并统一收敛 stopReason。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：状态收敛一致、错误路径可控、测试可断言。
+  - Cons：实现复杂度上升，需要维护状态与事件兼容。
+- 影响范围（文件/模块）：
+  - `internal/acp/server.go`
+  - `internal/acp/types.go`
+  - `internal/appserver/types.go`
+  - `internal/appserver/client.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EAcceptanceA1ToA5AndB1`
+  - `TestE2ENotificationRoutingBySessionAndTurn`
+  - 对应验收：A4、A5、B1
+
+### ADR-0011：app-server Supervisor 恢复策略（异常退出后重建）
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - App Server 子进程异常退出会导致 pending turn 失败；PR2 要求“给上游可读错误并可恢复”。
+- 决策：
+  - 新增 `appserver.Supervisor` 管理子进程生命周期。
+  - 对可恢复错误（EOF、read loop、broken pipe 等）执行重建握手。
+  - 当前请求返回可读错误；后续请求可在重建后继续处理。
+- 备选方案：
+  - 方案A：进程异常后直接退出 adapter。
+  - 方案B：失败后自动重建 app-server，并保留 adapter 进程。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：提升稳定性，用户可继续会话；B1 可自动验证崩溃恢复路径。
+  - Cons：崩溃当次请求仍会失败，需要客户端重试。
+- 影响范围（文件/模块）：
+  - `internal/appserver/supervisor.go`
+  - `internal/appserver/process.go`
+  - `cmd/codex-acp-go/main.go`
+  - `test/integration/e2e_test.go`
+  - `testdata/fake_codex_app_server/main.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EAcceptanceB1AppServerCrashReturnsClearError`
+  - 对应验收：B1（稳定性/恢复）
+
+### ADR-0012：ACP outbound `session/request_permission` 请求通道
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - PR3 需要把下游 approval 请求桥接到 ACP `session/request_permission`，并等待上游用户决策。
+  - 现有 ACP server 仅支持“上游 -> 适配器”请求处理，不支持“适配器 -> 上游”请求响应匹配。
+- 决策：
+  - 在 ACP server 引入 pending response map 和 request id 生成器。
+  - `Serve` 循环同时处理两类消息：上游请求、上游对 outbound request 的响应。
+  - 以 `session/request_permission` 作为唯一审批入口方法。
+- 备选方案：
+  - 方案A：把 permission 降级为 notification，不等待结果。
+  - 方案B：实现完整 JSON-RPC request/response 往返。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：协议语义完整，可实现 accept/decline/cancel 三分支。
+  - Cons：ACP server 状态复杂度增加，需要维护并发安全。
+- 影响范围（文件/模块）：
+  - `internal/acp/server.go`
+  - `internal/acp/types.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EAcceptanceD1ToD5ApprovalsBridge`
+  - 对应验收：D1、D2、D3、D4
+
+### ADR-0013：审批默认拒绝策略与 `tool_call_update` 状态约定
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - PR3 要求“无 permission 不执行”并把工具状态持续映射到 ACP。
+  - 需要统一定义审批失败/取消时的行为和上游可见状态。
+- 决策：
+  - 审批链路默认安全：permission 失败、超时、解析异常均回传 `cancelled`（不执行副作用）。
+  - `tool_call_update` 状态约定：`in_progress -> completed|failed`。
+  - 在 `tool_call_update` 中携带 `toolCallId`、审批类型（command/file/network/mcp）和最终 decision。
+- 备选方案：
+  - 方案A：失败时自动放行（fail-open）。
+  - 方案B：失败时默认拒绝（fail-closed）。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：满足 D5 安全要求，行为可预测，回归断言清晰。
+  - Cons：当上游客户端异常时，工具会被保守拦截，可能增加“误拒绝”。
+- 影响范围（文件/模块）：
+  - `internal/acp/server.go`
+  - `internal/acp/types.go`
+  - `internal/appserver/client.go`
+  - `internal/appserver/types.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EAcceptanceD1ToD5ApprovalsBridge`
+  - 对应验收：D1、D2、D3、D4、D5
+
+### ADR-0014：`/review` 路由到 `review/start` + review mode 状态映射
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - PR4 要求 `/review` 工作流可见，且需要 entered/exited review mode（或等价）状态。
+  - 继续复用 `turn/start` 难以表达 review 专属状态与事件语义。
+- 决策：
+  - ACP server 在 `session/prompt` 中识别 `/review` 前缀，转调 app-server `review/start`。
+  - 新增 review mode notifications（entered/exited）并映射为 `session/update` status。
+  - review diff 通过 message delta 透传，保持可读展示。
+- 备选方案：
+  - 方案A：`/review` 仍走 `turn/start` 并人工拼接状态。
+  - 方案B：显式接入 `review/start` 并使用专属状态映射。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：语义更清晰，E1 可直接断言；便于后续扩展 review 事件。
+  - Cons：协议面增大，fake/real app-server 都需要对齐 review 事件。
+- 影响范围（文件/模块）：
+  - `internal/acp/server.go`
+  - `internal/appserver/types.go`
+  - `internal/appserver/client.go`
+  - `internal/appserver/supervisor.go`
+  - `testdata/fake_codex_app_server/main.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EAcceptanceE1ReviewWorkflow`
+  - 对应验收：E1
+
+### ADR-0015：Patch 落盘双模式（AppServer / ACP fs）与失败可见性
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - PR4 要求 E2：同时支持 AppServer 落盘与 ACP fs 落盘，并在冲突/失败时可见。
+  - 需要在保持 D2（permission gate）的同时提供可切换落盘路径。
+- 决策：
+  - 增加 `PATCH_APPLY_MODE`（`appserver|acp_fs`）配置，默认 `appserver`。
+  - Mode A：批准后由 app-server 执行落盘。
+  - Mode B：批准后由 adapter 调用上游 `fs/write_text_file` 执行落盘；失败时输出 `review_apply_failed`。
+  - Mode B 落盘失败时仍保持 fail-closed，不放行副作用执行。
+- 备选方案：
+  - 方案A：仅支持单一落盘模式（简化实现）。
+  - 方案B：双模式并用配置切换。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：满足 E2 全量要求，可适配不同客户端 ownership 模型。
+  - Cons：Mode B 依赖 ACP fs 方法契约，客户端兼容性风险上升。
+- 影响范围（文件/模块）：
+  - `internal/config/config.go`
+  - `cmd/codex-acp-go/main.go`
+  - `internal/acp/server.go`
+  - `test/integration/e2e_test.go`
+  - `testdata/fake_codex_app_server/main.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EAcceptanceE2PatchModeAAppServer`
+  - `TestE2EAcceptanceE2PatchModeBACPFS`
+  - `TestE2EReviewPatchConflictVisibleModeB`
+  - 对应验收：E2（并回归 D2）
+
+### ADR-0016：PR5 Slash 命令路由策略（review-branch/review-commit/init/compact/logout）
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - PR5 需要补齐 G2-G6，并保持与已有 `/review` 流程一致的流式行为和权限语义。
+  - 不同命令对应 app-server 能力不同：`review/start`、`turn/start`、`thread/compact/start`、`auth/logout`。
+- 决策：
+  - `/review-branch`、`/review-commit` 统一路由到 `review/start`（用 instructions 区分目标）。
+  - `/init` 路由到 `turn/start`，并复用 file approval 链路。
+  - `/compact` 路由 `thread/compact/start`。
+  - `/logout` 使用 adapter inline command（无 app turn stream 依赖），并输出 `auth_logged_out` 状态。
+- 备选方案：
+  - 方案A：全部命令都退化成普通 prompt 文本。
+  - 方案B：按命令类型映射到对应 app-server endpoint。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：语义清晰，可直接对齐 G2-G6 验收断言。
+  - Cons：路由分支增多，命令解析复杂度上升。
+- 影响范围（文件/模块）：
+  - `internal/acp/server.go`
+  - `internal/appserver/types.go`
+  - `internal/appserver/client.go`
+  - `internal/appserver/supervisor.go`
+  - `testdata/fake_codex_app_server/main.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EAcceptanceG2G3ReviewBranchAndCommit`
+  - `TestE2EAcceptanceG4InitRequiresPermission`
+  - `TestE2EAcceptanceG5Compact`
+  - `TestE2EAcceptanceG6LogoutRequiresReauth`
+  - 对应验收：G2、G3、G4、G5、G6
+
+### ADR-0017：Profiles 解析与运行参数优先级（default profile + per-session/per-turn override）
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - PR5 需要 H1：profiles 生效，且要让 model/approval/sandbox/personality/system instructions 可观测地改变行为。
+- 决策：
+  - 新增 profile 配置来源：`CODEX_ACP_PROFILES_JSON`、`CODEX_ACP_PROFILES_FILE`（JSON）。
+  - 优先级：
+    - default profile（若配置）
+    - session/new 的 `profile`
+    - session/prompt 的 `profile`
+    - 最后应用显式字段 override（model/approvalPolicy/sandbox/personality/systemInstructions）
+  - 运行参数映射到 app-server `RunOptions`，同时支持 thread/start 与 turn/review start。
+- 备选方案：
+  - 方案A：只支持每次 prompt 显式字段，不支持 profile 名称。
+  - 方案B：支持命名 profile + override 优先级。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：配置化可复用，满足 H1 的“切换 profile 行为可观察”。
+  - Cons：当前仅 JSON 配置，未覆盖 SPEC 中提到的 toml 形态。
+- 影响范围（文件/模块）：
+  - `internal/config/config.go`
+  - `internal/acp/types.go`
+  - `internal/acp/server.go`
+  - `internal/appserver/types.go`
+  - `cmd/codex-acp-go/main.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EAcceptanceH1ProfilesAffectRuntime`
+  - 对应验收：H1
+
+### ADR-0018：认证状态模型（启动时检测 + `/logout` fail-closed）
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - PR5 需要覆盖 I1-I3，且 `/logout` 后必须重新认证。
+  - 适配器当前没有交互式登录 RPC，需要可预测且安全的认证状态机。
+- 决策：
+  - 启动时按优先级检测认证方式：`CODEX_API_KEY` > `OPENAI_API_KEY` > subscription。
+  - `initialize` 返回 `activeAuthMethod`。
+  - `session/new` / `session/prompt` 走 auth gate；无认证时立即返回明确错误（fail-closed）。
+  - `/logout` 清空本地认证态，并调用 app-server `auth/logout`（若不支持则兼容忽略）。
+- 备选方案：
+  - 方案A：无认证时仍放行请求，依赖下游报错。
+  - 方案B：适配器前置 auth gate 并 fail-closed。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：行为一致、错误更早更明确，满足 `/logout` 语义。
+  - Cons：当前缺少“同进程重新登录”入口，需要外部重配/重启恢复认证。
+- 影响范围（文件/模块）：
+  - `internal/config/config.go`
+  - `internal/acp/types.go`
+  - `internal/acp/server.go`
+  - `internal/appserver/client.go`
+  - `internal/appserver/supervisor.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EAcceptanceI1ToI3AuthMethods`
+  - `TestE2EAuthRequiredWithoutConfiguredMethod`
+  - `TestE2EAcceptanceG6LogoutRequiresReauth`
+  - 对应验收：I1、I2、I3、G6
+
+### ADR-0019：MCP 命令面（list/call/oauth）与 side-effect 审批上收至 ACP permission
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - PR5 要求 MCP servers 可列出/调用，并在 side-effect 场景走审批；同时需要 OAuth 启动路径。
+- 决策：
+  - 新增 `/mcp list`、`/mcp call`、`/mcp oauth`。
+  - `/mcp call` 在适配器侧先发 `session/request_permission`（approval=`mcp`），批准后再调用 app-server `mcpServer/call`。
+  - `/mcp oauth` 映射 `mcpServer/oauth/login`；`/mcp list` 映射 `mcpServer/list`。
+- 备选方案：
+  - 方案A：把 MCP 调用完全下沉给下游审批系统。
+  - 方案B：审批上收到 ACP，统一上游 permission UX。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：与 D4/D5 一致，审批入口统一，便于上游客户端展示。
+  - Cons：命令由 adapter inline 执行，和 turn-stream 事件模型是两条路径。
+- 影响范围（文件/模块）：
+  - `internal/acp/server.go`
+  - `internal/appserver/types.go`
+  - `internal/appserver/client.go`
+  - `internal/appserver/supervisor.go`
+  - `testdata/fake_codex_app_server/main.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EAcceptanceMCPListCallAndOAuth`
+  - 对应验收：PR5 MCP 功能点（并回归 D4、D5 的审批语义）
+
+### ADR-0020：真实 codex app-server e2e 开关与 schema 前置策略
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - 需要新增“本机真实 codex app-server”端到端验证，同时保留现有 fake harness 的可重复性。
+  - 真实 e2e 运行前必须先生成并校验 schema，避免协议漂移导致误判。
+- 决策：
+  - 引入 `E2E_REAL_CODEX=1` 开关，新增真实基线回归（当前用例名：`TestE2ERealCodexAppServer_BasicPromptAndCancel`）。
+  - 真实模式下测试前执行 `make schema`（`generate-json-schema + schema-check + SHA256SUMS`）。
+  - 旧 fake e2e 在真实模式下跳过，避免与真实后端行为差异导致噪声。
+  - 若本机缺少可用 codex 认证，real e2e 用例给出 skip 原因，避免把环境问题误判为代码回归。
+- 备选方案：
+  - 方案A：让所有 E2E 测试在开关打开时都跑真实后端。
+  - 方案B：保留 fake 与 real 两套用例，按开关切换。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：真实联调与稳定回归可并存，执行成本可控。
+  - Cons：维护两套 e2e 路径，需要持续对齐覆盖范围。
+- 影响范围（文件/模块）：
+  - `test/integration/e2e_test.go`
+  - `Makefile`
+- 验证方式（测试/验收项）：
+  - `E2E_REAL_CODEX=1 go test ./... -run TestE2EReal -count=1`
+  - 对应验收：A1、A2、A3、A4、A5（真实后端基线）
+
+### ADR-0021：`--trace-json` 脱敏 JSONL 调试与 stdout 严格 JSON-RPC 校验
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - 需要可落盘的双向协议调试能力，同时不能把敏感字段直接写入 trace。
+  - A1 要求 stdout 只允许 ACP JSON-RPC，需在测试端强化判定。
+- 决策：
+  - 新增 `--trace-json`、`--trace-json-file`，记录 ACP/AppServer 双向协议到 JSONL。
+  - trace 写入前按 key/value 规则脱敏（api_key/token/authorization/cookie 等）。
+  - e2e `rpcReader` 改为严格 JSON-RPC envelope 校验。
+- 备选方案：
+  - 方案A：仅输出原始文本 trace，不做结构化脱敏。
+  - 方案B：结构化 JSONL + 脱敏规则。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：定位问题更快，兼顾安全与可审计性。
+  - Cons：脱敏规则是启发式，仍需持续补充边界场景。
+- 影响范围（文件/模块）：
+  - `internal/observability/trace.go`
+  - `internal/acp/codec_stdio.go`
+  - `internal/appserver/codec_jsonl.go`
+  - `internal/appserver/process.go`
+  - `cmd/codex-acp-go/main.go`
+  - `test/integration/e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `TestE2ERealCodexAppServer_BasicPromptAndCancel`（trace 文件存在 + 脱敏断言）
+  - `TestRPCReaderDetectsInvalidStdoutLine`
+  - 对应验收：A1、J2
+
+### ADR-0022：真实 prompt 交互回归（多轮问答 smoke）
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - 仅有“单 prompt + cancel”不足以覆盖真实 codex 在连续自然语言问答下的基本稳定性。
+- 决策：
+  - 新增 `TestE2ERealCodexPromptInteractions`，在同一真实 session 连续执行多轮 prompt。
+  - 覆盖固定问题集（包含 `What is this project?`），每轮要求 `>=1 session/update` 且 `stopReason=end_turn`。
+  - 若 real 环境缺少认证则按既有策略 skip，避免环境不确定性污染回归信号。
+- 备选方案：
+  - 方案A：继续只保留单轮 smoke。
+  - 方案B：增加多轮 prompt 交互回归。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：更接近真实交互，能更早发现 session 累积状态问题。
+  - Cons：真实环境下执行时长略增，仍受本机认证前置影响。
+- 影响范围（文件/模块）：
+  - `test/integration/e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `E2E_REAL_CODEX=1 go test ./... -run TestE2ERealCodexPromptInteractions -count=1`
+
+### ADR-0023：C1/C2/F1 输入映射策略（mentions/images/todo + capability 降级）
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - PR5 后仍缺 C1/C2/F1；现有 `session/prompt` 仅传单字符串，无法保留 ACP `content/resources` 结构。
+  - 需要在不破坏 A1/B1 的前提下，把 mentions/images 以 schema 对齐方式传入 app-server `turn/start input[]`。
+- 决策：
+  - `session/prompt` 新增 `content/resources` 解析并映射到 `turn/start` 的 `input[]`（`text/mention/image/localImage`）。
+  - mentions 优先使用 ACP 提供的 resource/content；无内联内容时仅在 capability 声明可用时调用 `fs/read_text_file`，否则降级为告警并继续。
+  - images 仅接受白名单 mime（png/jpeg/webp/gif），base64/data-uri 校验并限制 4MiB。
+  - TODO 通过解析 message delta 中 markdown checklist，并在 `session/update.todo` 输出结构化项，同时保留原文 delta。
+- 备选方案：
+  - 方案A：继续把 prompt 扁平化成文本并忽略结构化输入。
+  - 方案B：全量映射 content/resources 到 input[] 并做 capability-aware 降级。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：满足 C1/C2/F1 验收，资源元信息不丢失，客户端能力不足时仍可工作。
+  - Cons：实现复杂度提升；TODO 解析依赖 markdown checklist 形态，非 checklist 输出无法结构化。
+- 影响范围（文件/模块）：
+  - `internal/acp/types.go`
+  - `internal/acp/server.go`
+  - `internal/appserver/types.go`
+  - `internal/appserver/client.go`
+  - `internal/appserver/supervisor.go`
+  - `testdata/fake_codex_app_server/main.go`
+  - `test/integration/e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EAcceptanceC1MentionsResourcePreserved`
+  - `TestE2EEdgeC1MentionWithoutFSCapabilityDegrades`
+  - `TestE2EAcceptanceC2ImageContentBlock`
+  - `TestE2EEdgeC2InvalidImageBase64Rejected`
+  - `TestE2EAcceptanceF1StructuredTODOAcrossTurns`
+  - `TestE2ERealCodexContentBlocksMentionsImagesAndTODO`（`E2E_REAL_CODEX=1`）
+  - 对应验收：C1、C2、F1
+
+### ADR-0024：app-server 中途崩溃时的“当次 turn 内部重试一次”策略
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - 现状（ADR-0011）仅保证“后续请求可恢复”，当次 `session/prompt` 仍需客户端手动重试一次。
+  - 遗留问题 #1 要求减少人工重试，并确保 stdout 纯协议/turn 语义不回退。
+- 决策：
+  - 在 `session/prompt` turn 事件流中识别可恢复崩溃错误（read loop EOF/broken pipe 等）。
+  - 默认开启一次内部重试：`RETRY_TURN_ON_CRASH=true`（`--retry-turn-on-crash` 可关闭）。
+  - 重试前发送 `session/update` 状态 `backend_restarted_retrying`，并丢弃当次尝试的部分缓冲上下文。
+  - 内部重试仍失败时，返回 `turn_error` 并明确提示“可重试一次 prompt”。
+  - 幂等边界：仅在未进入不可安全重放阶段时自动重试；避免重复输出与副作用重放。
+- 备选方案：
+  - 方案A：继续保持“当次失败，客户端手动重试”。
+  - 方案B：对所有中断场景无条件自动重放当次 turn。
+  - 方案C：在幂等边界内自动重试一次，超出边界 fail-closed 并提示可重试。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：显著降低“中途崩溃即失败”的体验成本；保持安全边界，避免重复文本或副作用重放。
+  - Cons：未覆盖所有中断位置（例如已进入不可安全重放阶段时仍需用户重试）。
+- 影响范围（文件/模块）：
+  - `internal/acp/server.go`
+  - `internal/bridge/session_state.go`
+  - `internal/config/config.go`
+  - `cmd/codex-acp-go/main.go`
+  - `testdata/fake_codex_app_server/main.go`
+  - `test/integration/e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EAcceptanceB1AppServerCrashDuringTurnAutoRetry`
+  - `TestE2EAcceptanceB1AppServerCrashDuringTurnRetryFailureHasHint`
+  - `go test ./...`
+  - 对应验收：B1（并回归 A1、A4、A5）
+
+### ADR-0025：`/logout` 恢复指引与 app-server auth 清理兼容策略
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - 遗留问题 #2：`/logout` 仅清理本地认证态，用户不知道“下一步怎么恢复”。
+  - 不同认证来源（API key / subscription）需要不同恢复动作。
+- 决策：
+  - `/logout` 在 `session/update` 中输出按 auth 模式区分的可复制恢复命令。
+  - 无认证错误返回结构化提示：`hint` + `nextStepCommand`，便于客户端直接展示/复制。
+  - app-server auth 清理采用兼容顺序：优先 `account/logout`，若方法不存在则回退 `auth/logout`。
+- 备选方案：
+  - 方案A：保持仅状态提示，不提供可执行指令。
+  - 方案B：实现同进程 re-auth RPC 后再补 UX。
+  - 方案C：先交付明确恢复引导与兼容 logout 清理，re-auth RPC 后续补齐。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：`/logout` 后恢复路径清晰，降低“已登出但不可用”的支持成本。
+  - Cons：当前仍需重启 adapter；尚无同进程 re-auth。
+- 影响范围（文件/模块）：
+  - `internal/acp/server.go`
+  - `internal/appserver/client.go`
+  - `internal/appserver/types.go`
+  - `testdata/fake_codex_app_server/main.go`
+  - `test/integration/e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EAcceptanceG6LogoutRequiresReauth`
+  - `TestE2EAcceptanceG6LogoutGuidanceWithAPIKeysAndRecoveryAfterRestart`
+  - `TestE2EAcceptanceI1ToI3AuthMethods`
+  - `go test ./...`
+  - 对应验收：G6、I1、I2、I3
+
+### ADR-0026：go module 使用 GitHub canonical 路径
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - 仓库已固定托管在 `https://github.com/beyond5959/codex-acp`。
+  - `go.mod` 若使用短路径（`module codex-acp`），外部通过仓库地址安装时会出现模块路径不匹配。
+- 决策：
+  - 将 module 路径统一为 `github.com/beyond5959/codex-acp`。
+  - 所有仓库内 Go 导入路径统一使用该 canonical 前缀，避免后续新增代码继续使用短路径。
+- 备选方案：
+  - 方案A：保留短 module 路径，仅在本仓库内构建。
+  - 方案B：使用与仓库地址一致的 canonical module 路径。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：`go get`/`go install` 与仓库地址一致，减少外部集成失败。
+  - Cons：fork 或迁移仓库地址时需同步更新 module 与导入路径。
+- 影响范围（文件/模块）：
+  - `go.mod`
+  - `cmd/codex-acp-go/main.go`
+  - `internal/acp/server.go`
+  - `testdata/fake_codex_app_server/main.go`
+- 验证方式（测试/验收项）：
+  - `go test ./...`
+
+### ADR-0027：协议形态兼容策略（prompt 多形态 + session/update 标准 envelope + app-server v2 嵌套返回）
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - 不同 ACP 客户端对 `session/prompt` 的请求形态存在差异：有的使用 `prompt: string`，有的使用 `prompt: ContentBlock[]`。
+  - 部分客户端的聊天 UI 仅消费标准 `session/update.params.update.sessionUpdate` 结构；仅发送扁平 `type/delta` 时会出现“traffic 有内容但 UI 不渲染”。
+  - 新版 codex app-server 返回体与通知中，`threadId/turnId/stopReason` 有向 `thread.id/turn.id/turn.status` 嵌套结构迁移的趋势。
+- 决策：
+  - `session/prompt` 统一解码入口接受：`prompt: string | ContentBlock | ContentBlock[]`。
+  - `session/update` 采用“超集输出”：
+    - 保留既有扁平字段（兼容现有测试与客户端）
+    - 同时填充标准 `update.sessionUpdate` 结构：
+      - `message` / `tool_call_update` 走语义映射
+      - 其它低频更新回退 `agent_thought_chunk`，保证严格客户端可反序列化
+  - app-server client 在关键路径做双形态兼容：
+    - `thread/start`：`threadId` 或 `thread.id`
+    - `turn/start/review/start/thread/compact/start`：`turnId` 或 `turn.id`
+    - `turn/completed`：`stopReason` 或 `turn.status`
+- 备选方案：
+  - 方案A：只支持一种 ACP 请求/更新形态，要求客户端适配。
+  - 方案B：改成全量 schema 生成并一次性替换所有手写类型。
+  - 方案C：在关键链路先做双形态容错与超集输出，再逐步收敛到 schema 主导。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：快速恢复跨客户端可用性；避免因为单字段漂移导致会话不可用；对现有行为回归影响最小。
+  - Cons：过渡期需要同时维护扁平字段和标准 envelope；低频更新目前仍走通用回退类型，语义粒度不足。
+- 影响范围（文件/模块）：
+  - `internal/acp/server.go`
+  - `internal/appserver/client.go`
+  - `internal/appserver/types.go`
+  - `test/integration/e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EPromptArrayContentBlocksAccepted`
+  - `TestE2EMessageUpdateIncludesACPUpdateEnvelope`
+  - `TestE2EAcceptanceA1ToA5AndB1`
+  - `go test ./...`
+
+### ADR-0028：`initialize` 标准字段对齐（protocolVersion + 标准能力树）并保留 legacy 兼容
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - Zed 基于 ACP 官方类型反序列化 `initialize` 响应，`protocolVersion` 为必填字段。
+  - 现有实现只返回 legacy capabilities（`sessions/images/toolCalls/...`），缺少标准字段，导致严格客户端连接阶段反序列化失败。
+- 决策：
+  - `initialize` 响应补齐 ACP 标准字段：
+    - `protocolVersion=1`
+    - `agentCapabilities.promptCapabilities/mcpCapabilities/sessionCapabilities`
+    - `agentInfo(name/version/title)`
+  - 同时保留 legacy capabilities 字段，避免破坏既有 ACP 客户端行为。
+- 备选方案：
+  - 方案A：仅输出标准字段，去掉 legacy 字段。
+  - 方案B：仅修补 `protocolVersion`，其余保持不变。
+  - 方案C：输出标准字段并保留 legacy 字段（超集兼容）。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：修复严格 ACP 客户端初始化失败；对已有客户端兼容风险最低。
+  - Cons：初始化 payload 暂时存在标准+legacy 并存的冗余。
+- 影响范围（文件/模块）：
+  - `internal/acp/types.go`
+  - `internal/acp/server.go`
+  - `test/integration/e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EInitializeIncludesACPStandardFields`
+  - `TestE2EAcceptanceA1ToA5AndB1`
+  - `go test ./...`

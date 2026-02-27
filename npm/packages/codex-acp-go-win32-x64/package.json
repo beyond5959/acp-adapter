@@ -1,0 +1,18 @@
+{
+  "name": "@beyond5959/codex-acp-go-win32-x64",
+  "version": "0.1.0",
+  "description": "win32 x64 binary for @beyond5959/codex-acp-go",
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "bin/codex-acp-go.exe"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "UNLICENSED"
+}
