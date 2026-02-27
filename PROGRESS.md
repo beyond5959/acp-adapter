@@ -110,6 +110,10 @@
    - `/logout` 输出按认证方式区分的“可复制粘贴下一步指令”（API key / subscription）
    - 无认证错误增加 `nextStepCommand` 与更清晰的恢复 hint
    - app-server 侧 auth 清理支持 `account/logout`（优先）并兼容回退 `auth/logout`
+8. 补齐 README（面向用户）：
+   - 重写根目录 `README.md` 为精简使用版：仅保留 What/Features/Quickstart/Usage tips
+   - 明确 ACP stdio 约束（newline JSON-RPC、stdout 仅协议、stderr 日志）与下游 Codex App Server 链路
+   - 保留最小 Zed external agent 配置模板与实际生效的环境变量名
 
 ## 影响范围是什么
 1. `internal/acp`：slash 路由矩阵、inline MCP command 执行、auth gate、profile 解析与运行参数透传。
@@ -120,6 +124,7 @@
 6. `scripts`/`Makefile`：新增 `scripts/j1_stress.sh` 与 `make stress-j1`。
 7. `internal/bridge`：新增 active turn 替换能力，支持内部重试后把 cancel 目标切换到新 turnId。
 8. `internal/appserver`：logout 方法改为 `account/logout -> auth/logout` 兼容回退。
+9. 文档：新增并精简根目录 `README.md`（面向终端用户使用说明）。
 
 ## 如何验证
 1. 执行：
