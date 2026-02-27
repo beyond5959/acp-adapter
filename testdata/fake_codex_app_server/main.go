@@ -33,6 +33,8 @@ type fakeServer struct {
 	receivedInitialized bool
 	crashOnThreadStart  bool
 	crashOnceFile       string
+	crashDuringTurn     bool
+	crashTurnOnceFile   string
 }
 
 func main() {
@@ -43,6 +45,8 @@ func main() {
 		threadOpts:         make(map[string]appserver.RunOptions),
 		crashOnThreadStart: os.Getenv("FAKE_APP_SERVER_CRASH_ON_THREAD_START") == "1",
 		crashOnceFile:      os.Getenv("FAKE_APP_SERVER_CRASH_ON_THREAD_START_ONCE_FILE"),
+		crashDuringTurn:    os.Getenv("FAKE_APP_SERVER_CRASH_DURING_TURN") == "1",
+		crashTurnOnceFile:  os.Getenv("FAKE_APP_SERVER_CRASH_DURING_TURN_ONCE_FILE"),
 	}
 
 	if err := server.serve(); err != nil && err != io.EOF {
@@ -361,6 +365,9 @@ func (s *fakeServer) runTurn(
 
 	itemID := fmt.Sprintf("item-%s", turnID)
 	s.writeTurnStarted(threadID, turnID)
+	if s.shouldCrashDuringTurn() {
+		os.Exit(43)
+	}
 
 	select {
 	case <-control.cancel:
@@ -703,6 +710,24 @@ func (s *fakeServer) shouldCrashOnThreadStart() bool {
 	}
 
 	if err := os.WriteFile(s.crashOnceFile, []byte("crashed"), 0o644); err != nil {
+		return false
+	}
+	return true
+}
+
+func (s *fakeServer) shouldCrashDuringTurn() bool {
+	if s.crashDuringTurn {
+		return true
+	}
+	if s.crashTurnOnceFile == "" {
+		return false
+	}
+
+	if _, err := os.Stat(s.crashTurnOnceFile); err == nil {
+		return false
+	}
+
+	if err := os.WriteFile(s.crashTurnOnceFile, []byte("crashed"), 0o644); err != nil {
 		return false
 	}
 	return true

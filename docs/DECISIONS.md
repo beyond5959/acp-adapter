@@ -27,6 +27,7 @@
 - ADR-0021：`--trace-json` 脱敏 JSONL 调试与 stdout 严格 JSON-RPC 校验
 - ADR-0022：真实 prompt 交互回归（多轮问答 smoke）
 - ADR-0023：C1/C2/F1 输入映射策略（mentions/images/todo + capability 降级）
+- ADR-0024：app-server 中途崩溃时的“当次 turn 内部重试一次”策略
 
 ---
 
@@ -413,3 +414,35 @@
   - `TestE2EAcceptanceF1StructuredTODOAcrossTurns`
   - `TestE2ERealCodexContentBlocksMentionsImagesAndTODO`（`E2E_REAL_CODEX=1`）
   - 对应验收：C1、C2、F1
+
+### ADR-0024：app-server 中途崩溃时的“当次 turn 内部重试一次”策略
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - 现状（ADR-0011）仅保证“后续请求可恢复”，当次 `session/prompt` 仍需客户端手动重试一次。
+  - 遗留问题 #1 要求减少人工重试，并确保 stdout 纯协议/turn 语义不回退。
+- 决策：
+  - 在 `session/prompt` turn 事件流中识别可恢复崩溃错误（read loop EOF/broken pipe 等）。
+  - 默认开启一次内部重试：`RETRY_TURN_ON_CRASH=true`（`--retry-turn-on-crash` 可关闭）。
+  - 重试前发送 `session/update` 状态 `backend_restarted_retrying`，并丢弃当次尝试的部分缓冲上下文。
+  - 内部重试仍失败时，返回 `turn_error` 并明确提示“可重试一次 prompt”。
+  - 幂等边界：仅在未进入不可安全重放阶段时自动重试；避免重复输出与副作用重放。
+- 备选方案：
+  - 方案A：继续保持“当次失败，客户端手动重试”。
+  - 方案B：对所有中断场景无条件自动重放当次 turn。
+  - 方案C：在幂等边界内自动重试一次，超出边界 fail-closed 并提示可重试。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：显著降低“中途崩溃即失败”的体验成本；保持安全边界，避免重复文本或副作用重放。
+  - Cons：未覆盖所有中断位置（例如已进入不可安全重放阶段时仍需用户重试）。
+- 影响范围（文件/模块）：
+  - `internal/acp/server.go`
+  - `internal/bridge/session_state.go`
+  - `internal/config/config.go`
+  - `cmd/codex-acp-go/main.go`
+  - `testdata/fake_codex_app_server/main.go`
+  - `test/integration/e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EAcceptanceB1AppServerCrashDuringTurnAutoRetry`
+  - `TestE2EAcceptanceB1AppServerCrashDuringTurnRetryFailureHasHint`
+  - `go test ./...`
+  - 对应验收：B1（并回归 A1、A4、A5）

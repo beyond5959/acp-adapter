@@ -539,6 +539,134 @@ func TestE2EAcceptanceB1AppServerCrashReturnsClearError(t *testing.T) {
 	h.assertStdoutPureJSONRPC()
 }
 
+func TestE2EAcceptanceB1AppServerCrashDuringTurnAutoRetry(t *testing.T) {
+	crashMarker := filepath.Join(t.TempDir(), "crash-turn-once.marker")
+	h := startAdapter(t, "FAKE_APP_SERVER_CRASH_DURING_TURN_ONCE_FILE="+crashMarker)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "recover current prompt after backend crash",
+	})
+
+	gotPromptResp := false
+	sawRetrying := false
+	sawTurnError := false
+	doneCount := 0
+	deadline := time.Now().Add(2 * responseTimeout)
+	for !gotPromptResp {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for auto-retry prompt completion")
+		}
+		msg := h.nextMessage(time.Until(deadline))
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.Status == "backend_restarted_retrying" {
+				sawRetrying = true
+			}
+			if update.Status == "turn_error" {
+				sawTurnError = true
+			}
+			if update.Type == "message" && strings.Contains(update.Delta, "done") {
+				doneCount++
+			}
+			continue
+		}
+		if messageID(msg) != "3" {
+			continue
+		}
+		var result struct {
+			StopReason string `json:"stopReason"`
+		}
+		unmarshalResult(t, msg, &result)
+		if result.StopReason != "end_turn" {
+			t.Fatalf("auto-retry prompt expected stopReason=end_turn, got %q", result.StopReason)
+		}
+		gotPromptResp = true
+	}
+
+	if !sawRetrying {
+		t.Fatalf("auto-retry flow expected backend_restarted_retrying status update")
+	}
+	if sawTurnError {
+		t.Fatalf("auto-retry success flow should not emit turn_error status")
+	}
+	if doneCount != 1 {
+		t.Fatalf("auto-retry flow should emit terminal output exactly once, got %d", doneCount)
+	}
+
+	h.assertStdoutPureJSONRPC()
+}
+
+func TestE2EAcceptanceB1AppServerCrashDuringTurnRetryFailureHasHint(t *testing.T) {
+	h := startAdapter(t, "FAKE_APP_SERVER_CRASH_DURING_TURN=1")
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "this prompt should still fail after one internal retry",
+	})
+
+	gotPromptResp := false
+	sawRetrying := false
+	turnErrorMessage := ""
+	deadline := time.Now().Add(2 * responseTimeout)
+	for !gotPromptResp {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for retry-failure prompt completion")
+		}
+		msg := h.nextMessage(time.Until(deadline))
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.Status == "backend_restarted_retrying" {
+				sawRetrying = true
+			}
+			if update.Status == "turn_error" {
+				turnErrorMessage = update.Message
+			}
+			continue
+		}
+		if messageID(msg) != "3" {
+			continue
+		}
+		var result struct {
+			StopReason string `json:"stopReason"`
+		}
+		unmarshalResult(t, msg, &result)
+		if result.StopReason != "error" {
+			t.Fatalf("retry-failure prompt expected stopReason=error, got %q", result.StopReason)
+		}
+		gotPromptResp = true
+	}
+
+	if !sawRetrying {
+		t.Fatalf("retry-failure flow expected backend_restarted_retrying status update")
+	}
+	if !strings.Contains(strings.ToLower(turnErrorMessage), "retry this prompt once") {
+		t.Fatalf("retry-failure flow expected clear retry hint, got %q", turnErrorMessage)
+	}
+
+	h.assertStdoutPureJSONRPC()
+}
+
 func TestE2ENotificationRoutingBySessionAndTurn(t *testing.T) {
 	h := startAdapter(t)
 

@@ -80,10 +80,11 @@ func main() {
 		bridge.NewStore(),
 		logger,
 		acp.ServerOptions{
-			PatchApplyMode:  cfg.PatchApplyMode,
-			Profiles:        profiles,
-			DefaultProfile:  cfg.DefaultProfile,
-			InitialAuthMode: cfg.InitialAuthMode,
+			PatchApplyMode:   cfg.PatchApplyMode,
+			RetryTurnOnCrash: cfg.RetryTurnOnCrash,
+			Profiles:         profiles,
+			DefaultProfile:   cfg.DefaultProfile,
+			InitialAuthMode:  cfg.InitialAuthMode,
 		},
 	)
 

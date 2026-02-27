@@ -158,10 +158,11 @@ type appClient interface {
 
 // ServerOptions configures optional ACP server behaviors.
 type ServerOptions struct {
-	PatchApplyMode  string
-	Profiles        map[string]ProfileConfig
-	DefaultProfile  string
-	InitialAuthMode string
+	PatchApplyMode   string
+	RetryTurnOnCrash bool
+	Profiles         map[string]ProfileConfig
+	DefaultProfile   string
+	InitialAuthMode  string
 }
 
 // Server handles ACP JSON-RPC requests over stdio.
@@ -407,37 +408,7 @@ func (s *Server) handleSessionPrompt(ctx context.Context, id json.RawMessage, pa
 	turnCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	var turnID string
-	var events <-chan appserver.TurnEvent
-	method := "turn/start"
-	switch command.kind {
-	case slashCommandReview:
-		method = "review/start"
-		turnID, events, err = s.app.ReviewStart(turnCtx, threadID, command.reviewInstructions, toRunOptions(resolvedOptions))
-	case slashCommandReviewBranch:
-		method = "review/start"
-		turnID, events, err = s.app.ReviewStart(
-			turnCtx,
-			threadID,
-			fmt.Sprintf("review branch %s", command.argOne),
-			toRunOptions(resolvedOptions),
-		)
-	case slashCommandReviewCommit:
-		method = "review/start"
-		turnID, events, err = s.app.ReviewStart(
-			turnCtx,
-			threadID,
-			fmt.Sprintf("review commit %s", command.argOne),
-			toRunOptions(resolvedOptions),
-		)
-	case slashCommandInit:
-		turnID, events, err = s.app.TurnStart(turnCtx, threadID, textTurnInput(command.turnInput), toRunOptions(resolvedOptions))
-	case slashCommandCompact:
-		method = "thread/compact/start"
-		turnID, events, err = s.app.CompactStart(turnCtx, threadID)
-	default:
-		turnID, events, err = s.app.TurnStart(turnCtx, threadID, preparedInput, toRunOptions(resolvedOptions))
-	}
+	method, turnID, events, err := s.startPromptTurn(turnCtx, threadID, command, preparedInput, resolvedOptions)
 	if err != nil {
 		s.writeInternalError(id, method+" failed", map[string]any{
 			"error":     err.Error(),
@@ -457,11 +428,18 @@ func (s *Server) handleSessionPrompt(ctx context.Context, id json.RawMessage, pa
 		})
 		return
 	}
-	defer s.sessions.EndTurn(params.SessionID, turnID)
+
+	activeTurnID := turnID
+	defer func() {
+		s.sessions.EndTurn(params.SessionID, activeTurnID)
+	}()
 
 	lifecycle := newTurnLifecycle(params.SessionID, turnID)
 	s.emitUpdates(lifecycle.startedUpdate())
-	s.emitUpdates(warningUpdates(params.SessionID, turnID, prepWarnings))
+	s.emitUpdates(warningUpdates(params.SessionID, lifecycle.turnID, prepWarnings))
+
+	retried := false
+	retrySafe := true
 
 	for {
 		select {
@@ -475,7 +453,100 @@ func (s *Server) handleSessionPrompt(ctx context.Context, id json.RawMessage, pa
 				s.writePromptResult(id, lifecycle.fallbackStopReason())
 				return
 			}
+			if event.Type == appserver.TurnEventTypeError {
+				if s.options.RetryTurnOnCrash && !retried && retrySafe && isRetryableTurnError(event.Message) {
+					retried = true
+					lifecycle.resetForRetry()
+					s.emitUpdates([]SessionUpdateParams{
+						{
+							SessionID: lifecycle.sessionID,
+							TurnID:    lifecycle.turnID,
+							Type:      "status",
+							Phase:     string(turnPhaseStreaming),
+							Status:    "backend_restarted_retrying",
+							Message:   "codex app-server exited mid-turn; backend restarted, retrying once",
+						},
+					})
+
+					_, retryTurnID, retryEvents, retryErr := s.startPromptTurn(
+						turnCtx,
+						threadID,
+						command,
+						preparedInput,
+						resolvedOptions,
+					)
+					if retryErr != nil && shouldRetryAfterSupervisorRestart(retryErr) {
+						_, retryTurnID, retryEvents, retryErr = s.startPromptTurn(
+							turnCtx,
+							threadID,
+							command,
+							preparedInput,
+							resolvedOptions,
+						)
+					}
+					if retryErr != nil {
+						lifecycle.phase = turnPhaseError
+						s.emitUpdates([]SessionUpdateParams{
+							{
+								SessionID: lifecycle.sessionID,
+								TurnID:    lifecycle.turnID,
+								Type:      "status",
+								Phase:     string(turnPhaseError),
+								Status:    "turn_error",
+								Message: fmt.Sprintf(
+									"backend restarted but internal retry failed: %v; please retry this prompt once",
+									retryErr,
+								),
+							},
+						})
+						s.clearTurnTodosOnFailure(params.SessionID, "error")
+						s.writePromptResult(id, "error")
+						return
+					}
+					if _, replaceErr := s.sessions.ReplaceTurn(params.SessionID, activeTurnID, retryTurnID, cancel); replaceErr != nil {
+						_ = s.app.TurnInterrupt(turnCtx, threadID, retryTurnID)
+						lifecycle.phase = turnPhaseError
+						s.emitUpdates([]SessionUpdateParams{
+							{
+								SessionID: lifecycle.sessionID,
+								TurnID:    lifecycle.turnID,
+								Type:      "status",
+								Phase:     string(turnPhaseError),
+								Status:    "turn_error",
+								Message: fmt.Sprintf(
+									"backend retry started but session state update failed: %v; please retry this prompt once",
+									replaceErr,
+								),
+							},
+						})
+						s.clearTurnTodosOnFailure(params.SessionID, "error")
+						s.writePromptResult(id, "error")
+						return
+					}
+
+					activeTurnID = retryTurnID
+					events = retryEvents
+					continue
+				}
+				if retried && isRetryableTurnError(event.Message) {
+					lifecycle.phase = turnPhaseError
+					s.emitUpdates([]SessionUpdateParams{
+						{
+							SessionID: lifecycle.sessionID,
+							TurnID:    lifecycle.turnID,
+							Type:      "status",
+							Phase:     string(turnPhaseError),
+							Status:    "turn_error",
+							Message:   "backend restarted but crashed again during retry; please retry this prompt once",
+						},
+					})
+					s.clearTurnTodosOnFailure(params.SessionID, "error")
+					s.writePromptResult(id, "error")
+					return
+				}
+			}
 			if event.Type == appserver.TurnEventTypeApprovalRequired {
+				retrySafe = false
 				updates, done, stopReason := s.handleApprovalEvent(turnCtx, lifecycle, event)
 				s.emitUpdates(updates)
 				if done {
@@ -483,6 +554,9 @@ func (s *Server) handleSessionPrompt(ctx context.Context, id json.RawMessage, pa
 					return
 				}
 				continue
+			}
+			if event.Type != appserver.TurnEventTypeStarted {
+				retrySafe = false
 			}
 
 			updates, done, stopReason := lifecycle.apply(event)
@@ -493,6 +567,61 @@ func (s *Server) handleSessionPrompt(ctx context.Context, id json.RawMessage, pa
 				return
 			}
 		}
+	}
+}
+
+func (s *Server) startPromptTurn(
+	ctx context.Context,
+	threadID string,
+	command slashCommand,
+	preparedInput []appserver.UserInput,
+	options runtimeOptions,
+) (string, string, <-chan appserver.TurnEvent, error) {
+	method := "turn/start"
+	switch command.kind {
+	case slashCommandReview:
+		turnID, events, err := s.app.ReviewStart(
+			ctx,
+			threadID,
+			command.reviewInstructions,
+			toRunOptions(options),
+		)
+		return "review/start", turnID, events, err
+	case slashCommandReviewBranch:
+		turnID, events, err := s.app.ReviewStart(
+			ctx,
+			threadID,
+			fmt.Sprintf("review branch %s", command.argOne),
+			toRunOptions(options),
+		)
+		return "review/start", turnID, events, err
+	case slashCommandReviewCommit:
+		turnID, events, err := s.app.ReviewStart(
+			ctx,
+			threadID,
+			fmt.Sprintf("review commit %s", command.argOne),
+			toRunOptions(options),
+		)
+		return "review/start", turnID, events, err
+	case slashCommandInit:
+		turnID, events, err := s.app.TurnStart(
+			ctx,
+			threadID,
+			textTurnInput(command.turnInput),
+			toRunOptions(options),
+		)
+		return method, turnID, events, err
+	case slashCommandCompact:
+		turnID, events, err := s.app.CompactStart(ctx, threadID)
+		return "thread/compact/start", turnID, events, err
+	default:
+		turnID, events, err := s.app.TurnStart(
+			ctx,
+			threadID,
+			preparedInput,
+			toRunOptions(options),
+		)
+		return method, turnID, events, err
 	}
 }
 
@@ -535,6 +664,35 @@ func (s *Server) handleSessionCancel(ctx context.Context, id json.RawMessage, pa
 	}
 
 	_ = s.codec.WriteResult(id, SessionCancelResult{Cancelled: true})
+}
+
+func isRetryableTurnError(message string) bool {
+	lower := strings.ToLower(strings.TrimSpace(message))
+	if lower == "" {
+		return false
+	}
+	tokens := []string{
+		"app-server read loop",
+		"broken pipe",
+		"connection reset",
+		"eof",
+		"client is closed",
+		"codex app-server unavailable",
+	}
+	for _, token := range tokens {
+		if strings.Contains(lower, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldRetryAfterSupervisorRestart(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "app-server restarted, retry request")
 }
 
 func (s *Server) handleApprovalEvent(
@@ -1868,6 +2026,11 @@ func (t *turnLifecycle) markCancelRequested() {
 	t.cancelRequested = true
 }
 
+func (t *turnLifecycle) resetForRetry() {
+	t.phase = turnPhaseStarted
+	t.messageBuffer.Reset()
+}
+
 func (t *turnLifecycle) startedUpdate() []SessionUpdateParams {
 	return []SessionUpdateParams{
 		{
@@ -1946,7 +2109,7 @@ func (t *turnLifecycle) apply(event appserver.TurnEvent) ([]SessionUpdateParams,
 		t.messageBuffer.WriteString(event.Delta)
 		update := SessionUpdateParams{
 			SessionID: t.sessionID,
-			TurnID:    event.TurnID,
+			TurnID:    t.turnID,
 			Type:      "message",
 			Phase:     string(t.phase),
 			ItemID:    event.ItemID,
@@ -1961,7 +2124,7 @@ func (t *turnLifecycle) apply(event appserver.TurnEvent) ([]SessionUpdateParams,
 		return []SessionUpdateParams{
 			{
 				SessionID: t.sessionID,
-				TurnID:    event.TurnID,
+				TurnID:    t.turnID,
 				Type:      "status",
 				Phase:     string(t.phase),
 				ItemID:    event.ItemID,
@@ -1974,7 +2137,7 @@ func (t *turnLifecycle) apply(event appserver.TurnEvent) ([]SessionUpdateParams,
 		return []SessionUpdateParams{
 			{
 				SessionID: t.sessionID,
-				TurnID:    event.TurnID,
+				TurnID:    t.turnID,
 				Type:      "status",
 				Phase:     string(t.phase),
 				ItemID:    event.ItemID,
@@ -1987,7 +2150,7 @@ func (t *turnLifecycle) apply(event appserver.TurnEvent) ([]SessionUpdateParams,
 		return []SessionUpdateParams{
 			{
 				SessionID: t.sessionID,
-				TurnID:    event.TurnID,
+				TurnID:    t.turnID,
 				Type:      "status",
 				Phase:     string(t.phase),
 				Status:    "review_mode_entered",
@@ -1998,7 +2161,7 @@ func (t *turnLifecycle) apply(event appserver.TurnEvent) ([]SessionUpdateParams,
 		return []SessionUpdateParams{
 			{
 				SessionID: t.sessionID,
-				TurnID:    event.TurnID,
+				TurnID:    t.turnID,
 				Type:      "status",
 				Phase:     string(t.phase),
 				Status:    "review_mode_exited",
@@ -2020,7 +2183,7 @@ func (t *turnLifecycle) apply(event appserver.TurnEvent) ([]SessionUpdateParams,
 		return []SessionUpdateParams{
 			{
 				SessionID: t.sessionID,
-				TurnID:    event.TurnID,
+				TurnID:    t.turnID,
 				Type:      "status",
 				Phase:     string(t.phase),
 				Status:    "turn_completed",

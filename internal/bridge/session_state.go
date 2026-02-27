@@ -84,6 +84,32 @@ func (s *Store) BeginTurn(sessionID, turnID string, cancel context.CancelFunc) (
 	return session.threadID, nil
 }
 
+// ReplaceTurn swaps the active turn id for one session during in-flight retries.
+func (s *Store) ReplaceTurn(
+	sessionID string,
+	oldTurnID string,
+	newTurnID string,
+	cancel context.CancelFunc,
+) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	session, ok := s.sessions[sessionID]
+	if !ok {
+		return "", ErrSessionNotFound
+	}
+	if session.active == nil {
+		return "", ErrActiveTurnExists
+	}
+	if session.active.turnID != oldTurnID {
+		return "", ErrActiveTurnExists
+	}
+
+	session.active.turnID = newTurnID
+	session.active.cancel = cancel
+	return session.threadID, nil
+}
+
 // EndTurn clears active turn marker if it matches the same turn id.
 func (s *Store) EndTurn(sessionID, turnID string) {
 	s.mu.Lock()

@@ -34,6 +34,7 @@ type Config struct {
 	TraceJSONFile    string
 	LogLevel         string
 	PatchApplyMode   string
+	RetryTurnOnCrash bool
 	Profiles         map[string]ProfileConfig
 	DefaultProfile   string
 	InitialAuthMode  string
@@ -50,6 +51,7 @@ func Parse() Config {
 	defaultLogLevel := firstNonEmpty(os.Getenv("LOG_LEVEL"), "info")
 	defaultPatchApplyMode := firstNonEmpty(os.Getenv("PATCH_APPLY_MODE"), "appserver")
 	defaultTraceFile := firstNonEmpty(os.Getenv("TRACE_JSON_FILE"), "trace-jsonl.log")
+	defaultRetryTurnOnCrash := parseBoolWithDefault(os.Getenv("RETRY_TURN_ON_CRASH"), true)
 	defaultProfilesFile := strings.TrimSpace(os.Getenv("CODEX_ACP_PROFILES_FILE"))
 	defaultProfilesJSON := strings.TrimSpace(os.Getenv("CODEX_ACP_PROFILES_JSON"))
 	defaultProfile := strings.TrimSpace(os.Getenv("CODEX_ACP_DEFAULT_PROFILE"))
@@ -68,6 +70,12 @@ func Parse() Config {
 		"patch-apply-mode",
 		defaultPatchApplyMode,
 		"patch apply mode: appserver|acp_fs",
+	)
+	flag.BoolVar(
+		&cfg.RetryTurnOnCrash,
+		"retry-turn-on-crash",
+		defaultRetryTurnOnCrash,
+		"retry current turn once after app-server crash (default true)",
 	)
 	flag.StringVar(&profilesFile, "profiles-file", defaultProfilesFile, "profiles config file (JSON)")
 	flag.StringVar(&profilesJSON, "profiles-json", defaultProfilesJSON, "profiles config JSON string")
@@ -189,5 +197,20 @@ func subscriptionEnabled(raw string) bool {
 		return false
 	default:
 		return true
+	}
+}
+
+func parseBoolWithDefault(raw string, fallback bool) bool {
+	value := strings.TrimSpace(strings.ToLower(raw))
+	if value == "" {
+		return fallback
+	}
+	switch value {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
 	}
 }

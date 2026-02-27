@@ -56,16 +56,20 @@
   - 在 PR4 评估把超时时间暴露为可配置项，并补充更友好的 timeout 提示。
 
 ## KI-0003：App Server 子进程崩溃/退出后的恢复策略
-- 现象：app-server 异常退出时，进行中的 turn 会以错误结束。
+- 现象：
+  - app-server 异常退出时，适配器会自动重启并尝试“当次 turn 内部重试一次”（默认开启）。
+  - 若内部重试仍失败，turn 以 `turn_error` 结束并提示客户端“可重试一次 prompt”。
 - 影响：
-  - 当次请求会失败（返回可读错误）。
-  - 后续请求可在 supervisor 重建后恢复。
+  - 常见“中途崩溃”场景不再必须由客户端手动重试。
+  - 在不可安全重放边界（已发出不可回放内容）仍会 fail-closed，避免重复输出/副作用。
 - 复现：
-  - 设置 `FAKE_APP_SERVER_CRASH_ON_THREAD_START_ONCE_FILE` 并触发 `session/new`。
+  - 成功恢复路径：设置 `FAKE_APP_SERVER_CRASH_DURING_TURN_ONCE_FILE` 并触发 `session/prompt`。
+  - 重试失败路径：设置 `FAKE_APP_SERVER_CRASH_DURING_TURN=1` 并触发 `session/prompt`。
 - Workaround：
-  - 客户端在收到 `thread/start` 或 `turn/start` 失败后重试一次请求。
+  - 默认无需额外操作；若收到 `turn_error` 且消息含 retry hint，客户端可重试一次 `session/prompt`。
+  - 可通过 `RETRY_TURN_ON_CRASH=0` 或 `--retry-turn-on-crash=false` 关闭内部重试。
 - 后续计划：
-  - 在 PR4/PR5 评估“自动重放当次请求”的安全边界与幂等性要求。
+  - 评估“已发出部分输出后的安全重放”策略（可选缓冲提交），进一步缩小人工重试窗口。
 
 ## KI-0009：真实 App Server 与 fake server 事件形态可能不完全一致
 - 现象：当前 e2e 主要依赖 fake app-server，事件字段形态由测试替身控制。

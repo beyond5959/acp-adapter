@@ -102,6 +102,10 @@
 5. 补充 J1 压力回归：
    - 新增 `TestE2EAcceptanceJ1Stress100Turns`（`RUN_STRESS_J1=1` 启用）
    - 新增 `scripts/j1_stress.sh` 与 `make stress-j1`
+6. 改进崩溃恢复（遗留问题 #1）：
+   - `session/prompt` 在 turn 流中检测到 app-server 崩溃时，默认自动重启后“同次请求内部重试一次”
+   - 增加开关 `RETRY_TURN_ON_CRASH` / `--retry-turn-on-crash`（默认开启）
+   - 重试失败时返回明确 `turn_error` 并附“可重试一次 prompt”提示
 
 ## 影响范围是什么
 1. `internal/acp`：slash 路由矩阵、inline MCP command 执行、auth gate、profile 解析与运行参数透传。
@@ -110,6 +114,7 @@
 4. `testdata/fake_codex_app_server`：新增 compact/mcp/oauth/logout 伪实现与 runtime options 回显（profile probe）。
 5. `test/integration`：新增 G2-G6、H1、I1-I3、MCP 覆盖与 J1 压力测试入口。
 6. `scripts`/`Makefile`：新增 `scripts/j1_stress.sh` 与 `make stress-j1`。
+7. `internal/bridge`：新增 active turn 替换能力，支持内部重试后把 cancel 目标切换到新 turnId。
 
 ## 如何验证
 1. 执行：
@@ -120,6 +125,8 @@
    - `test/integration` 通过，包含：
      - `TestE2EAcceptanceA1ToA5AndB1`
      - `TestE2EAcceptanceB1AppServerCrashReturnsClearError`
+     - `TestE2EAcceptanceB1AppServerCrashDuringTurnAutoRetry`
+     - `TestE2EAcceptanceB1AppServerCrashDuringTurnRetryFailureHasHint`
      - `TestE2ENotificationRoutingBySessionAndTurn`
      - `TestE2EAcceptanceC1MentionsResourcePreserved`
      - `TestE2EEdgeC1MentionWithoutFSCapabilityDegrades`
@@ -151,7 +158,7 @@
    - 预期：100 turns（含 approve/deny/cancel）完成，无崩溃、stdout 仍纯 JSON-RPC
 
 ## 遗留问题是什么
-1. 当前崩溃恢复策略对“当次请求”返回可读失败，需要客户端重试一次（已在 KNOWN_ISSUES 记录）。
+1. 当前“当次请求自动重试”仅在未发出不可重放内容时启用（幂等边界）；若已进入不可安全重放阶段，仍会 fail-closed 并提示用户重试一次 prompt。
 2. `/logout` 当前仅清理适配器侧认证态，不含交互式重新登录入口（需外部重新配置/重启）。
 3. e2e 仍主要依赖 fake app-server，真实 codex app-server 的 mcp/auth/compact 行为仍需联调回归。
 
@@ -162,6 +169,7 @@
 1. 做真实 codex app-server 联调：重点覆盖 `/compact`、`mcpServer/*`、`auth/logout` 与 profile 参数映射。
 2. 在 CI 增加可选 `e2e-real` 作业（含 `make schema`）并固化环境前置检查。
 3. 评估 `/logout` 的进程内 re-auth RPC，消除重启恢复依赖。
+4. 评估“已发出部分输出后的安全重放”策略（例如可选缓冲提交），进一步缩小人工重试窗口。
 
 ## 变更摘要（每 PR 一条）
 ### 2026-02-26 — PR1 工程骨架 + 双 codec + 最小 e2e harness
@@ -285,6 +293,23 @@
     - `TestE2EEdgeC2InvalidImageBase64Rejected`
     - `TestE2EAcceptanceF1StructuredTODOAcrossTurns`
     - `TestE2ERealCodexContentBlocksMentionsImagesAndTODO`（`E2E_REAL_CODEX=1`）
+  - `go test ./...` 通过
+- D. 文档:
+  - 更新 `PROGRESS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`
+
+### 2026-02-27 — 崩溃恢复增强：当次 turn 自动重试一次（默认开启）
+- A. 范围与目标:
+  - 处理遗留问题 #1：减少 app-server 中途崩溃时“需要客户端手动重试”的场景
+  - 在不重复输出已发文本的前提下，对当前 `session/prompt` 做一次内部重试
+- B. 实现:
+  - `session/prompt` turn 流在检测到可恢复崩溃错误后，发出 `backend_restarted_retrying` 并重启后重试一次
+  - 新增 `RETRY_TURN_ON_CRASH` / `--retry-turn-on-crash`（默认 `true`）
+  - 新增 session active turn 替换逻辑，确保重试后 `session/cancel` 命中新 turn
+  - 重试仍失败时返回清晰 `turn_error`，包含“可重试一次 prompt”提示
+- C. 验证:
+  - 新增：
+    - `TestE2EAcceptanceB1AppServerCrashDuringTurnAutoRetry`
+    - `TestE2EAcceptanceB1AppServerCrashDuringTurnRetryFailureHasHint`
   - `go test ./...` 通过
 - D. 文档:
   - 更新 `PROGRESS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`
