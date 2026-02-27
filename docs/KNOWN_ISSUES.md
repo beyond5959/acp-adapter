@@ -24,8 +24,9 @@
 - KI-0018：mentions/images 输入有大小与能力门槛
 - KI-0019：TODO 结构化仅覆盖 markdown checklist 形态
 - KI-0020：go module 路径与仓库地址不一致会导致外部安装失败
-- KI-0021：`session/update` 的标准 `update.sessionUpdate` 映射目前仅覆盖高频类型
+- KI-0021：`session/update` 的标准 `update.sessionUpdate` 在低频事件上仍是回退语义
 - KI-0022：并发请求下 `authenticate` 与后续请求存在时序依赖
+- KI-0023：旧二进制缺少 `initialize.protocolVersion`，严格 ACP 客户端会在连接阶段失败
 
 ---
 
@@ -225,18 +226,18 @@
 - 后续计划：
   - 仓库地址若变更（迁移/重命名），同一 PR 内同步更新 `go.mod` 和全部内部导入。
 
-## KI-0021：`session/update` 的标准 `update.sessionUpdate` 映射目前仅覆盖高频类型
+## KI-0021：`session/update` 的标准 `update.sessionUpdate` 在低频事件上仍是回退语义
 - 现象：
-  - 适配器已支持“扁平字段 + 标准 envelope”双输出，但当前标准 `update.sessionUpdate` 仅映射 `agent_message_chunk` 与 `tool_call_update`。
+  - 适配器已支持“扁平字段 + 标准 envelope”双输出，并保证每条 `session/update` 都带 `update.sessionUpdate`。
+  - 对非 message/tool 的低频更新，当前用 `agent_thought_chunk` 文本回退承载，尚未做细粒度类型映射。
 - 影响：
-  - 依赖标准 envelope 才渲染 UI 的客户端，在 plan/thought/模式切换等低频更新上，可能只显示部分信息或显示不一致。
+  - 严格 ACP 客户端可稳定反序列化，但在 plan/thought/模式切换等低频更新上可能出现“语义被弱化”的展示差异。
 - 复现：
-  - 使用仅消费 `params.update.sessionUpdate` 的 ACP client，观察非 message/tool 的 session/update 可视化结果。
+  - 使用仅消费 `params.update.sessionUpdate` 的 ACP client，观察非 message/tool 的 session/update 呈现为通用 thought chunk。
 - Workaround：
-  - 客户端同时消费扁平字段（`type/status/delta/message/...`）与标准 envelope。
-  - 对关键展示先依赖 `agent_message_chunk`（已覆盖）。
+  - 客户端同时消费扁平字段（`type/status/delta/message/...`）与标准 envelope，以保留更多语义。
 - 后续计划：
-  - 扩展标准映射覆盖：plan、thought、mode/model update、permission/tool 生命周期等。
+  - 扩展标准映射覆盖：plan、thought、mode/model update、permission/tool 生命周期等，减少通用回退路径。
 
 ## KI-0022：并发请求下 `authenticate` 与后续请求存在时序依赖
 - 现象：
@@ -252,3 +253,17 @@
   - 若出现该错误，重试一次 `session/new` 通常可恢复。
 - 后续计划：
   - 评估在 adapter 侧为“认证切换窗口”增加短暂排队或重试，降低时序敏感度。
+
+## KI-0023：旧二进制缺少 `initialize.protocolVersion`，严格 ACP 客户端会在连接阶段失败
+- 现象：
+  - 使用旧版 `codex-acp-go` 二进制连接严格 ACP 客户端（如 Zed）时，可能在连接阶段报错：`failed to deserialize response`。
+- 影响：
+  - 初始化握手失败，无法进入认证和会话创建流程。
+- 复现：
+  - 使用未包含本次修复的旧二进制启动 agent，并让客户端发 `initialize(protocolVersion=1)`。
+- Workaround：
+  - 重新构建并替换二进制：
+    - `go build -o ./bin/codex-acp-go ./cmd/codex-acp-go`
+  - 重启 ACP 客户端后重连。
+- 后续计划：
+  - 保持 `TestE2EInitializeIncludesACPStandardFields` 回归，防止该字段再次回退。

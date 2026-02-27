@@ -315,12 +315,31 @@ func (s *Server) handleInitialize(id json.RawMessage, paramsRaw json.RawMessage)
 	}
 
 	result := InitializeResult{
+		ProtocolVersion: 1,
 		AgentCapabilities: AgentCapabilities{
+			LoadSession: false,
+			PromptCapabilities: PromptCapabilities{
+				Image:           true,
+				Audio:           false,
+				EmbeddedContext: true,
+			},
+			MCPCapabilities: MCPCapabilities{
+				HTTP: false,
+				SSE:  false,
+			},
+			SessionCapabilities: SessionCapabilities{},
+
+			// Legacy capability fields for older ACP clients.
 			Sessions:      true,
 			Images:        true,
 			ToolCalls:     true,
 			SlashCommands: true,
 			Permissions:   true,
+		},
+		AgentInfo: &ImplementationInfo{
+			Name:    "codex-acp-go",
+			Version: "dev",
+			Title:   "Codex ACP Go",
 		},
 		AuthMethods:      authMethods,
 		ActiveAuthMethod: s.currentAuthMode(),
@@ -964,7 +983,26 @@ func mapACPUpdateForClient(update SessionUpdateParams) map[string]any {
 		}
 		return mapped
 	default:
-		return nil
+		text := strings.TrimSpace(update.Delta)
+		if text == "" {
+			text = strings.TrimSpace(update.Message)
+		}
+		if text == "" {
+			text = strings.TrimSpace(update.Status)
+		}
+		if text == "" {
+			text = strings.TrimSpace(update.Type)
+		}
+		if text == "" {
+			text = "status"
+		}
+		return map[string]any{
+			"sessionUpdate": "agent_thought_chunk",
+			"content": map[string]any{
+				"type": "text",
+				"text": text,
+			},
+		}
 	}
 }
 

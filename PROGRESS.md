@@ -122,6 +122,10 @@
    - `session/prompt` 新增对 `prompt` 为 `string | ContentBlock | ContentBlock[]` 的统一解码
    - `session/update` 保留现有扁平字段，同时补充标准 `update.sessionUpdate` 结构（如 `agent_message_chunk`）
    - 适配下游新版 app-server 响应结构：`thread.id` / `turn.id` / `turn.status`
+11. 修复 ACP `initialize` 标准字段缺失（Zed 兼容）：
+   - 增加 `protocolVersion=1`
+   - 增加标准能力树 `agentCapabilities.promptCapabilities/mcpCapabilities/sessionCapabilities`
+   - 增加 `agentInfo(name/version/title)`，并保留 legacy capabilities 字段兼容旧客户端
 
 ## 影响范围是什么
 1. `internal/acp`：slash 路由矩阵、inline MCP command 执行、auth gate、profile 解析与运行参数透传。
@@ -137,6 +141,8 @@
 11. `test/integration`：新增 `TestE2EAuthMethodsAndAuthenticateFlow`，覆盖 authMethods 字段与 `authenticate` 基本链路。
 12. `internal/acp`：`session/prompt` 支持 `prompt` 数组/对象输入；`session/update` 增加标准 `update.sessionUpdate` 映射。
 13. `internal/appserver`：兼容新版 `thread/start`、`turn/start` 与 `turn/completed` 返回结构。
+14. `internal/acp`：`initialize` 输出补齐 ACP 标准字段（`protocolVersion`、标准 capability 结构、`agentInfo`）。
+15. `test/integration`：新增 `TestE2EInitializeIncludesACPStandardFields`，防止 `initialize` 协议字段回退。
 
 ## 如何验证
 1. 执行：
@@ -171,6 +177,7 @@
      - `TestE2EAuthRequiredWithoutConfiguredMethod`
      - `TestE2EPromptArrayContentBlocksAccepted`
      - `TestE2EMessageUpdateIncludesACPUpdateEnvelope`
+     - `TestE2EInitializeIncludesACPStandardFields`
      - `TestE2ERealCodexAppServer_BasicPromptAndCancel`（`E2E_REAL_CODEX=1`）
      - `TestE2ERealCodexAppServer_AuthMissingReturnsClearError`（`E2E_REAL_CODEX=1`）
      - `TestE2ERealCodexAppServer_AuthInjectedKeyRecovers`（需注入 key，`E2E_REAL_CODEX=1`）
@@ -190,7 +197,7 @@
 1. 当前“当次请求自动重试”仅在未发出不可重放内容时启用（幂等边界）；若已进入不可安全重放阶段，仍会 fail-closed 并提示用户重试一次 prompt。
 2. `/logout` 已提供明确可复制恢复指引并清理 app-server/client 认证态；但仍缺少“同进程无重启 re-auth RPC”。
 3. 已补充真实 codex app-server 的 mcp/auth/compact 基本存在性回归；但复杂行为（多版本兼容、MCP 工具结果语义、compact 实际压缩质量）仍需持续联调。
-4. `session/update` 目前已补齐 `agent_message_chunk` 与 `tool_call_update` 的标准 `update.sessionUpdate` 映射；其余更新类型仍以扁平字段为主，跨客户端 UI 表现可能不一致。
+4. `session/update` 现已对所有更新携带标准 `update.sessionUpdate`（非 message/tool 更新回退为 `agent_thought_chunk` 文本），但低频事件语义仍较粗粒度，跨客户端 UI 展示可能存在差异。
 
 ## 当前阻塞（Blockers）
 - 无
@@ -200,7 +207,7 @@
 2. 在 CI 增加可选 `e2e-real` 作业（含 `make schema`）并固化环境前置检查。
 3. 评估 `/logout` 的进程内 re-auth RPC，消除重启恢复依赖。
 4. 评估“已发出部分输出后的安全重放”策略（例如可选缓冲提交），进一步缩小人工重试窗口。
-5. 扩展 `session/update` 的标准 `update.sessionUpdate` 映射覆盖（plan/thought/tool 生命周期），提升跨 ACP 客户端渲染一致性。
+5. 细化 `session/update` 的标准 `update.sessionUpdate` 语义映射（plan/thought/tool 生命周期），减少当前回退 `agent_thought_chunk` 带来的信息折损。
 
 ## 变更摘要（每 PR 一条）
 ### 2026-02-26 — PR1 工程骨架 + 双 codec + 最小 e2e harness
@@ -402,7 +409,7 @@
   - `session/prompt` 参数解码升级为 `prompt: string | ContentBlock | ContentBlock[]` 统一入口
   - `session/update` 输出升级为超集：
     - 保留既有扁平字段（`type/delta/status/...`）
-    - 同步输出标准 `update.sessionUpdate` 结构（当前覆盖 `agent_message_chunk`、`tool_call_update`）
+    - 同步输出标准 `update.sessionUpdate` 结构（当前 message/tool 为语义映射，其余更新回退 `agent_thought_chunk` 保证严格客户端可反序列化）
   - app-server client 同时兼容旧/新返回形态：
     - `thread/start`: `threadId` 或 `thread.id`
     - `turn/start/review/start/thread/compact/start`: `turnId` 或 `turn.id`

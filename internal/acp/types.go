@@ -20,19 +20,61 @@ type RPCError struct {
 }
 
 // InitializeResult is ACP initialize response payload.
+//
+// It includes ACP standard fields and keeps legacy compatibility fields
+// consumed by existing ACP clients.
 type InitializeResult struct {
-	AgentCapabilities AgentCapabilities `json:"agentCapabilities"`
-	AuthMethods       []AuthMethod      `json:"authMethods,omitempty"`
-	ActiveAuthMethod  string            `json:"activeAuthMethod,omitempty"`
+	ProtocolVersion   int                 `json:"protocolVersion"`
+	AgentCapabilities AgentCapabilities   `json:"agentCapabilities"`
+	AuthMethods       []AuthMethod        `json:"authMethods,omitempty"`
+	AgentInfo         *ImplementationInfo `json:"agentInfo,omitempty"`
+	ActiveAuthMethod  string              `json:"activeAuthMethod,omitempty"`
 }
 
-// AgentCapabilities describes top-level ACP abilities.
+// ImplementationInfo identifies this ACP adapter for client UI/debugging.
+type ImplementationInfo struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Title   string `json:"title,omitempty"`
+}
+
+// AgentCapabilities describes ACP abilities.
+//
+// `loadSession/promptCapabilities/mcpCapabilities/sessionCapabilities` are
+// ACP standard fields. Legacy fields are kept for clients that still read
+// the pre-standard shape.
 type AgentCapabilities struct {
-	Sessions      bool `json:"sessions"`
-	Images        bool `json:"images"`
-	ToolCalls     bool `json:"toolCalls"`
-	SlashCommands bool `json:"slashCommands"`
-	Permissions   bool `json:"permissions"`
+	LoadSession         bool                `json:"loadSession,omitempty"`
+	PromptCapabilities  PromptCapabilities  `json:"promptCapabilities,omitempty"`
+	MCPCapabilities     MCPCapabilities     `json:"mcpCapabilities,omitempty"`
+	SessionCapabilities SessionCapabilities `json:"sessionCapabilities,omitempty"`
+
+	// Legacy capability fields (compatibility).
+	Sessions      bool `json:"sessions,omitempty"`
+	Images        bool `json:"images,omitempty"`
+	ToolCalls     bool `json:"toolCalls,omitempty"`
+	SlashCommands bool `json:"slashCommands,omitempty"`
+	Permissions   bool `json:"permissions,omitempty"`
+}
+
+// SessionCapabilities are ACP session-method capability switches.
+type SessionCapabilities struct {
+	List   any `json:"list,omitempty"`
+	Fork   any `json:"fork,omitempty"`
+	Resume any `json:"resume,omitempty"`
+}
+
+// PromptCapabilities declares prompt content support.
+type PromptCapabilities struct {
+	Image           bool `json:"image,omitempty"`
+	Audio           bool `json:"audio,omitempty"`
+	EmbeddedContext bool `json:"embeddedContext,omitempty"`
+}
+
+// MCPCapabilities declares supported MCP transports.
+type MCPCapabilities struct {
+	HTTP bool `json:"http,omitempty"`
+	SSE  bool `json:"sse,omitempty"`
 }
 
 // AuthMethod describes one supported auth path.

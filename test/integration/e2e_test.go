@@ -501,6 +501,39 @@ func TestE2EAcceptanceA1ToA5AndB1(t *testing.T) {
 	h.assertStdoutPureJSONRPC()
 }
 
+func TestE2EInitializeIncludesACPStandardFields(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("init-standard", "initialize", map[string]any{
+		"protocolVersion": 1,
+		"clientCapabilities": map[string]any{
+			"fs": map[string]any{
+				"readTextFile": true,
+			},
+		},
+	})
+	resp := h.waitResponse("init-standard", responseTimeout)
+	var initResult struct {
+		ProtocolVersion   int `json:"protocolVersion"`
+		AgentCapabilities struct {
+			PromptCapabilities struct {
+				Image           bool `json:"image"`
+				EmbeddedContext bool `json:"embeddedContext"`
+			} `json:"promptCapabilities"`
+		} `json:"agentCapabilities"`
+	}
+	unmarshalResult(t, resp, &initResult)
+	if initResult.ProtocolVersion != 1 {
+		t.Fatalf("initialize should return protocolVersion=1, got %d", initResult.ProtocolVersion)
+	}
+	if !initResult.AgentCapabilities.PromptCapabilities.Image {
+		t.Fatalf("initialize should advertise promptCapabilities.image=true")
+	}
+	if !initResult.AgentCapabilities.PromptCapabilities.EmbeddedContext {
+		t.Fatalf("initialize should advertise promptCapabilities.embeddedContext=true")
+	}
+}
+
 func TestE2EPromptArrayContentBlocksAccepted(t *testing.T) {
 	h := startAdapter(t)
 
@@ -577,23 +610,30 @@ func TestE2EMessageUpdateIncludesACPUpdateEnvelope(t *testing.T) {
 	})
 
 	sawMappedMessage := false
+	sawAnySessionUpdate := false
 	gotPromptResp := false
 	for !gotPromptResp {
 		msg := h.nextMessage(responseTimeout)
 		if msg.Method == "session/update" {
+			sawAnySessionUpdate = true
 			var raw map[string]any
 			if err := json.Unmarshal(msg.Params, &raw); err != nil {
 				t.Fatalf("decode raw session/update: %v", err)
 			}
 			updateObj, _ := raw["update"].(map[string]any)
-			if updateObj != nil {
-				if kind, _ := updateObj["sessionUpdate"].(string); kind == "agent_message_chunk" {
-					content, _ := updateObj["content"].(map[string]any)
-					if content != nil {
-						if ctype, _ := content["type"].(string); ctype == "text" {
-							if _, ok := content["text"].(string); ok {
-								sawMappedMessage = true
-							}
+			if updateObj == nil {
+				t.Fatalf("session/update must include params.update envelope for ACP compatibility")
+			}
+			kind, _ := updateObj["sessionUpdate"].(string)
+			if strings.TrimSpace(kind) == "" {
+				t.Fatalf("session/update.params.update.sessionUpdate should not be empty")
+			}
+			if kind == "agent_message_chunk" {
+				content, _ := updateObj["content"].(map[string]any)
+				if content != nil {
+					if ctype, _ := content["type"].(string); ctype == "text" {
+						if _, ok := content["text"].(string); ok {
+							sawMappedMessage = true
 						}
 					}
 				}
@@ -615,6 +655,9 @@ func TestE2EMessageUpdateIncludesACPUpdateEnvelope(t *testing.T) {
 
 	if !sawMappedMessage {
 		t.Fatalf("expected session/update to include update.sessionUpdate=agent_message_chunk")
+	}
+	if !sawAnySessionUpdate {
+		t.Fatalf("expected at least one session/update notification")
 	}
 }
 

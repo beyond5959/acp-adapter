@@ -31,6 +31,7 @@
 - ADR-0025：`/logout` 恢复指引与 app-server auth 清理兼容策略
 - ADR-0026：go module 使用 GitHub canonical 路径
 - ADR-0027：协议形态兼容策略（prompt 多形态 + session/update 标准 envelope + app-server v2 嵌套返回）
+- ADR-0028：`initialize` 标准字段对齐（protocolVersion + 标准能力树）并保留 legacy 兼容
 
 ---
 
@@ -514,7 +515,9 @@
   - `session/prompt` 统一解码入口接受：`prompt: string | ContentBlock | ContentBlock[]`。
   - `session/update` 采用“超集输出”：
     - 保留既有扁平字段（兼容现有测试与客户端）
-    - 同时填充标准 `update.sessionUpdate` 结构（当前覆盖 `agent_message_chunk`、`tool_call_update`）
+    - 同时填充标准 `update.sessionUpdate` 结构：
+      - `message` / `tool_call_update` 走语义映射
+      - 其它低频更新回退 `agent_thought_chunk`，保证严格客户端可反序列化
   - app-server client 在关键路径做双形态兼容：
     - `thread/start`：`threadId` 或 `thread.id`
     - `turn/start/review/start/thread/compact/start`：`turnId` 或 `turn.id`
@@ -525,7 +528,7 @@
   - 方案C：在关键链路先做双形态容错与超集输出，再逐步收敛到 schema 主导。（采用）
 - 取舍（Pros/Cons）：
   - Pros：快速恢复跨客户端可用性；避免因为单字段漂移导致会话不可用；对现有行为回归影响最小。
-  - Cons：过渡期需要同时维护扁平字段和标准 envelope；`update.sessionUpdate` 目前仅覆盖高频类型。
+  - Cons：过渡期需要同时维护扁平字段和标准 envelope；低频更新目前仍走通用回退类型，语义粒度不足。
 - 影响范围（文件/模块）：
   - `internal/acp/server.go`
   - `internal/appserver/client.go`
@@ -534,5 +537,33 @@
 - 验证方式（测试/验收项）：
   - `TestE2EPromptArrayContentBlocksAccepted`
   - `TestE2EMessageUpdateIncludesACPUpdateEnvelope`
+  - `TestE2EAcceptanceA1ToA5AndB1`
+  - `go test ./...`
+
+### ADR-0028：`initialize` 标准字段对齐（protocolVersion + 标准能力树）并保留 legacy 兼容
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - Zed 基于 ACP 官方类型反序列化 `initialize` 响应，`protocolVersion` 为必填字段。
+  - 现有实现只返回 legacy capabilities（`sessions/images/toolCalls/...`），缺少标准字段，导致严格客户端连接阶段反序列化失败。
+- 决策：
+  - `initialize` 响应补齐 ACP 标准字段：
+    - `protocolVersion=1`
+    - `agentCapabilities.promptCapabilities/mcpCapabilities/sessionCapabilities`
+    - `agentInfo(name/version/title)`
+  - 同时保留 legacy capabilities 字段，避免破坏既有 ACP 客户端行为。
+- 备选方案：
+  - 方案A：仅输出标准字段，去掉 legacy 字段。
+  - 方案B：仅修补 `protocolVersion`，其余保持不变。
+  - 方案C：输出标准字段并保留 legacy 字段（超集兼容）。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：修复严格 ACP 客户端初始化失败；对已有客户端兼容风险最低。
+  - Cons：初始化 payload 暂时存在标准+legacy 并存的冗余。
+- 影响范围（文件/模块）：
+  - `internal/acp/types.go`
+  - `internal/acp/server.go`
+  - `test/integration/e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EInitializeIncludesACPStandardFields`
   - `TestE2EAcceptanceA1ToA5AndB1`
   - `go test ./...`
