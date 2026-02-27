@@ -17,8 +17,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"codex-acp/internal/appserver"
-	"codex-acp/internal/bridge"
+	"github.com/beyond5959/codex-acp/internal/appserver"
+	"github.com/beyond5959/codex-acp/internal/bridge"
 )
 
 const (

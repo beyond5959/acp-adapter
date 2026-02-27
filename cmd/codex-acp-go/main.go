@@ -10,11 +10,11 @@ import (
 	"syscall"
 	"time"
 
-	"codex-acp/internal/acp"
-	"codex-acp/internal/appserver"
-	"codex-acp/internal/bridge"
-	"codex-acp/internal/config"
-	"codex-acp/internal/observability"
+	"github.com/beyond5959/codex-acp/internal/acp"
+	"github.com/beyond5959/codex-acp/internal/appserver"
+	"github.com/beyond5959/codex-acp/internal/bridge"
+	"github.com/beyond5959/codex-acp/internal/config"
+	"github.com/beyond5959/codex-acp/internal/observability"
 )
 
 func main() {

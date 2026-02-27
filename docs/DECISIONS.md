@@ -29,6 +29,7 @@
 - ADR-0023：C1/C2/F1 输入映射策略（mentions/images/todo + capability 降级）
 - ADR-0024：app-server 中途崩溃时的“当次 turn 内部重试一次”策略
 - ADR-0025：`/logout` 恢复指引与 app-server auth 清理兼容策略
+- ADR-0026：go module 使用 GitHub canonical 路径
 
 ---
 
@@ -317,7 +318,7 @@
   - 需要新增“本机真实 codex app-server”端到端验证，同时保留现有 fake harness 的可重复性。
   - 真实 e2e 运行前必须先生成并校验 schema，避免协议漂移导致误判。
 - 决策：
-  - 引入 `E2E_REAL_CODEX=1` 开关，新增 `TestE2ERealCodexInitializePromptAndCancel`。
+  - 引入 `E2E_REAL_CODEX=1` 开关，新增真实基线回归（当前用例名：`TestE2ERealCodexAppServer_BasicPromptAndCancel`）。
   - 真实模式下测试前执行 `make schema`（`generate-json-schema + schema-check + SHA256SUMS`）。
   - 旧 fake e2e 在真实模式下跳过，避免与真实后端行为差异导致噪声。
   - 若本机缺少可用 codex 认证，real e2e 用例给出 skip 原因，避免把环境问题误判为代码回归。
@@ -331,7 +332,7 @@
   - `test/integration/e2e_test.go`
   - `Makefile`
 - 验证方式（测试/验收项）：
-  - `E2E_REAL_CODEX=1 go test ./... -run TestE2E -count=1`
+  - `E2E_REAL_CODEX=1 go test ./... -run TestE2EReal -count=1`
   - 对应验收：A1、A2、A3、A4、A5（真实后端基线）
 
 ### ADR-0021：`--trace-json` 脱敏 JSONL 调试与 stdout 严格 JSON-RPC 校验
@@ -358,7 +359,7 @@
   - `cmd/codex-acp-go/main.go`
   - `test/integration/e2e_test.go`
 - 验证方式（测试/验收项）：
-  - `TestE2ERealCodexInitializePromptAndCancel`（trace 文件存在 + 脱敏断言）
+  - `TestE2ERealCodexAppServer_BasicPromptAndCancel`（trace 文件存在 + 脱敏断言）
   - `TestRPCReaderDetectsInvalidStdoutLine`
   - 对应验收：A1、J2
 
@@ -477,3 +478,26 @@
   - `TestE2EAcceptanceI1ToI3AuthMethods`
   - `go test ./...`
   - 对应验收：G6、I1、I2、I3
+
+### ADR-0026：go module 使用 GitHub canonical 路径
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - 仓库已固定托管在 `https://github.com/beyond5959/codex-acp`。
+  - `go.mod` 若使用短路径（`module codex-acp`），外部通过仓库地址安装时会出现模块路径不匹配。
+- 决策：
+  - 将 module 路径统一为 `github.com/beyond5959/codex-acp`。
+  - 所有仓库内 Go 导入路径统一使用该 canonical 前缀，避免后续新增代码继续使用短路径。
+- 备选方案：
+  - 方案A：保留短 module 路径，仅在本仓库内构建。
+  - 方案B：使用与仓库地址一致的 canonical module 路径。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：`go get`/`go install` 与仓库地址一致，减少外部集成失败。
+  - Cons：fork 或迁移仓库地址时需同步更新 module 与导入路径。
+- 影响范围（文件/模块）：
+  - `go.mod`
+  - `cmd/codex-acp-go/main.go`
+  - `internal/acp/server.go`
+  - `testdata/fake_codex_app_server/main.go`
+- 验证方式（测试/验收项）：
+  - `go test ./...`

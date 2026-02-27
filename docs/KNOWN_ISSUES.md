@@ -23,6 +23,7 @@
 - KI-0017：trace-json 脱敏规则为启发式，可能存在漏网字段
 - KI-0018：mentions/images 输入有大小与能力门槛
 - KI-0019：TODO 结构化仅覆盖 markdown checklist 形态
+- KI-0020：go module 路径与仓库地址不一致会导致外部安装失败
 
 ---
 
@@ -141,13 +142,16 @@
   - 在 CI 增加定时/夜间压力作业，独立于常规 PR 快速回归。
 
 ## KI-0015：MCP/compact/auth 方法名对真实 app-server 版本敏感
-- 现象：当前实现依赖 `thread/compact/start`、`mcpServer/*`、`account/logout|auth/logout` 方法名。
+- 现象：
+  - 当前实现依赖 `thread/compact/start`、`mcpServer/*`、`account/logout|auth/logout` 方法名。
+  - 已新增 real 存在性回归：`TestE2ERealCodexAppServer_MCPListAndOptionalCall`、`TestE2ERealCodexAppServer_CompactProducesVisibleUpdates`；当 endpoint 不兼容时会暴露为 `method not found` 或兼容降级。
 - 影响：
   - 若真实 app-server 不同版本方法名/参数变更，PR5 相关能力会出现 `method not found` 或参数不兼容。
 - 复现：
   - 连接不支持上述 endpoint 的 app-server 版本执行相应 slash 命令。
 - Workaround：
   - 通过兼容错误处理回退（logout 优先 `account/logout`，回退 `auth/logout`），并优先使用对齐版本联调。
+  - real 回归里若 `/compact` 返回 endpoint 不支持，会给出明确 skip 原因；需升级本机 codex 版本后再执行 full path 断言。
 - 后续计划：
   - 在 B2 schema 锁定后引入 endpoint capability 检测与版本门控。
 
@@ -155,11 +159,16 @@
 - 现象：`E2E_REAL_CODEX=1` 时测试会执行 `make schema` 并启动真实 `codex app-server`。
 - 影响：
   - 若本机未安装 `codex` 或认证不可用，真实 e2e 会跳过（带原因），不会覆盖真实链路。
+  - `TestE2ERealCodexAppServer_AuthInjectedKeyRecovers` 需要可注入 key；未提供时会 skip。
+  - `TestE2ERealCodexAppServer_MCPListAndOptionalCall` 在无 MCP server 配置时仅验证 list 路径，call 分支不会执行。
 - 复现：
-  - 执行 `E2E_REAL_CODEX=1 go test ./... -run TestE2E -count=1`，且环境缺少 codex/auth。
-  - 例如 `TestE2ERealCodexInitializePromptAndCancel` / `TestE2ERealCodexPromptInteractions` 会因 `thread/start failed` skip。
+  - 执行 `E2E_REAL_CODEX=1 go test ./... -run TestE2EReal -count=1`，且环境缺少 codex/auth。
+  - 例如 `TestE2ERealCodexAppServer_BasicPromptAndCancel` / `TestE2ERealCodexPromptInteractions` 会因 `thread/start failed` skip。
 - Workaround：
   - 安装并确保 `codex app-server` 可运行；准备可用认证态（API key 或 subscription）以让 real e2e 实际执行。
+  - 若要覆盖 auth 注入恢复路径，设置：
+    - `E2E_REAL_CODEX_RECOVERY_CODEX_API_KEY=<key>` 或
+    - `E2E_REAL_CODEX_RECOVERY_OPENAI_API_KEY=<key>`
 - 后续计划：
   - 在 CI 增加可选 real-e2e job，并明确环境先决条件。
 
@@ -200,3 +209,16 @@
   - 在提示词中显式要求 markdown checklist 输出。
 - 后续计划：
   - 评估接入 app-server 原生 plan/todo 事件（若可用）并扩展多格式解析器。
+
+## KI-0020：go module 路径与仓库地址不一致会导致外部安装失败
+- 现象：
+  - `go.mod` 若使用短 module（如 `codex-acp`）而仓库地址为 `github.com/beyond5959/codex-acp`，外部使用仓库地址安装会报模块路径不匹配。
+- 影响：
+  - `go get` / `go install` 失败，第三方集成与 CI 拉取依赖不稳定。
+- 复现：
+  - 保持短 module 路径后执行：`go install github.com/beyond5959/codex-acp/cmd/codex-acp-go@latest`。
+- Workaround：
+  - 使用 canonical module：`module github.com/beyond5959/codex-acp`。
+  - 变更后同步替换仓库内 `codex-acp/...` 导入路径。
+- 后续计划：
+  - 仓库地址若变更（迁移/重命名），同一 PR 内同步更新 `go.mod` 和全部内部导入。

@@ -2362,7 +2362,7 @@ func TestE2ERealCodexContentBlocksMentionsImagesAndTODO(t *testing.T) {
 	}
 }
 
-func TestE2ERealCodexInitializePromptAndCancel(t *testing.T) {
+func TestE2ERealCodexAppServer_BasicPromptAndCancel(t *testing.T) {
 	requireRealCodex(t)
 
 	traceFile := filepath.Join(t.TempDir(), "real-e2e-trace.jsonl")
@@ -2458,6 +2458,282 @@ func TestE2ERealCodexInitializePromptAndCancel(t *testing.T) {
 	if !strings.Contains(traceText, "[REDACTED]") {
 		t.Fatalf("trace file should contain redacted marker")
 	}
+	assertTraceContainsAppServerMethods(
+		t,
+		traceFile,
+		"initialize",
+		"initialized",
+		"thread/start",
+		"turn/start",
+	)
+}
+
+func TestE2ERealCodexAppServer_AuthMissingReturnsClearError(t *testing.T) {
+	requireRealCodex(t)
+
+	h := startAdapterReal(
+		t,
+		nil,
+		"CODEX_API_KEY=",
+		"OPENAI_API_KEY=",
+		"CHATGPT_SUBSCRIPTION_ACTIVE=0",
+	)
+
+	h.sendRequest("real-auth-missing-init", "initialize", map[string]any{})
+	initResp := h.waitResponse("real-auth-missing-init", 20*time.Second)
+	var initResult struct {
+		ActiveAuthMethod string `json:"activeAuthMethod"`
+	}
+	unmarshalResult(t, initResp, &initResult)
+	if initResult.ActiveAuthMethod != "" {
+		t.Fatalf("expected empty active auth method when auth env is disabled, got %q", initResult.ActiveAuthMethod)
+	}
+
+	h.sendRequest("real-auth-missing-new", "session/new", map[string]any{})
+	newResp := h.waitResponse("real-auth-missing-new", 20*time.Second)
+	if newResp.Error == nil {
+		t.Fatalf("session/new without auth should return clear authentication error")
+	}
+	if !strings.Contains(strings.ToLower(newResp.Error.Message), "authentication") {
+		t.Fatalf("session/new auth error should mention authentication, got %q", newResp.Error.Message)
+	}
+	data := decodeRPCErrorDataMap(t, newResp.Error)
+	if strings.TrimSpace(valueAsStringAny(data["nextStepCommand"])) == "" {
+		t.Fatalf("auth error should include nextStepCommand for recovery")
+	}
+
+	h.assertStdoutPureJSONRPC()
+}
+
+func TestE2ERealCodexAppServer_AuthInjectedKeyRecovers(t *testing.T) {
+	requireRealCodex(t)
+
+	extraEnv, expectedMode := realCodexRecoveryAuthEnv(t)
+	h := startAdapterReal(t, nil, extraEnv...)
+
+	h.sendRequest("real-auth-key-init", "initialize", map[string]any{})
+	initResp := h.waitResponse("real-auth-key-init", 20*time.Second)
+	var initResult struct {
+		ActiveAuthMethod string `json:"activeAuthMethod"`
+	}
+	unmarshalResult(t, initResp, &initResult)
+	if initResult.ActiveAuthMethod != expectedMode {
+		t.Fatalf("active auth mode mismatch: got=%q want=%q", initResult.ActiveAuthMethod, expectedMode)
+	}
+
+	h.sendRequest("real-auth-key-new", "session/new", map[string]any{})
+	newResp := h.waitResponse("real-auth-key-new", 30*time.Second)
+	if newResp.Error != nil {
+		t.Fatalf("session/new should recover with injected key, got error=%s", newResp.Error.Message)
+	}
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+	if strings.TrimSpace(newResult.SessionID) == "" {
+		t.Fatalf("session/new returned empty sessionId after auth recovery")
+	}
+
+	_ = realCodexPromptRoundtrip(
+		t,
+		h,
+		newResult.SessionID,
+		"real-auth-key-prompt",
+		"Reply with one short sentence confirming auth recovery.",
+		1,
+	)
+	h.assertStdoutPureJSONRPC()
+}
+
+func TestE2ERealCodexAppServer_MCPListAndOptionalCall(t *testing.T) {
+	requireRealCodex(t)
+
+	h := startAdapterReal(t, nil)
+	sessionID := realCodexInitializeAndSession(t, h, nil)
+
+	h.sendRequest("real-mcp-list", "session/prompt", map[string]any{
+		"sessionId": sessionID,
+		"prompt":    "/mcp list",
+	})
+
+	gotListResp := false
+	sawListUpdate := false
+	var listDeltas []string
+	listDeadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(listDeadline) && !gotListResp {
+		msg := h.nextMessage(time.Until(listDeadline))
+		switch msg.Method {
+		case "session/update":
+			update := decodeSessionUpdate(t, msg)
+			if update.SessionID != sessionID {
+				continue
+			}
+			sawListUpdate = true
+			if update.Type == "message" && strings.TrimSpace(update.Delta) != "" {
+				listDeltas = append(listDeltas, update.Delta)
+			}
+		case "session/request_permission":
+			h.sendResultResponse(messageID(msg), map[string]any{"outcome": "declined"})
+		default:
+			if messageID(msg) != "real-mcp-list" {
+				continue
+			}
+			var result struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, msg, &result)
+			if result.StopReason != "end_turn" {
+				t.Fatalf("/mcp list expected stopReason=end_turn, got %q", result.StopReason)
+			}
+			gotListResp = true
+		}
+	}
+	if !gotListResp {
+		t.Fatalf("timed out waiting for /mcp list response")
+	}
+	if !sawListUpdate {
+		t.Fatalf("/mcp list expected at least one session/update output")
+	}
+
+	server, tool, hasServer := parseFirstMCPServerFromOutput(strings.Join(listDeltas, "\n"))
+	if !hasServer {
+		h.assertStdoutPureJSONRPC()
+		return
+	}
+	if strings.TrimSpace(tool) == "" {
+		tool = "ping"
+	}
+
+	h.sendRequest("real-mcp-call", "session/prompt", map[string]any{
+		"sessionId": sessionID,
+		"prompt":    fmt.Sprintf("/mcp call %s %s", server, tool),
+	})
+
+	gotCallResp := false
+	sawPermission := false
+	sawToolTerminal := false
+	sawCallUpdate := false
+	callDeadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(callDeadline) && !gotCallResp {
+		msg := h.nextMessage(time.Until(callDeadline))
+		switch msg.Method {
+		case "session/request_permission":
+			req := decodeSessionRequestPermission(t, msg)
+			if req.Approval != "mcp" {
+				t.Fatalf("/mcp call expected mcp approval, got %q", req.Approval)
+			}
+			sawPermission = true
+			h.sendResultResponse(messageID(msg), map[string]any{"outcome": "approved"})
+		case "session/update":
+			update := decodeSessionUpdate(t, msg)
+			if update.SessionID != sessionID {
+				continue
+			}
+			sawCallUpdate = true
+			if update.Type == "tool_call_update" && (update.Status == "completed" || update.Status == "failed") {
+				sawToolTerminal = true
+			}
+		default:
+			if messageID(msg) != "real-mcp-call" {
+				continue
+			}
+			var result struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, msg, &result)
+			if result.StopReason != "end_turn" {
+				t.Fatalf("/mcp call expected stopReason=end_turn, got %q", result.StopReason)
+			}
+			gotCallResp = true
+		}
+	}
+	if !gotCallResp {
+		t.Fatalf("timed out waiting for /mcp call response")
+	}
+	if !sawPermission {
+		t.Fatalf("/mcp call expected one permission request")
+	}
+	if !sawCallUpdate {
+		t.Fatalf("/mcp call expected session/update outputs")
+	}
+	if !sawToolTerminal {
+		t.Fatalf("/mcp call expected terminal tool_call_update (completed/failed)")
+	}
+
+	h.assertStdoutPureJSONRPC()
+}
+
+func TestE2ERealCodexAppServer_CompactProducesVisibleUpdates(t *testing.T) {
+	requireRealCodex(t)
+
+	h := startAdapterReal(t, nil)
+	sessionID := realCodexInitializeAndSession(t, h, nil)
+	_ = realCodexPromptRoundtrip(
+		t,
+		h,
+		sessionID,
+		"real-compact-prime",
+		"Reply with one short sentence so the thread has context before compact.",
+		1,
+	)
+
+	h.sendRequest("real-compact", "session/prompt", map[string]any{
+		"sessionId": sessionID,
+		"prompt":    "/compact",
+	})
+
+	gotCompactResp := false
+	sawCompactUpdate := false
+	compactDeadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(compactDeadline) && !gotCompactResp {
+		msg := h.nextMessage(time.Until(compactDeadline))
+		switch msg.Method {
+		case "session/update":
+			update := decodeSessionUpdate(t, msg)
+			if update.SessionID != sessionID {
+				continue
+			}
+			sawCompactUpdate = true
+		case "session/request_permission":
+			h.sendResultResponse(messageID(msg), map[string]any{"outcome": "declined"})
+		default:
+			if messageID(msg) != "real-compact" {
+				continue
+			}
+			if msg.Error != nil {
+				data := decodeRPCErrorDataMap(t, msg.Error)
+				detail := strings.ToLower(valueAsStringAny(data["error"]))
+				if strings.Contains(detail, "method not found") || strings.Contains(detail, "not supported") {
+					t.Skipf("local codex app-server does not support compact endpoint: %s", detail)
+				}
+				t.Fatalf("/compact failed: code=%d message=%s detail=%v", msg.Error.Code, msg.Error.Message, data["error"])
+			}
+			var result struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, msg, &result)
+			if result.StopReason != "end_turn" {
+				t.Fatalf("/compact expected stopReason=end_turn, got %q", result.StopReason)
+			}
+			gotCompactResp = true
+		}
+	}
+	if !gotCompactResp {
+		t.Fatalf("timed out waiting for /compact response")
+	}
+	if !sawCompactUpdate {
+		t.Fatalf("/compact expected at least one visible session/update")
+	}
+
+	_ = realCodexPromptRoundtrip(
+		t,
+		h,
+		sessionID,
+		"real-compact-post",
+		"Reply with OK after compact.",
+		1,
+	)
+	h.assertStdoutPureJSONRPC()
 }
 
 func TestE2ERealCodexPromptInteractions(t *testing.T) {
@@ -2597,6 +2873,146 @@ func realCodexPromptRoundtrip(
 
 	t.Fatalf("timed out waiting for prompt response id=%s", requestID)
 	return ""
+}
+
+func realCodexRecoveryAuthEnv(t *testing.T) ([]string, string) {
+	t.Helper()
+
+	if key := strings.TrimSpace(os.Getenv("E2E_REAL_CODEX_RECOVERY_CODEX_API_KEY")); key != "" {
+		return []string{
+			"CODEX_API_KEY=" + key,
+			"OPENAI_API_KEY=",
+			"CHATGPT_SUBSCRIPTION_ACTIVE=0",
+		}, "codex_api_key"
+	}
+	if key := strings.TrimSpace(os.Getenv("E2E_REAL_CODEX_RECOVERY_OPENAI_API_KEY")); key != "" {
+		return []string{
+			"CODEX_API_KEY=",
+			"OPENAI_API_KEY=" + key,
+			"CHATGPT_SUBSCRIPTION_ACTIVE=0",
+		}, "openai_api_key"
+	}
+	if key := strings.TrimSpace(os.Getenv("CODEX_API_KEY")); key != "" {
+		return []string{
+			"CODEX_API_KEY=" + key,
+			"OPENAI_API_KEY=",
+			"CHATGPT_SUBSCRIPTION_ACTIVE=0",
+		}, "codex_api_key"
+	}
+	if key := strings.TrimSpace(os.Getenv("OPENAI_API_KEY")); key != "" {
+		return []string{
+			"CODEX_API_KEY=",
+			"OPENAI_API_KEY=" + key,
+			"CHATGPT_SUBSCRIPTION_ACTIVE=0",
+		}, "openai_api_key"
+	}
+
+	t.Skip(
+		"auth recovery real-e2e requires one key env: " +
+			"E2E_REAL_CODEX_RECOVERY_CODEX_API_KEY or E2E_REAL_CODEX_RECOVERY_OPENAI_API_KEY",
+	)
+	return nil, ""
+}
+
+func parseFirstMCPServerFromOutput(output string) (string, string, bool) {
+	normalized := strings.ToLower(output)
+	start := strings.Index(normalized, "mcp servers:")
+	if start < 0 {
+		return "", "", false
+	}
+
+	rest := strings.TrimSpace(output[start+len("mcp servers:"):])
+	if rest == "" {
+		return "", "", false
+	}
+
+	first := strings.TrimSpace(strings.Split(rest, ";")[0])
+	if first == "" {
+		return "", "", false
+	}
+
+	openParen := strings.Index(first, "(")
+	if openParen < 0 {
+		parts := strings.Fields(first)
+		if len(parts) == 0 {
+			return "", "", false
+		}
+		return parts[0], "", true
+	}
+
+	server := strings.TrimSpace(first[:openParen])
+	if server == "" {
+		return "", "", false
+	}
+
+	details := first[openParen+1:]
+	if closeParen := strings.LastIndex(details, ")"); closeParen >= 0 {
+		details = details[:closeParen]
+	}
+	tool := ""
+	if idx := strings.Index(strings.ToLower(details), "tools="); idx >= 0 {
+		toolsRaw := strings.TrimSpace(details[idx+len("tools="):])
+		if space := strings.IndexAny(toolsRaw, " \t\r\n"); space >= 0 {
+			toolsRaw = toolsRaw[:space]
+		}
+		for _, candidate := range strings.Split(toolsRaw, ",") {
+			candidate = strings.TrimSpace(candidate)
+			if candidate != "" && candidate != "-" {
+				tool = candidate
+				break
+			}
+		}
+	}
+
+	return server, tool, true
+}
+
+func assertTraceContainsAppServerMethods(t *testing.T, traceFile string, methods ...string) {
+	t.Helper()
+
+	data, err := os.ReadFile(traceFile)
+	if err != nil {
+		t.Fatalf("read trace file: %v", err)
+	}
+	text := strings.TrimSpace(string(data))
+	if text == "" {
+		t.Fatalf("trace file is empty")
+	}
+
+	type traceEntry struct {
+		Stream  string          `json:"stream"`
+		Payload json.RawMessage `json:"payload"`
+	}
+
+	seen := make(map[string]bool, len(methods))
+	lines := strings.Split(text, "\n")
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var entry traceEntry
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+		if entry.Stream != "appserver" || len(entry.Payload) == 0 {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(entry.Payload, &payload); err != nil {
+			continue
+		}
+		method, _ := payload["method"].(string)
+		if strings.TrimSpace(method) == "" {
+			continue
+		}
+		seen[method] = true
+	}
+
+	for _, method := range methods {
+		if !seen[method] {
+			t.Fatalf("trace should include appserver method %q, seen=%v", method, seen)
+		}
+	}
 }
 
 func TestE2ETraceJSONFileRedaction(t *testing.T) {

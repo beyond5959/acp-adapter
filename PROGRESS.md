@@ -124,7 +124,7 @@
 ## 如何验证
 1. 执行：
    - `go test ./...`
-   - 真实 app-server e2e：`E2E_REAL_CODEX=1 go test ./... -run TestE2E -count=1`
+   - 真实 app-server e2e：`E2E_REAL_CODEX=1 go test ./... -run TestE2EReal -count=1`
      - 前置：本机 `codex app-server` 可用；无可用认证会在 real e2e 中给出 skip 原因
 2. 预期：
    - `test/integration` 通过，包含：
@@ -152,7 +152,11 @@
      - `TestE2EAcceptanceMCPListCallAndOAuth`
      - `TestE2EAcceptanceI1ToI3AuthMethods`
      - `TestE2EAuthRequiredWithoutConfiguredMethod`
-     - `TestE2ERealCodexInitializePromptAndCancel`（`E2E_REAL_CODEX=1`）
+     - `TestE2ERealCodexAppServer_BasicPromptAndCancel`（`E2E_REAL_CODEX=1`）
+     - `TestE2ERealCodexAppServer_AuthMissingReturnsClearError`（`E2E_REAL_CODEX=1`）
+     - `TestE2ERealCodexAppServer_AuthInjectedKeyRecovers`（需注入 key，`E2E_REAL_CODEX=1`）
+     - `TestE2ERealCodexAppServer_MCPListAndOptionalCall`（`E2E_REAL_CODEX=1`）
+     - `TestE2ERealCodexAppServer_CompactProducesVisibleUpdates`（`E2E_REAL_CODEX=1`）
      - `TestE2ERealCodexPromptInteractions`（含真实 prompt：`What is this project?`）
      - `TestE2ERealCodexContentBlocksMentionsImagesAndTODO`（`E2E_REAL_CODEX=1`）
      - `TestRPCReaderDetectsInvalidStdoutLine`
@@ -166,13 +170,13 @@
 ## 遗留问题是什么
 1. 当前“当次请求自动重试”仅在未发出不可重放内容时启用（幂等边界）；若已进入不可安全重放阶段，仍会 fail-closed 并提示用户重试一次 prompt。
 2. `/logout` 已提供明确可复制恢复指引并清理 app-server/client 认证态；但仍缺少“同进程无重启 re-auth RPC”。
-3. e2e 仍主要依赖 fake app-server，真实 codex app-server 的 mcp/auth/compact 行为仍需联调回归。
+3. 已补充真实 codex app-server 的 mcp/auth/compact 基本存在性回归；但复杂行为（多版本兼容、MCP 工具结果语义、compact 实际压缩质量）仍需持续联调。
 
 ## 当前阻塞（Blockers）
 - 无
 
 ## 下一步（Next）
-1. 做真实 codex app-server 联调：重点覆盖 `/compact`、`mcpServer/*`、`auth/logout` 与 profile 参数映射。
+1. 扩展真实 codex app-server 联调：从“存在性回归”扩展到结果语义回归（MCP 输出断言、compact 上下文收敛质量、auth re-login 体验）。
 2. 在 CI 增加可选 `e2e-real` 作业（含 `make schema`）并固化环境前置检查。
 3. 评估 `/logout` 的进程内 re-auth RPC，消除重启恢复依赖。
 4. 评估“已发出部分输出后的安全重放”策略（例如可选缓冲提交），进一步缩小人工重试窗口。
@@ -272,13 +276,13 @@
   - 增加真实 `codex app-server` 子进程 e2e（`E2E_REAL_CODEX=1`），覆盖 initialize/new/prompt/cancel 基线
   - 提供 trace-json 脱敏落盘调试能力并保持 stdout 纯 ACP JSON-RPC
 - B. 实现:
-  - 新增 `TestE2ERealCodexInitializePromptAndCancel`（真实 app-server 路径）
+  - 新增真实 app-server 基线路径用例（后续演进为 `TestE2ERealCodexAppServer_BasicPromptAndCancel`）
   - e2e 真实模式前置 `make schema`（生成 + 校验 + hash）
   - 新增 `--trace-json` + `--trace-json-file`，记录 ACP/AppServer 双向脱敏 JSONL
   - 强化 rpcReader：stdout 每行必须是严格 JSON-RPC envelope
 - C. 验证:
   - `go test ./...` 通过
-  - `E2E_REAL_CODEX=1 go test ./... -run TestE2E -count=1`（本机具备 codex/auth 环境时）
+  - `E2E_REAL_CODEX=1 go test ./... -run TestE2EReal -count=1`（本机具备 codex/auth 环境时）
 - D. 文档:
   - 更新 `PROGRESS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`
 
@@ -336,5 +340,34 @@
     - `TestE2EAcceptanceI1ToI3AuthMethods`
     - `TestE2EAuthRequiredWithoutConfiguredMethod`
   - `go test ./...` 通过
+- D. 文档:
+  - 更新 `PROGRESS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`
+
+### 2026-02-27 — Real app-server 存在性回归补齐（mcp/auth/compact）
+- A. 范围与目标:
+  - 处理遗留问题 #3：补充真实 `codex app-server` 的 mcp/auth/compact 基本路径回归
+  - 保持默认 CI 不跑 real，用 `E2E_REAL_CODEX=1` 显式开启
+- B. 实现:
+  - 新增 `TestE2ERealCodexAppServer_BasicPromptAndCancel`：
+    - 覆盖 `initialize -> session/new -> session/prompt(>=1 update,end_turn)` + cancel(`stopReason=cancelled`)
+    - 增加 trace 断言：真实 app-server 链路包含 `initialize/initialized/thread/start/turn/start`
+  - 新增 `TestE2ERealCodexAppServer_AuthMissingReturnsClearError` 与 `TestE2ERealCodexAppServer_AuthInjectedKeyRecovers`
+  - 新增 `TestE2ERealCodexAppServer_MCPListAndOptionalCall` 与 `TestE2ERealCodexAppServer_CompactProducesVisibleUpdates`
+  - 所有新增 real 用例维持 stdout 严格 JSON-RPC 校验（`rpcReader` + `assertStdoutPureJSONRPC`）
+- C. 验证:
+  - 已执行：`go test ./...`
+  - real 回归入口：`E2E_REAL_CODEX=1 go test ./... -run TestE2EReal -count=1`
+- D. 文档:
+  - 更新 `PROGRESS.md`、`docs/KNOWN_ISSUES.md`
+
+### 2026-02-27 — go module 路径与 GitHub 仓库地址对齐
+- A. 范围与目标:
+  - 修正 `go.mod` 的 `module`，避免外部 `go get/go install` 出现模块路径不匹配
+- B. 实现:
+  - `go.mod` 从 `module codex-acp` 调整为 `module github.com/beyond5959/codex-acp`
+  - 同步替换仓库内 Go 代码中的内部导入路径为 `github.com/beyond5959/codex-acp/...`
+- C. 验证:
+  - 执行 `go test ./...` 通过
+  - 全仓检查无残留 `\"codex-acp/...\"` 导入
 - D. 文档:
   - 更新 `PROGRESS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`
