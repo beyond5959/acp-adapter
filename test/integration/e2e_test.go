@@ -501,6 +501,123 @@ func TestE2EAcceptanceA1ToA5AndB1(t *testing.T) {
 	h.assertStdoutPureJSONRPC()
 }
 
+func TestE2EPromptArrayContentBlocksAccepted(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+	if strings.TrimSpace(newResult.SessionID) == "" {
+		t.Fatalf("session/new returned empty sessionId")
+	}
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt": []map[string]any{
+			{
+				"type": "text",
+				"text": "hello from prompt array",
+			},
+		},
+	})
+
+	gotUpdate := false
+	gotPromptResp := false
+	for !gotPromptResp {
+		msg := h.nextMessage(responseTimeout)
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.SessionID != newResult.SessionID {
+				t.Fatalf("session/update routed to wrong session: got %q want %q", update.SessionID, newResult.SessionID)
+			}
+			gotUpdate = true
+			continue
+		}
+		if messageID(msg) != "3" {
+			continue
+		}
+		var promptResult struct {
+			StopReason string `json:"stopReason"`
+		}
+		unmarshalResult(t, msg, &promptResult)
+		if promptResult.StopReason != "end_turn" {
+			t.Fatalf("session/prompt with prompt array expected stopReason=end_turn, got %q", promptResult.StopReason)
+		}
+		gotPromptResp = true
+	}
+	if !gotUpdate {
+		t.Fatalf("session/prompt with prompt array expected at least one session/update")
+	}
+
+	h.assertStdoutPureJSONRPC()
+}
+
+func TestE2EMessageUpdateIncludesACPUpdateEnvelope(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "hello",
+	})
+
+	sawMappedMessage := false
+	gotPromptResp := false
+	for !gotPromptResp {
+		msg := h.nextMessage(responseTimeout)
+		if msg.Method == "session/update" {
+			var raw map[string]any
+			if err := json.Unmarshal(msg.Params, &raw); err != nil {
+				t.Fatalf("decode raw session/update: %v", err)
+			}
+			updateObj, _ := raw["update"].(map[string]any)
+			if updateObj != nil {
+				if kind, _ := updateObj["sessionUpdate"].(string); kind == "agent_message_chunk" {
+					content, _ := updateObj["content"].(map[string]any)
+					if content != nil {
+						if ctype, _ := content["type"].(string); ctype == "text" {
+							if _, ok := content["text"].(string); ok {
+								sawMappedMessage = true
+							}
+						}
+					}
+				}
+			}
+			continue
+		}
+		if messageID(msg) != "3" {
+			continue
+		}
+		var promptResult struct {
+			StopReason string `json:"stopReason"`
+		}
+		unmarshalResult(t, msg, &promptResult)
+		if promptResult.StopReason != "end_turn" {
+			t.Fatalf("prompt expected stopReason=end_turn, got %q", promptResult.StopReason)
+		}
+		gotPromptResp = true
+	}
+
+	if !sawMappedMessage {
+		t.Fatalf("expected session/update to include update.sessionUpdate=agent_message_chunk")
+	}
+}
+
 func TestE2EAcceptanceB1AppServerCrashReturnsClearError(t *testing.T) {
 	crashMarker := filepath.Join(t.TempDir(), "crash-once.marker")
 	h := startAdapter(t, "FAKE_APP_SERVER_CRASH_ON_THREAD_START_ONCE_FILE="+crashMarker)
@@ -562,6 +679,7 @@ func TestE2EAcceptanceB1AppServerCrashDuringTurnAutoRetry(t *testing.T) {
 	gotPromptResp := false
 	sawRetrying := false
 	sawTurnError := false
+	turnErrorMessage := ""
 	doneCount := 0
 	deadline := time.Now().Add(2 * responseTimeout)
 	for !gotPromptResp {
@@ -576,6 +694,7 @@ func TestE2EAcceptanceB1AppServerCrashDuringTurnAutoRetry(t *testing.T) {
 			}
 			if update.Status == "turn_error" {
 				sawTurnError = true
+				turnErrorMessage = update.Message
 			}
 			if update.Type == "message" && strings.Contains(update.Delta, "done") {
 				doneCount++
@@ -590,7 +709,13 @@ func TestE2EAcceptanceB1AppServerCrashDuringTurnAutoRetry(t *testing.T) {
 		}
 		unmarshalResult(t, msg, &result)
 		if result.StopReason != "end_turn" {
-			t.Fatalf("auto-retry prompt expected stopReason=end_turn, got %q", result.StopReason)
+			t.Fatalf(
+				"auto-retry prompt expected stopReason=end_turn, got %q (retrying=%t turnError=%t message=%q)",
+				result.StopReason,
+				sawRetrying,
+				sawTurnError,
+				turnErrorMessage,
+			)
 		}
 		gotPromptResp = true
 	}
@@ -2171,6 +2296,80 @@ func TestE2EAuthRequiredWithoutConfiguredMethod(t *testing.T) {
 	if resp.Error == nil || !strings.Contains(strings.ToLower(resp.Error.Message), "authentication") {
 		t.Fatalf("session/new without auth expected clear auth error, got %+v", resp.Error)
 	}
+}
+
+func TestE2EAuthMethodsAndAuthenticateFlow(t *testing.T) {
+	h := startAdapter(t,
+		"CODEX_API_KEY=",
+		"OPENAI_API_KEY=",
+		"CHATGPT_SUBSCRIPTION_ACTIVE=0",
+	)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	initResp := h.waitResponse("1", responseTimeout)
+	var initResult struct {
+		AuthMethods []struct {
+			ID          string `json:"id"`
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			Type        string `json:"type"`
+			Label       string `json:"label"`
+		} `json:"authMethods"`
+		ActiveAuthMethod string `json:"activeAuthMethod"`
+	}
+	unmarshalResult(t, initResp, &initResult)
+	if initResult.ActiveAuthMethod != "" {
+		t.Fatalf("expected empty active auth method before authenticate, got %q", initResult.ActiveAuthMethod)
+	}
+	if len(initResult.AuthMethods) < 3 {
+		t.Fatalf("expected >=3 auth methods, got %d", len(initResult.AuthMethods))
+	}
+	seenSubscription := false
+	for _, method := range initResult.AuthMethods {
+		if strings.TrimSpace(method.ID) == "" || strings.TrimSpace(method.Name) == "" {
+			t.Fatalf("authMethods should include id/name: %+v", method)
+		}
+		if method.ID == "chatgpt_subscription" {
+			seenSubscription = true
+		}
+	}
+	if !seenSubscription {
+		t.Fatalf("expected chatgpt_subscription in authMethods")
+	}
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newRespBefore := h.waitResponse("2", responseTimeout)
+	if newRespBefore.Error == nil || !strings.Contains(strings.ToLower(newRespBefore.Error.Message), "authentication") {
+		t.Fatalf("session/new without auth expected auth error, got %+v", newRespBefore.Error)
+	}
+
+	h.sendRequest("3", "authenticate", map[string]any{
+		"methodId": "chatgpt_subscription",
+	})
+	authResp := h.waitResponse("3", responseTimeout)
+	var authResult struct {
+		Authenticated    bool   `json:"authenticated"`
+		ActiveAuthMethod string `json:"activeAuthMethod"`
+	}
+	unmarshalResult(t, authResp, &authResult)
+	if !authResult.Authenticated {
+		t.Fatalf("authenticate should return authenticated=true")
+	}
+	if authResult.ActiveAuthMethod != "chatgpt_subscription" {
+		t.Fatalf("authenticate should set activeAuthMethod=chatgpt_subscription, got %q", authResult.ActiveAuthMethod)
+	}
+
+	h.sendRequest("4", "session/new", map[string]any{})
+	newRespAfter := h.waitResponse("4", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newRespAfter, &newResult)
+	if strings.TrimSpace(newResult.SessionID) == "" {
+		t.Fatalf("session/new should succeed after authenticate")
+	}
+
+	h.assertStdoutPureJSONRPC()
 }
 
 func TestE2EAcceptanceJ1Stress100Turns(t *testing.T) {

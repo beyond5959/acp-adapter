@@ -24,6 +24,8 @@
 - KI-0018：mentions/images 输入有大小与能力门槛
 - KI-0019：TODO 结构化仅覆盖 markdown checklist 形态
 - KI-0020：go module 路径与仓库地址不一致会导致外部安装失败
+- KI-0021：`session/update` 的标准 `update.sessionUpdate` 映射目前仅覆盖高频类型
+- KI-0022：并发请求下 `authenticate` 与后续请求存在时序依赖
 
 ---
 
@@ -222,3 +224,31 @@
   - 变更后同步替换仓库内 `codex-acp/...` 导入路径。
 - 后续计划：
   - 仓库地址若变更（迁移/重命名），同一 PR 内同步更新 `go.mod` 和全部内部导入。
+
+## KI-0021：`session/update` 的标准 `update.sessionUpdate` 映射目前仅覆盖高频类型
+- 现象：
+  - 适配器已支持“扁平字段 + 标准 envelope”双输出，但当前标准 `update.sessionUpdate` 仅映射 `agent_message_chunk` 与 `tool_call_update`。
+- 影响：
+  - 依赖标准 envelope 才渲染 UI 的客户端，在 plan/thought/模式切换等低频更新上，可能只显示部分信息或显示不一致。
+- 复现：
+  - 使用仅消费 `params.update.sessionUpdate` 的 ACP client，观察非 message/tool 的 session/update 可视化结果。
+- Workaround：
+  - 客户端同时消费扁平字段（`type/status/delta/message/...`）与标准 envelope。
+  - 对关键展示先依赖 `agent_message_chunk`（已覆盖）。
+- 后续计划：
+  - 扩展标准映射覆盖：plan、thought、mode/model update、permission/tool 生命周期等。
+
+## KI-0022：并发请求下 `authenticate` 与后续请求存在时序依赖
+- 现象：
+  - server 请求处理是并发的。若客户端并发发送 `authenticate` 与 `session/new`/`session/prompt`，后者可能先到达 auth gate 并被拒绝。
+- 影响：
+  - 个别会“抢发请求”的客户端可能出现“刚认证成功但第一次 session/new 仍报 requires authentication”。
+- 复现：
+  - 在未认证状态下，几乎同时发送：
+    - `authenticate(methodId=...)`
+    - `session/new`
+- Workaround：
+  - 客户端必须等待 `authenticate` 的成功响应后，再发送 `session/new` 或 `session/prompt`。
+  - 若出现该错误，重试一次 `session/new` 通常可恢复。
+- 后续计划：
+  - 评估在 adapter 侧为“认证切换窗口”增加短暂排队或重试，降低时序敏感度。

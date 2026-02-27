@@ -86,10 +86,14 @@ func (c *Client) ThreadStart(ctx context.Context, cwd string, options RunOptions
 	if err := c.call(ctx, methodThreadStart, params, &result); err != nil {
 		return "", err
 	}
-	if result.ThreadID == "" {
+	threadID := strings.TrimSpace(result.ThreadID)
+	if threadID == "" && result.Thread != nil {
+		threadID = strings.TrimSpace(result.Thread.ID)
+	}
+	if threadID == "" {
 		return "", fmt.Errorf("thread/start returned empty threadId")
 	}
-	return result.ThreadID, nil
+	return threadID, nil
 }
 
 // TurnStart starts a turn and returns turn id plus event stream.
@@ -111,12 +115,16 @@ func (c *Client) TurnStart(
 	if err := c.call(ctx, methodTurnStart, params, &result); err != nil {
 		return "", nil, err
 	}
-	if result.TurnID == "" {
+	turnID := strings.TrimSpace(result.TurnID)
+	if turnID == "" && result.Turn != nil {
+		turnID = strings.TrimSpace(result.Turn.ID)
+	}
+	if turnID == "" {
 		return "", nil, fmt.Errorf("turn/start returned empty turnId")
 	}
 
-	stream := c.registerTurnStream(result.TurnID)
-	return result.TurnID, stream, nil
+	stream := c.registerTurnStream(turnID)
+	return turnID, stream, nil
 }
 
 // ReviewStart starts one review workflow turn.
@@ -135,12 +143,16 @@ func (c *Client) ReviewStart(
 	if err := c.call(ctx, methodReviewStart, params, &result); err != nil {
 		return "", nil, err
 	}
-	if result.TurnID == "" {
+	turnID := strings.TrimSpace(result.TurnID)
+	if turnID == "" && result.Turn != nil {
+		turnID = strings.TrimSpace(result.Turn.ID)
+	}
+	if turnID == "" {
 		return "", nil, fmt.Errorf("review/start returned empty turnId")
 	}
 
-	stream := c.registerTurnStream(result.TurnID)
-	return result.TurnID, stream, nil
+	stream := c.registerTurnStream(turnID)
+	return turnID, stream, nil
 }
 
 // CompactStart starts one compact operation and returns turn stream.
@@ -152,11 +164,15 @@ func (c *Client) CompactStart(ctx context.Context, threadID string) (string, <-c
 	if err := c.call(ctx, methodThreadCompact, params, &result); err != nil {
 		return "", nil, err
 	}
-	if result.TurnID == "" {
+	turnID := strings.TrimSpace(result.TurnID)
+	if turnID == "" && result.Turn != nil {
+		turnID = strings.TrimSpace(result.Turn.ID)
+	}
+	if turnID == "" {
 		return "", nil, fmt.Errorf("thread/compact/start returned empty turnId")
 	}
-	stream := c.registerTurnStream(result.TurnID)
-	return result.TurnID, stream, nil
+	stream := c.registerTurnStream(turnID)
+	return turnID, stream, nil
 }
 
 // TurnInterrupt requests turn interruption.
@@ -426,10 +442,11 @@ func (c *Client) handleNotification(msg RPCMessage) {
 			c.logger.Warn("ignore malformed turn/started", slog.String("error", err.Error()))
 			return
 		}
-		c.pushTurnEvent(note.TurnID, TurnEvent{
+		turnID := effectiveTurnID(note.TurnID, note.Turn)
+		c.pushTurnEvent(turnID, TurnEvent{
 			Type:     TurnEventTypeStarted,
 			ThreadID: note.ThreadID,
-			TurnID:   note.TurnID,
+			TurnID:   turnID,
 		}, false)
 	case notificationTurnUpdate:
 		var note TurnUpdateNotification
@@ -462,12 +479,22 @@ func (c *Client) handleNotification(msg RPCMessage) {
 			c.logger.Warn("ignore malformed item/started", slog.String("error", err.Error()))
 			return
 		}
+		itemID := strings.TrimSpace(note.ItemID)
+		itemType := strings.TrimSpace(note.ItemType)
+		if note.Item != nil {
+			if itemID == "" {
+				itemID = strings.TrimSpace(note.Item.ID)
+			}
+			if itemType == "" {
+				itemType = strings.TrimSpace(note.Item.Type)
+			}
+		}
 		c.pushTurnEvent(note.TurnID, TurnEvent{
 			Type:     TurnEventTypeItemStarted,
 			ThreadID: note.ThreadID,
 			TurnID:   note.TurnID,
-			ItemID:   note.ItemID,
-			ItemType: note.ItemType,
+			ItemID:   itemID,
+			ItemType: itemType,
 		}, false)
 	case notificationItemCompleted:
 		var note ItemCompletedNotification
@@ -475,12 +502,22 @@ func (c *Client) handleNotification(msg RPCMessage) {
 			c.logger.Warn("ignore malformed item/completed", slog.String("error", err.Error()))
 			return
 		}
+		itemID := strings.TrimSpace(note.ItemID)
+		itemType := strings.TrimSpace(note.ItemType)
+		if note.Item != nil {
+			if itemID == "" {
+				itemID = strings.TrimSpace(note.Item.ID)
+			}
+			if itemType == "" {
+				itemType = strings.TrimSpace(note.Item.Type)
+			}
+		}
 		c.pushTurnEvent(note.TurnID, TurnEvent{
 			Type:     TurnEventTypeItemCompleted,
 			ThreadID: note.ThreadID,
 			TurnID:   note.TurnID,
-			ItemID:   note.ItemID,
-			ItemType: note.ItemType,
+			ItemID:   itemID,
+			ItemType: itemType,
 		}, false)
 	case notificationTurnCompleted:
 		var note TurnCompletedNotification
@@ -488,11 +525,16 @@ func (c *Client) handleNotification(msg RPCMessage) {
 			c.logger.Warn("ignore malformed turn/completed", slog.String("error", err.Error()))
 			return
 		}
-		c.pushTurnEvent(note.TurnID, TurnEvent{
+		turnID := effectiveTurnID(note.TurnID, note.Turn)
+		stopReason := strings.TrimSpace(note.StopReason)
+		if stopReason == "" && note.Turn != nil {
+			stopReason = stopReasonFromTurnStatus(note.Turn.Status)
+		}
+		c.pushTurnEvent(turnID, TurnEvent{
 			Type:       TurnEventTypeCompleted,
 			ThreadID:   note.ThreadID,
-			TurnID:     note.TurnID,
-			StopReason: note.StopReason,
+			TurnID:     turnID,
+			StopReason: stopReason,
 		}, true)
 	case notificationReviewModeEntered:
 		var note ReviewModeNotification
@@ -518,6 +560,30 @@ func (c *Client) handleNotification(msg RPCMessage) {
 		}, false)
 	default:
 		// Ignore notifications not used by the adapter.
+	}
+}
+
+func effectiveTurnID(turnID string, turn *TurnRef) string {
+	id := strings.TrimSpace(turnID)
+	if id != "" {
+		return id
+	}
+	if turn == nil {
+		return ""
+	}
+	return strings.TrimSpace(turn.ID)
+}
+
+func stopReasonFromTurnStatus(status string) string {
+	switch strings.TrimSpace(strings.ToLower(status)) {
+	case "interrupted":
+		return "cancelled"
+	case "failed":
+		return "error"
+	case "completed":
+		return "end_turn"
+	default:
+		return ""
 	}
 }
 

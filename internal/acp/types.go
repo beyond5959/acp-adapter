@@ -37,8 +37,26 @@ type AgentCapabilities struct {
 
 // AuthMethod describes one supported auth path.
 type AuthMethod struct {
-	Type  string `json:"type"`
+	// Optional method metadata fields used by ACP clients that select auth by id.
+	ID          string `json:"id,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+
+	// Legacy method metadata fields kept for clients that use type/label.
+	Type  string `json:"type,omitempty"`
 	Label string `json:"label,omitempty"`
+}
+
+// AuthenticateParams handles client-initiated auth selection.
+type AuthenticateParams struct {
+	MethodID string `json:"methodId,omitempty"`
+	Type     string `json:"type,omitempty"`
+}
+
+// AuthenticateResult reports auth selection state.
+type AuthenticateResult struct {
+	Authenticated    bool   `json:"authenticated"`
+	ActiveAuthMethod string `json:"activeAuthMethod,omitempty"`
 }
 
 // SessionNewParams are optional fields for session/new.

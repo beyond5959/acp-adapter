@@ -23,6 +23,7 @@ import (
 
 const (
 	methodInitialize               = "initialize"
+	methodAuthenticate             = "authenticate"
 	methodSessionNew               = "session/new"
 	methodSessionPrompt            = "session/prompt"
 	methodSessionCancel            = "session/cancel"
@@ -271,6 +272,8 @@ func (s *Server) handleRequest(ctx context.Context, msg RPCMessage) {
 	switch msg.Method {
 	case methodInitialize:
 		s.handleInitialize(rawID, msg.Params)
+	case methodAuthenticate:
+		s.handleAuthenticate(rawID, msg.Params)
 	case methodSessionNew:
 		s.handleSessionNew(ctx, rawID, msg.Params)
 	case methodSessionPrompt:
@@ -287,6 +290,30 @@ func (s *Server) handleRequest(ctx context.Context, msg RPCMessage) {
 func (s *Server) handleInitialize(id json.RawMessage, paramsRaw json.RawMessage) {
 	s.captureClientCapabilities(paramsRaw)
 
+	authMethods := []AuthMethod{
+		{
+			ID:          "codex_api_key",
+			Name:        "CODEX_API_KEY",
+			Description: "Authenticate with CODEX_API_KEY from environment.",
+			Type:        "codex_api_key",
+			Label:       "CODEX_API_KEY",
+		},
+		{
+			ID:          "openai_api_key",
+			Name:        "OPENAI_API_KEY",
+			Description: "Authenticate with OPENAI_API_KEY from environment.",
+			Type:        "openai_api_key",
+			Label:       "OPENAI_API_KEY",
+		},
+		{
+			ID:          "chatgpt_subscription",
+			Name:        "ChatGPT subscription",
+			Description: "Authenticate with existing Codex CLI subscription login state.",
+			Type:        "chatgpt_subscription",
+			Label:       "ChatGPT subscription",
+		},
+	}
+
 	result := InitializeResult{
 		AgentCapabilities: AgentCapabilities{
 			Sessions:      true,
@@ -295,14 +322,47 @@ func (s *Server) handleInitialize(id json.RawMessage, paramsRaw json.RawMessage)
 			SlashCommands: true,
 			Permissions:   true,
 		},
-		AuthMethods: []AuthMethod{
-			{Type: "codex_api_key", Label: "CODEX_API_KEY"},
-			{Type: "openai_api_key", Label: "OPENAI_API_KEY"},
-			{Type: "chatgpt_subscription", Label: "ChatGPT subscription"},
-		},
+		AuthMethods:      authMethods,
 		ActiveAuthMethod: s.currentAuthMode(),
 	}
 	_ = s.codec.WriteResult(id, result)
+}
+
+func (s *Server) handleAuthenticate(id json.RawMessage, paramsRaw json.RawMessage) {
+	var params AuthenticateParams
+	if err := decodeParams(paramsRaw, &params); err != nil {
+		s.writeInvalidParams(id, map[string]any{"error": err.Error()})
+		return
+	}
+
+	methodID := strings.TrimSpace(params.MethodID)
+	if methodID == "" {
+		methodID = strings.TrimSpace(params.Type)
+	}
+	switch methodID {
+	case "codex_api_key", "openai_api_key", "chatgpt_subscription":
+	default:
+		s.writeInvalidParams(id, map[string]any{
+			"methodId": "unsupported auth method",
+			"allowed": []string{
+				"codex_api_key",
+				"openai_api_key",
+				"chatgpt_subscription",
+			},
+		})
+		return
+	}
+
+	s.authMu.Lock()
+	s.authMode = methodID
+	s.lastAuthMode = methodID
+	s.authLoggedIn = true
+	s.authMu.Unlock()
+
+	_ = s.codec.WriteResult(id, AuthenticateResult{
+		Authenticated:    true,
+		ActiveAuthMethod: methodID,
+	})
 }
 
 func (s *Server) handleSessionNew(ctx context.Context, id json.RawMessage, paramsRaw json.RawMessage) {
@@ -343,8 +403,8 @@ func (s *Server) handleSessionNew(ctx context.Context, id json.RawMessage, param
 }
 
 func (s *Server) handleSessionPrompt(ctx context.Context, id json.RawMessage, paramsRaw json.RawMessage) {
-	var params SessionPromptParams
-	if err := decodeParams(paramsRaw, &params); err != nil {
+	params, err := decodeSessionPromptParams(paramsRaw)
+	if err != nil {
 		s.writeInvalidParams(id, map[string]any{"error": err.Error()})
 		return
 	}
@@ -694,7 +754,21 @@ func shouldRetryAfterSupervisorRestart(err error) bool {
 		return false
 	}
 	lower := strings.ToLower(err.Error())
-	return strings.Contains(lower, "app-server restarted, retry request")
+	if strings.Contains(lower, "app-server restarted, retry request") {
+		return true
+	}
+	restartWindowTokens := []string{
+		"file already closed",
+		"broken pipe",
+		"connection reset",
+		"eof",
+	}
+	for _, token := range restartWindowTokens {
+		if strings.Contains(lower, token) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) handleApprovalEvent(
@@ -809,10 +883,88 @@ func (s *Server) writeError(id json.RawMessage, code int, message string, data m
 func (s *Server) emitUpdates(updates []SessionUpdateParams) {
 	for _, update := range updates {
 		update = s.attachSessionTodos(update)
-		if err := s.codec.WriteNotification(methodSessionUpdate, update); err != nil {
+		payload := buildSessionUpdatePayload(update)
+		if err := s.codec.WriteNotification(methodSessionUpdate, payload); err != nil {
 			s.logger.Warn("failed to write session/update", slog.String("error", err.Error()))
 			return
 		}
+	}
+}
+
+func buildSessionUpdatePayload(update SessionUpdateParams) map[string]any {
+	payload := map[string]any{
+		"sessionId": update.SessionID,
+	}
+	if update.TurnID != "" {
+		payload["turnId"] = update.TurnID
+	}
+	if update.Type != "" {
+		payload["type"] = update.Type
+	}
+	if update.Phase != "" {
+		payload["phase"] = update.Phase
+	}
+	if update.ItemID != "" {
+		payload["itemId"] = update.ItemID
+	}
+	if update.ItemType != "" {
+		payload["itemType"] = update.ItemType
+	}
+	if update.Delta != "" {
+		payload["delta"] = update.Delta
+	}
+	if update.Status != "" {
+		payload["status"] = update.Status
+	}
+	if update.Message != "" {
+		payload["message"] = update.Message
+	}
+	if update.ToolCallID != "" {
+		payload["toolCallId"] = update.ToolCallID
+	}
+	if update.Approval != "" {
+		payload["approval"] = update.Approval
+	}
+	if update.PermissionDecision != "" {
+		payload["permissionDecision"] = update.PermissionDecision
+	}
+	if len(update.Todo) > 0 {
+		payload["todo"] = update.Todo
+	}
+
+	if mapped := mapACPUpdateForClient(update); mapped != nil {
+		payload["update"] = mapped
+	}
+
+	return payload
+}
+
+func mapACPUpdateForClient(update SessionUpdateParams) map[string]any {
+	switch update.Type {
+	case "message":
+		return map[string]any{
+			"sessionUpdate": "agent_message_chunk",
+			"content": map[string]any{
+				"type": "text",
+				"text": update.Delta,
+			},
+		}
+	case "tool_call_update":
+		mapped := map[string]any{
+			"sessionUpdate": "tool_call_update",
+		}
+		if update.ToolCallID != "" {
+			mapped["toolCallId"] = update.ToolCallID
+		}
+		if update.Status != "" {
+			mapped["status"] = update.Status
+		}
+		if update.Message != "" {
+			mapped["title"] = update.Message
+		}
+		return mapped
+	default:
+		return nil
 	}
 }
 
@@ -963,6 +1115,57 @@ func decodeParams(raw json.RawMessage, out any) error {
 		return fmt.Errorf("decode params: %w", err)
 	}
 	return nil
+}
+
+func decodeSessionPromptParams(raw json.RawMessage) (SessionPromptParams, error) {
+	type promptWire struct {
+		SessionID string               `json:"sessionId"`
+		Prompt    json.RawMessage      `json:"prompt,omitempty"`
+		Content   []PromptContentBlock `json:"content,omitempty"`
+		Resources []PromptResource     `json:"resources,omitempty"`
+		PromptConfig
+	}
+
+	var wire promptWire
+	if err := decodeParams(raw, &wire); err != nil {
+		return SessionPromptParams{}, err
+	}
+
+	params := SessionPromptParams{
+		SessionID:    wire.SessionID,
+		Content:      wire.Content,
+		Resources:    wire.Resources,
+		PromptConfig: wire.PromptConfig,
+	}
+
+	promptRaw := strings.TrimSpace(string(wire.Prompt))
+	if promptRaw == "" || promptRaw == "null" {
+		return params, nil
+	}
+
+	var promptText string
+	if err := json.Unmarshal(wire.Prompt, &promptText); err == nil {
+		params.Prompt = promptText
+		return params, nil
+	}
+
+	var promptBlocks []PromptContentBlock
+	if err := json.Unmarshal(wire.Prompt, &promptBlocks); err == nil {
+		if len(params.Content) == 0 {
+			params.Content = promptBlocks
+		} else {
+			params.Content = append(promptBlocks, params.Content...)
+		}
+		return params, nil
+	}
+
+	var singleBlock PromptContentBlock
+	if err := json.Unmarshal(wire.Prompt, &singleBlock); err == nil {
+		params.Content = append([]PromptContentBlock{singleBlock}, params.Content...)
+		return params, nil
+	}
+
+	return SessionPromptParams{}, fmt.Errorf("decode params: prompt must be string or content block(s)")
 }
 
 func fallbackPrompt(raw json.RawMessage) string {

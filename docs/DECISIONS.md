@@ -30,6 +30,7 @@
 - ADR-0024：app-server 中途崩溃时的“当次 turn 内部重试一次”策略
 - ADR-0025：`/logout` 恢复指引与 app-server auth 清理兼容策略
 - ADR-0026：go module 使用 GitHub canonical 路径
+- ADR-0027：协议形态兼容策略（prompt 多形态 + session/update 标准 envelope + app-server v2 嵌套返回）
 
 ---
 
@@ -500,4 +501,38 @@
   - `internal/acp/server.go`
   - `testdata/fake_codex_app_server/main.go`
 - 验证方式（测试/验收项）：
+  - `go test ./...`
+
+### ADR-0027：协议形态兼容策略（prompt 多形态 + session/update 标准 envelope + app-server v2 嵌套返回）
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - 不同 ACP 客户端对 `session/prompt` 的请求形态存在差异：有的使用 `prompt: string`，有的使用 `prompt: ContentBlock[]`。
+  - 部分客户端的聊天 UI 仅消费标准 `session/update.params.update.sessionUpdate` 结构；仅发送扁平 `type/delta` 时会出现“traffic 有内容但 UI 不渲染”。
+  - 新版 codex app-server 返回体与通知中，`threadId/turnId/stopReason` 有向 `thread.id/turn.id/turn.status` 嵌套结构迁移的趋势。
+- 决策：
+  - `session/prompt` 统一解码入口接受：`prompt: string | ContentBlock | ContentBlock[]`。
+  - `session/update` 采用“超集输出”：
+    - 保留既有扁平字段（兼容现有测试与客户端）
+    - 同时填充标准 `update.sessionUpdate` 结构（当前覆盖 `agent_message_chunk`、`tool_call_update`）
+  - app-server client 在关键路径做双形态兼容：
+    - `thread/start`：`threadId` 或 `thread.id`
+    - `turn/start/review/start/thread/compact/start`：`turnId` 或 `turn.id`
+    - `turn/completed`：`stopReason` 或 `turn.status`
+- 备选方案：
+  - 方案A：只支持一种 ACP 请求/更新形态，要求客户端适配。
+  - 方案B：改成全量 schema 生成并一次性替换所有手写类型。
+  - 方案C：在关键链路先做双形态容错与超集输出，再逐步收敛到 schema 主导。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：快速恢复跨客户端可用性；避免因为单字段漂移导致会话不可用；对现有行为回归影响最小。
+  - Cons：过渡期需要同时维护扁平字段和标准 envelope；`update.sessionUpdate` 目前仅覆盖高频类型。
+- 影响范围（文件/模块）：
+  - `internal/acp/server.go`
+  - `internal/appserver/client.go`
+  - `internal/appserver/types.go`
+  - `test/integration/e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EPromptArrayContentBlocksAccepted`
+  - `TestE2EMessageUpdateIncludesACPUpdateEnvelope`
+  - `TestE2EAcceptanceA1ToA5AndB1`
   - `go test ./...`

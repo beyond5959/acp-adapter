@@ -114,6 +114,14 @@
    - 重写根目录 `README.md` 为精简使用版：仅保留 What/Features/Quickstart/Usage tips
    - 明确 ACP stdio 约束（newline JSON-RPC、stdout 仅协议、stderr 日志）与下游 Codex App Server 链路
    - 保留最小 Zed external agent 配置模板与实际生效的环境变量名
+9. 补充 ACP 认证元数据与认证选择入口：
+   - `initialize.authMethods` 增加 `id/name/description` 字段，并保留 `type/label` 兼容已有客户端
+   - 新增 `authenticate` RPC（`methodId`）用于 client 选择认证方式并刷新 adapter 认证态
+   - 崩溃重试窗口增强：`file already closed` 等错误纳入 supervisor 重启后二次重试判定，降低中途崩溃误失败
+10. 修复 ACP `session/prompt` 参数形态与 `session/update` 渲染协议兼容：
+   - `session/prompt` 新增对 `prompt` 为 `string | ContentBlock | ContentBlock[]` 的统一解码
+   - `session/update` 保留现有扁平字段，同时补充标准 `update.sessionUpdate` 结构（如 `agent_message_chunk`）
+   - 适配下游新版 app-server 响应结构：`thread.id` / `turn.id` / `turn.status`
 
 ## 影响范围是什么
 1. `internal/acp`：slash 路由矩阵、inline MCP command 执行、auth gate、profile 解析与运行参数透传。
@@ -125,6 +133,10 @@
 7. `internal/bridge`：新增 active turn 替换能力，支持内部重试后把 cancel 目标切换到新 turnId。
 8. `internal/appserver`：logout 方法改为 `account/logout -> auth/logout` 兼容回退。
 9. 文档：新增并精简根目录 `README.md`（面向终端用户使用说明）。
+10. `internal/acp`：认证元数据输出与 `authenticate` 请求处理；增强重试窗口错误判定。
+11. `test/integration`：新增 `TestE2EAuthMethodsAndAuthenticateFlow`，覆盖 authMethods 字段与 `authenticate` 基本链路。
+12. `internal/acp`：`session/prompt` 支持 `prompt` 数组/对象输入；`session/update` 增加标准 `update.sessionUpdate` 映射。
+13. `internal/appserver`：兼容新版 `thread/start`、`turn/start` 与 `turn/completed` 返回结构。
 
 ## 如何验证
 1. 执行：
@@ -157,6 +169,8 @@
      - `TestE2EAcceptanceMCPListCallAndOAuth`
      - `TestE2EAcceptanceI1ToI3AuthMethods`
      - `TestE2EAuthRequiredWithoutConfiguredMethod`
+     - `TestE2EPromptArrayContentBlocksAccepted`
+     - `TestE2EMessageUpdateIncludesACPUpdateEnvelope`
      - `TestE2ERealCodexAppServer_BasicPromptAndCancel`（`E2E_REAL_CODEX=1`）
      - `TestE2ERealCodexAppServer_AuthMissingReturnsClearError`（`E2E_REAL_CODEX=1`）
      - `TestE2ERealCodexAppServer_AuthInjectedKeyRecovers`（需注入 key，`E2E_REAL_CODEX=1`）
@@ -176,6 +190,7 @@
 1. 当前“当次请求自动重试”仅在未发出不可重放内容时启用（幂等边界）；若已进入不可安全重放阶段，仍会 fail-closed 并提示用户重试一次 prompt。
 2. `/logout` 已提供明确可复制恢复指引并清理 app-server/client 认证态；但仍缺少“同进程无重启 re-auth RPC”。
 3. 已补充真实 codex app-server 的 mcp/auth/compact 基本存在性回归；但复杂行为（多版本兼容、MCP 工具结果语义、compact 实际压缩质量）仍需持续联调。
+4. `session/update` 目前已补齐 `agent_message_chunk` 与 `tool_call_update` 的标准 `update.sessionUpdate` 映射；其余更新类型仍以扁平字段为主，跨客户端 UI 表现可能不一致。
 
 ## 当前阻塞（Blockers）
 - 无
@@ -185,6 +200,7 @@
 2. 在 CI 增加可选 `e2e-real` 作业（含 `make schema`）并固化环境前置检查。
 3. 评估 `/logout` 的进程内 re-auth RPC，消除重启恢复依赖。
 4. 评估“已发出部分输出后的安全重放”策略（例如可选缓冲提交），进一步缩小人工重试窗口。
+5. 扩展 `session/update` 的标准 `update.sessionUpdate` 映射覆盖（plan/thought/tool 生命周期），提升跨 ACP 客户端渲染一致性。
 
 ## 变更摘要（每 PR 一条）
 ### 2026-02-26 — PR1 工程骨架 + 双 codec + 最小 e2e harness
@@ -374,5 +390,30 @@
 - C. 验证:
   - 执行 `go test ./...` 通过
   - 全仓检查无残留 `\"codex-acp/...\"` 导入
+- D. 文档:
+  - 更新 `PROGRESS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`
+
+### 2026-02-27 — 协议形态兼容修复（prompt 多形态 + session/update 标准 envelope）
+- A. 范围与目标:
+  - 解决 ACP 客户端使用 `prompt: ContentBlock[]` 时 `session/prompt` 直接 `invalid params` 的问题
+  - 解决仅有 protocol traffic 可见、聊天面板不渲染 `message delta` 的问题
+  - 对齐新版 app-server 的嵌套返回结构（`thread.id` / `turn.id` / `turn.status`）
+- B. 实现:
+  - `session/prompt` 参数解码升级为 `prompt: string | ContentBlock | ContentBlock[]` 统一入口
+  - `session/update` 输出升级为超集：
+    - 保留既有扁平字段（`type/delta/status/...`）
+    - 同步输出标准 `update.sessionUpdate` 结构（当前覆盖 `agent_message_chunk`、`tool_call_update`）
+  - app-server client 同时兼容旧/新返回形态：
+    - `thread/start`: `threadId` 或 `thread.id`
+    - `turn/start/review/start/thread/compact/start`: `turnId` 或 `turn.id`
+    - `turn/completed`: `stopReason` 或 `turn.status`
+- C. 验证:
+  - 新增：
+    - `TestE2EPromptArrayContentBlocksAccepted`
+    - `TestE2EMessageUpdateIncludesACPUpdateEnvelope`
+  - 回归：
+    - `TestE2EAcceptanceA1ToA5AndB1`
+    - `TestE2EAuthMethodsAndAuthenticateFlow`
+  - `go test ./...` 通过（偶发 integration 超时重跑后可过）
 - D. 文档:
   - 更新 `PROGRESS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`

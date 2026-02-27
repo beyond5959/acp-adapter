@@ -70,7 +70,8 @@ type ThreadStartParams struct {
 
 // ThreadStartResult carries new thread id.
 type ThreadStartResult struct {
-	ThreadID string `json:"threadId"`
+	ThreadID string     `json:"threadId,omitempty"`
+	Thread   *ThreadRef `json:"thread,omitempty"`
 }
 
 // TurnStartParams starts a turn under one thread.
@@ -82,7 +83,8 @@ type TurnStartParams struct {
 
 // TurnStartResult carries new turn id.
 type TurnStartResult struct {
-	TurnID string `json:"turnId"`
+	TurnID string   `json:"turnId,omitempty"`
+	Turn   *TurnRef `json:"turn,omitempty"`
 }
 
 // ReviewStartParams starts a review workflow in one thread.
@@ -94,7 +96,9 @@ type ReviewStartParams struct {
 
 // ReviewStartResult returns review turn id.
 type ReviewStartResult struct {
-	TurnID string `json:"turnId"`
+	TurnID       string   `json:"turnId,omitempty"`
+	Turn         *TurnRef `json:"turn,omitempty"`
+	ReviewThread string   `json:"reviewThreadId,omitempty"`
 }
 
 // CompactStartParams starts one compact operation under one thread.
@@ -104,7 +108,8 @@ type CompactStartParams struct {
 
 // CompactStartResult returns compact turn id.
 type CompactStartResult struct {
-	TurnID string `json:"turnId"`
+	TurnID string   `json:"turnId,omitempty"`
+	Turn   *TurnRef `json:"turn,omitempty"`
 }
 
 // TurnInterruptParams interrupts an active turn.
@@ -115,8 +120,9 @@ type TurnInterruptParams struct {
 
 // TurnStartedNotification notifies that one turn has entered running state.
 type TurnStartedNotification struct {
-	ThreadID string `json:"threadId"`
-	TurnID   string `json:"turnId"`
+	ThreadID string   `json:"threadId"`
+	TurnID   string   `json:"turnId,omitempty"`
+	Turn     *TurnRef `json:"turn,omitempty"`
 }
 
 // TurnUpdateNotification is streamed while the turn is running.
@@ -136,25 +142,45 @@ type ItemAgentMessageDeltaNotification struct {
 
 // ItemStartedNotification marks one streamed item as started.
 type ItemStartedNotification struct {
-	ThreadID string `json:"threadId"`
-	TurnID   string `json:"turnId"`
-	ItemID   string `json:"itemId,omitempty"`
-	ItemType string `json:"itemType,omitempty"`
+	ThreadID string         `json:"threadId"`
+	TurnID   string         `json:"turnId"`
+	ItemID   string         `json:"itemId,omitempty"`
+	ItemType string         `json:"itemType,omitempty"`
+	Item     *ThreadItemRef `json:"item,omitempty"`
 }
 
 // ItemCompletedNotification marks one streamed item as completed.
 type ItemCompletedNotification struct {
-	ThreadID string `json:"threadId"`
-	TurnID   string `json:"turnId"`
-	ItemID   string `json:"itemId,omitempty"`
-	ItemType string `json:"itemType,omitempty"`
+	ThreadID string         `json:"threadId"`
+	TurnID   string         `json:"turnId"`
+	ItemID   string         `json:"itemId,omitempty"`
+	ItemType string         `json:"itemType,omitempty"`
+	Item     *ThreadItemRef `json:"item,omitempty"`
 }
 
 // TurnCompletedNotification finalizes a turn.
 type TurnCompletedNotification struct {
-	ThreadID   string `json:"threadId"`
-	TurnID     string `json:"turnId"`
-	StopReason string `json:"stopReason,omitempty"`
+	ThreadID   string   `json:"threadId"`
+	TurnID     string   `json:"turnId,omitempty"`
+	StopReason string   `json:"stopReason,omitempty"`
+	Turn       *TurnRef `json:"turn,omitempty"`
+}
+
+// ThreadRef is a minimal thread object shape used by newer app-server payloads.
+type ThreadRef struct {
+	ID string `json:"id,omitempty"`
+}
+
+// TurnRef is a minimal turn object shape used by newer app-server payloads.
+type TurnRef struct {
+	ID     string `json:"id,omitempty"`
+	Status string `json:"status,omitempty"`
+}
+
+// ThreadItemRef is a minimal item object shape used by item started/completed notifications.
+type ThreadItemRef struct {
+	ID   string `json:"id,omitempty"`
+	Type string `json:"type,omitempty"`
 }
 
 // ReviewModeNotification indicates review mode lifecycle transitions.
