@@ -42,7 +42,7 @@
 
 ### B. App Server 对接
 - [x] B1 App Server 初始化
-- [ ] B2 Schema 锁定（make schema）
+- [x] B2 Schema 锁定（make schema）
 
 ### C. 内容能力
 - [ ] C1 @-mentions
@@ -114,6 +114,8 @@
 ## 如何验证
 1. 执行：
    - `go test ./...`
+   - 真实 app-server e2e：`E2E_REAL_CODEX=1 go test ./... -run TestE2E -count=1`
+     - 前置：本机 `codex app-server` 可用；无可用认证会在 real e2e 中给出 skip 原因
 2. 预期：
    - `test/integration` 通过，包含：
      - `TestE2EAcceptanceA1ToA5AndB1`
@@ -132,27 +134,29 @@
      - `TestE2EAcceptanceMCPListCallAndOAuth`
      - `TestE2EAcceptanceI1ToI3AuthMethods`
      - `TestE2EAuthRequiredWithoutConfiguredMethod`
+     - `TestE2ERealCodexInitializePromptAndCancel`（`E2E_REAL_CODEX=1`）
+     - `TestE2ERealCodexPromptInteractions`（含真实 prompt：`What is this project?`）
      - `TestRPCReaderDetectsInvalidStdoutLine`
    - PR5 相关验收由 e2e 自动覆盖：G/H/I + MCP；J1 由脚本触发专项回归。
    - 测试中持续校验 adapter stdout 每行均为合法 JSON-RPC。
+   - 真实 e2e 启用时会先执行 `make schema`（generate + schema-check + hash）再启动测试。
 3. J1 压测专项：
    - `make stress-j1` 或 `scripts/j1_stress.sh`
    - 预期：100 turns（含 approve/deny/cancel）完成，无崩溃、stdout 仍纯 JSON-RPC
 
 ## 遗留问题是什么
-1. B2 尚未完成：schema 仍为目录占位，缺少真实产物与 hash 追踪校验。
-2. C1/C2/F1 尚未完成：mentions、images、结构化 TODO 仍需实现。
-3. 当前崩溃恢复策略对“当次请求”返回可读失败，需要客户端重试一次（已在 KNOWN_ISSUES 记录）。
-4. `/logout` 当前仅清理适配器侧认证态，不含交互式重新登录入口（需外部重新配置/重启）。
-5. e2e 仍主要依赖 fake app-server，真实 codex app-server 的 mcp/auth/compact 行为仍需联调回归。
+1. C1/C2/F1 尚未完成：mentions、images、结构化 TODO 仍需实现。
+2. 当前崩溃恢复策略对“当次请求”返回可读失败，需要客户端重试一次（已在 KNOWN_ISSUES 记录）。
+3. `/logout` 当前仅清理适配器侧认证态，不含交互式重新登录入口（需外部重新配置/重启）。
+4. e2e 仍主要依赖 fake app-server，真实 codex app-server 的 mcp/auth/compact 行为仍需联调回归。
 
 ## 当前阻塞（Blockers）
 - 无
 
 ## 下一步（Next）
-1. 完成 B2：落地真实 schema 产物与 hash 可追踪校验（CI 校验）。
-2. 完成 C1/C2/F1：mentions、images、TODO 结构化输出。
-3. 做真实 codex app-server 联调：重点覆盖 `/compact`、`mcpServer/*`、`auth/logout` 与 profile 参数映射。
+1. 完成 C1/C2/F1：mentions、images、TODO 结构化输出。
+2. 做真实 codex app-server 联调：重点覆盖 `/compact`、`mcpServer/*`、`auth/logout` 与 profile 参数映射。
+3. 在 CI 增加可选 `e2e-real` 作业（含 `make schema`）并固化环境前置检查。
 
 ## 变更摘要（每 PR 一条）
 ### 2026-02-26 — PR1 工程骨架 + 双 codec + 最小 e2e harness
@@ -241,5 +245,20 @@
     - `TestE2EAuthRequiredWithoutConfiguredMethod`
     - `TestE2EAcceptanceJ1Stress100Turns`（`RUN_STRESS_J1=1`）
   - `go test ./...` 通过
+- D. 文档:
+  - 更新 `PROGRESS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`
+
+### 2026-02-27 — Real Codex e2e + trace-json + schema 前置校验
+- A. 范围与目标:
+  - 增加真实 `codex app-server` 子进程 e2e（`E2E_REAL_CODEX=1`），覆盖 initialize/new/prompt/cancel 基线
+  - 提供 trace-json 脱敏落盘调试能力并保持 stdout 纯 ACP JSON-RPC
+- B. 实现:
+  - 新增 `TestE2ERealCodexInitializePromptAndCancel`（真实 app-server 路径）
+  - e2e 真实模式前置 `make schema`（生成 + 校验 + hash）
+  - 新增 `--trace-json` + `--trace-json-file`，记录 ACP/AppServer 双向脱敏 JSONL
+  - 强化 rpcReader：stdout 每行必须是严格 JSON-RPC envelope
+- C. 验证:
+  - `go test ./...` 通过
+  - `E2E_REAL_CODEX=1 go test ./... -run TestE2E -count=1`（本机具备 codex/auth 环境时）
 - D. 文档:
   - 更新 `PROGRESS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`

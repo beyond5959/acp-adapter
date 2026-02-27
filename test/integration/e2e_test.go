@@ -21,6 +21,11 @@ const (
 	quietWindow     = 300 * time.Millisecond
 )
 
+var (
+	realSchemaOnce sync.Once
+	realSchemaErr  error
+)
+
 type rpcMessage struct {
 	JSONRPC string           `json:"jsonrpc,omitempty"`
 	ID      *json.RawMessage `json:"id,omitempty"`
@@ -100,8 +105,8 @@ func newRPCReader(t *testing.T, stdout io.Reader) *rpcReader {
 				reader.setErr(fmt.Errorf("stdout line is not json-rpc: %w; line=%q", err, string(line)))
 				return
 			}
-			if msg.JSONRPC != "" && msg.JSONRPC != "2.0" {
-				reader.setErr(fmt.Errorf("unexpected jsonrpc version: %q", msg.JSONRPC))
+			if err := validateJSONRPCMessage(msg); err != nil {
+				reader.setErr(fmt.Errorf("stdout line is not valid ACP JSON-RPC: %w; line=%q", err, string(line)))
 				return
 			}
 			reader.messages <- msg
@@ -166,21 +171,48 @@ type adapterHarness struct {
 }
 
 func startAdapter(t *testing.T, extraEnv ...string) *adapterHarness {
+	if isRealCodexEnabled() {
+		t.Skip("fake app-server e2e skipped when E2E_REAL_CODEX=1; run real codex e2e tests")
+	}
+	return startAdapterWithConfig(t, nil, false, extraEnv...)
+}
+
+func startAdapterReal(t *testing.T, args []string, extraEnv ...string) *adapterHarness {
+	t.Helper()
+	requireRealCodex(t)
+	ensureRealSchema(t)
+	return startAdapterWithConfig(t, args, true, extraEnv...)
+}
+
+func startAdapterWithConfig(t *testing.T, args []string, useRealCodex bool, extraEnv ...string) *adapterHarness {
 	t.Helper()
 
 	rootDir := repoRoot(t)
-	fakeServerBin := buildBinary(t, rootDir, "./testdata/fake_codex_app_server")
 	adapterBin := buildBinary(t, rootDir, "./cmd/codex-acp-go")
 
-	cmd := exec.Command(adapterBin)
+	cmdArgs := append([]string(nil), args...)
+	cmd := exec.Command(adapterBin, cmdArgs...)
 	cmd.Dir = rootDir
-	cmd.Env = append(os.Environ(),
-		append([]string{
-			"CODEX_APP_SERVER_CMD=" + fakeServerBin,
+	envBase := []string{"LOG_LEVEL=debug"}
+	if useRealCodex {
+		codexCmd := firstNonEmpty(strings.TrimSpace(os.Getenv("E2E_REAL_CODEX_CMD")), "codex")
+		codexArgs := firstNonEmpty(strings.TrimSpace(os.Getenv("E2E_REAL_CODEX_ARGS")), "app-server")
+		if _, err := exec.LookPath(codexCmd); err != nil {
+			t.Skipf("real codex command %q not found: %v", codexCmd, err)
+		}
+		envBase = append(envBase,
+			"CODEX_APP_SERVER_CMD="+codexCmd,
+			"CODEX_APP_SERVER_ARGS="+codexArgs,
+		)
+	} else {
+		fakeServerBin := buildBinary(t, rootDir, "./testdata/fake_codex_app_server")
+		envBase = append(envBase,
+			"CODEX_APP_SERVER_CMD="+fakeServerBin,
 			"CODEX_APP_SERVER_ARGS=",
-			"LOG_LEVEL=debug",
-		}, extraEnv...)...,
-	)
+			"CHATGPT_SUBSCRIPTION_ACTIVE=1",
+		)
+	}
+	cmd.Env = append(os.Environ(), append(envBase, extraEnv...)...)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -1661,11 +1693,322 @@ func TestE2EAcceptanceJ1Stress100Turns(t *testing.T) {
 	h.assertStdoutPureJSONRPC()
 }
 
+func TestE2ERealCodexInitializePromptAndCancel(t *testing.T) {
+	requireRealCodex(t)
+
+	traceFile := filepath.Join(t.TempDir(), "real-e2e-trace.jsonl")
+	h := startAdapterReal(t, []string{"--trace-json", "--trace-json-file", traceFile})
+	sessionID := realCodexInitializeAndSession(t, h, map[string]any{
+		"apiKey": "sk-local-secret-for-redaction-check",
+	})
+	_ = realCodexPromptRoundtrip(
+		t,
+		h,
+		sessionID,
+		"3",
+		"Reply with one short sentence confirming this is a real codex e2e smoke test.",
+		1,
+	)
+
+	cancelSuccess := false
+	for attempt := 1; attempt <= 3 && !cancelSuccess; attempt++ {
+		promptID := fmt.Sprintf("4-%d", attempt)
+		cancelID := fmt.Sprintf("5-%d", attempt)
+
+		h.sendRequest(promptID, "session/prompt", map[string]any{
+			"sessionId": sessionID,
+			"prompt": "Think in detail for a while and do not finalize quickly. " +
+				"Produce a long intermediate reasoning summary before any conclusion.",
+		})
+
+		cancelSent := false
+		gotCancelResp := false
+		gotPromptResp := false
+		cancelled := false
+		deadline := time.Now().Add(40 * time.Second)
+		for time.Now().Before(deadline) && !(gotCancelResp && gotPromptResp) {
+			msg := h.nextMessage(time.Until(deadline))
+			switch msg.Method {
+			case "session/update":
+				if cancelSent {
+					continue
+				}
+				update := decodeSessionUpdate(t, msg)
+				if update.SessionID != sessionID {
+					continue
+				}
+				h.sendRequest(cancelID, "session/cancel", map[string]any{"sessionId": sessionID})
+				cancelSent = true
+			case "session/request_permission":
+				h.sendResultResponse(messageID(msg), map[string]any{"outcome": "declined"})
+			default:
+				switch messageID(msg) {
+				case cancelID:
+					var result struct {
+						Cancelled bool `json:"cancelled"`
+					}
+					unmarshalResult(t, msg, &result)
+					gotCancelResp = true
+				case promptID:
+					var result struct {
+						StopReason string `json:"stopReason"`
+					}
+					unmarshalResult(t, msg, &result)
+					if result.StopReason == "cancelled" {
+						cancelled = true
+					}
+					gotPromptResp = true
+				}
+			}
+		}
+
+		if gotCancelResp && gotPromptResp && cancelled {
+			cancelSuccess = true
+		}
+	}
+	if !cancelSuccess {
+		t.Fatalf("session/cancel e2e expected stopReason=cancelled within retry window")
+	}
+
+	h.assertStdoutPureJSONRPC()
+
+	data, err := os.ReadFile(traceFile)
+	if err != nil {
+		t.Fatalf("read trace file: %v", err)
+	}
+	if len(strings.TrimSpace(string(data))) == 0 {
+		t.Fatalf("trace file should not be empty")
+	}
+	traceText := string(data)
+	if !strings.Contains(traceText, `"stream":"acp"`) || !strings.Contains(traceText, `"stream":"appserver"`) {
+		t.Fatalf("trace file should include both acp and appserver streams")
+	}
+	if strings.Contains(traceText, "sk-local-secret-for-redaction-check") {
+		t.Fatalf("trace file leaked unredacted secret")
+	}
+	if !strings.Contains(traceText, "[REDACTED]") {
+		t.Fatalf("trace file should contain redacted marker")
+	}
+}
+
+func TestE2ERealCodexPromptInteractions(t *testing.T) {
+	requireRealCodex(t)
+
+	h := startAdapterReal(t, nil)
+	sessionID := realCodexInitializeAndSession(t, h, nil)
+
+	prompts := []struct {
+		name   string
+		prompt string
+	}{
+		{
+			name:   "ProjectQuestion",
+			prompt: "What is this project?",
+		},
+		{
+			name:   "CapabilitiesQuestion",
+			prompt: "List two key capabilities this repository implements.",
+		},
+		{
+			name:   "EntryPointQuestion",
+			prompt: "What does cmd/codex-acp-go do? Answer in one sentence.",
+		},
+	}
+
+	for i, tc := range prompts {
+		t.Run(tc.name, func(t *testing.T) {
+			responseText := realCodexPromptRoundtrip(
+				t,
+				h,
+				sessionID,
+				fmt.Sprintf("real-prompt-%d", i+1),
+				tc.prompt,
+				1,
+			)
+			if strings.TrimSpace(responseText) == "" {
+				t.Fatalf("real prompt %q produced empty message output", tc.prompt)
+			}
+		})
+	}
+
+	h.assertStdoutPureJSONRPC()
+}
+
+func realCodexInitializeAndSession(t *testing.T, h *adapterHarness, initParams map[string]any) string {
+	t.Helper()
+
+	if initParams == nil {
+		initParams = map[string]any{}
+	}
+	h.sendRequest("real-init", "initialize", initParams)
+	initResp := h.waitResponse("real-init", 20*time.Second)
+	var initResult struct {
+		AgentCapabilities struct {
+			Sessions bool `json:"sessions"`
+		} `json:"agentCapabilities"`
+	}
+	unmarshalResult(t, initResp, &initResult)
+	if !initResult.AgentCapabilities.Sessions {
+		t.Fatalf("initialize should report sessions capability")
+	}
+
+	h.sendRequest("real-new", "session/new", map[string]any{})
+	newResp := h.waitResponse("real-new", 30*time.Second)
+	if newResp.Error != nil {
+		lower := strings.ToLower(newResp.Error.Message)
+		if strings.Contains(lower, "thread/start failed") || strings.Contains(lower, "authentication") {
+			t.Skipf(
+				"real codex e2e requires available local codex auth/session: %s",
+				newResp.Error.Message,
+			)
+		}
+		t.Fatalf("session/new failed: code=%d message=%s", newResp.Error.Code, newResp.Error.Message)
+	}
+
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+	if newResult.SessionID == "" {
+		t.Fatalf("session/new returned empty sessionId")
+	}
+	return newResult.SessionID
+}
+
+func realCodexPromptRoundtrip(
+	t *testing.T,
+	h *adapterHarness,
+	sessionID string,
+	requestID string,
+	prompt string,
+	minUpdates int,
+) string {
+	t.Helper()
+
+	h.sendRequest(requestID, "session/prompt", map[string]any{
+		"sessionId": sessionID,
+		"prompt":    prompt,
+	})
+
+	updates := 0
+	var deltas []string
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		msg := h.nextMessage(time.Until(deadline))
+		switch msg.Method {
+		case "session/update":
+			update := decodeSessionUpdate(t, msg)
+			if update.SessionID != sessionID {
+				continue
+			}
+			updates++
+			if update.Type == "message" && strings.TrimSpace(update.Delta) != "" {
+				deltas = append(deltas, update.Delta)
+			}
+		case "session/request_permission":
+			// Keep real prompt test non-interactive if side-effect approval is requested.
+			h.sendResultResponse(messageID(msg), map[string]any{"outcome": "declined"})
+		default:
+			if messageID(msg) != requestID {
+				continue
+			}
+			var result struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, msg, &result)
+			if result.StopReason != "end_turn" {
+				t.Fatalf("prompt %q expected stopReason=end_turn, got %q", prompt, result.StopReason)
+			}
+			if updates < minUpdates {
+				t.Fatalf("prompt %q expected at least %d updates, got %d", prompt, minUpdates, updates)
+			}
+			return strings.Join(deltas, "")
+		}
+	}
+
+	t.Fatalf("timed out waiting for prompt response id=%s", requestID)
+	return ""
+}
+
+func TestE2ETraceJSONFileRedaction(t *testing.T) {
+	if isRealCodexEnabled() {
+		t.Skip("trace fake harness test skipped when E2E_REAL_CODEX=1")
+	}
+
+	traceFile := filepath.Join(t.TempDir(), "trace-redaction.jsonl")
+	h := startAdapterWithConfig(
+		t,
+		[]string{"--trace-json", "--trace-json-file", traceFile},
+		false,
+	)
+
+	h.sendRequest("1", "initialize", map[string]any{
+		"apiKey": "sk-test-redaction-secret",
+	})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	resp := h.waitResponse("2", responseTimeout)
+	var result struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, resp, &result)
+	if result.SessionID == "" {
+		t.Fatalf("session/new returned empty sessionId")
+	}
+
+	h.assertStdoutPureJSONRPC()
+
+	data, err := os.ReadFile(traceFile)
+	if err != nil {
+		t.Fatalf("read trace file: %v", err)
+	}
+	if len(strings.TrimSpace(string(data))) == 0 {
+		t.Fatalf("trace file should contain at least one entry")
+	}
+	text := string(data)
+	if strings.Contains(text, "sk-test-redaction-secret") {
+		t.Fatalf("trace file leaked secret")
+	}
+	if !strings.Contains(text, "[REDACTED]") {
+		t.Fatalf("trace file should include redacted marker")
+	}
+	if !strings.Contains(text, `"stream":"acp"`) || !strings.Contains(text, `"stream":"appserver"`) {
+		t.Fatalf("trace file should include both acp and appserver streams")
+	}
+}
+
 func TestRPCReaderDetectsInvalidStdoutLine(t *testing.T) {
 	reader := newRPCReader(t, strings.NewReader("not-json-rpc\n"))
 	time.Sleep(100 * time.Millisecond)
 	if err := reader.readErr(); err == nil {
 		t.Fatalf("expected rpcReader to detect invalid stdout line")
+	}
+}
+
+func isRealCodexEnabled() bool {
+	return strings.TrimSpace(os.Getenv("E2E_REAL_CODEX")) == "1"
+}
+
+func requireRealCodex(t *testing.T) {
+	t.Helper()
+	if !isRealCodexEnabled() {
+		t.Skip("set E2E_REAL_CODEX=1 to run real codex app-server e2e")
+	}
+}
+
+func ensureRealSchema(t *testing.T) {
+	t.Helper()
+	realSchemaOnce.Do(func() {
+		root := repoRoot(t)
+		cmd := exec.Command("make", "schema")
+		cmd.Dir = root
+		if data, err := cmd.CombinedOutput(); err != nil {
+			realSchemaErr = fmt.Errorf("make schema failed: %w\n%s", err, string(data))
+		}
+	})
+	if realSchemaErr != nil {
+		t.Fatalf("schema preparation failed: %v", realSchemaErr)
 	}
 }
 
@@ -1676,6 +2019,15 @@ func repoRoot(t *testing.T) string {
 		t.Fatalf("runtime.Caller failed")
 	}
 	return filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func buildBinary(t *testing.T, rootDir, pkg string) string {
@@ -1790,6 +2142,30 @@ func decodeFSWriteTextFileParams(t *testing.T, msg rpcMessage) fsWriteTextFilePa
 		t.Fatalf("decode fs/write_text_file params: %v", err)
 	}
 	return params
+}
+
+func validateJSONRPCMessage(msg rpcMessage) error {
+	if msg.JSONRPC != "2.0" {
+		return fmt.Errorf("unexpected jsonrpc version: %q", msg.JSONRPC)
+	}
+
+	if msg.Method != "" {
+		if len(msg.Result) > 0 || msg.Error != nil {
+			return fmt.Errorf("method message cannot include result/error")
+		}
+		return nil
+	}
+
+	if msg.ID == nil {
+		return fmt.Errorf("response message missing id")
+	}
+	if len(msg.Result) == 0 && msg.Error == nil {
+		return fmt.Errorf("response message missing both result and error")
+	}
+	if len(msg.Result) > 0 && msg.Error != nil {
+		return fmt.Errorf("response message includes both result and error")
+	}
+	return nil
 }
 
 func messageID(msg rpcMessage) string {

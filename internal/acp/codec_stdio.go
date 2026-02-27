@@ -14,14 +14,24 @@ import (
 type StdioCodec struct {
 	reader *bufio.Reader
 	writer *bufio.Writer
+	trace  TraceFunc
 	mu     sync.Mutex
 }
 
+// TraceFunc records one json-rpc line for debug tracing.
+type TraceFunc func(direction string, payload []byte)
+
 // NewStdioCodec binds ACP codec to stdin/stdout streams.
 func NewStdioCodec(r io.Reader, w io.Writer) *StdioCodec {
+	return NewStdioCodecWithTrace(r, w, nil)
+}
+
+// NewStdioCodecWithTrace binds ACP codec with optional line tracer.
+func NewStdioCodecWithTrace(r io.Reader, w io.Writer, trace TraceFunc) *StdioCodec {
 	return &StdioCodec{
 		reader: bufio.NewReader(r),
 		writer: bufio.NewWriter(w),
+		trace:  trace,
 	}
 }
 
@@ -50,6 +60,9 @@ func (c *StdioCodec) ReadMessage() (RPCMessage, error) {
 		if unmarshalErr := json.Unmarshal([]byte(payload), &msg); unmarshalErr != nil {
 			return RPCMessage{}, fmt.Errorf("decode acp json-rpc: %w", unmarshalErr)
 		}
+		if c.trace != nil {
+			c.trace("in", []byte(payload))
+		}
 		return msg, nil
 	}
 }
@@ -75,6 +88,9 @@ func (c *StdioCodec) WriteMessage(msg RPCMessage) error {
 	}
 	if err := c.writer.Flush(); err != nil {
 		return fmt.Errorf("flush acp payload: %w", err)
+	}
+	if c.trace != nil {
+		c.trace("out", data)
 	}
 	return nil
 }

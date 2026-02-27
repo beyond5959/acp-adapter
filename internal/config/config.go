@@ -31,6 +31,7 @@ type Config struct {
 	AppServerCommand string
 	AppServerArgs    []string
 	TraceJSON        bool
+	TraceJSONFile    string
 	LogLevel         string
 	PatchApplyMode   string
 	Profiles         map[string]ProfileConfig
@@ -48,6 +49,7 @@ func Parse() Config {
 
 	defaultLogLevel := firstNonEmpty(os.Getenv("LOG_LEVEL"), "info")
 	defaultPatchApplyMode := firstNonEmpty(os.Getenv("PATCH_APPLY_MODE"), "appserver")
+	defaultTraceFile := firstNonEmpty(os.Getenv("TRACE_JSON_FILE"), "trace-jsonl.log")
 	defaultProfilesFile := strings.TrimSpace(os.Getenv("CODEX_ACP_PROFILES_FILE"))
 	defaultProfilesJSON := strings.TrimSpace(os.Getenv("CODEX_ACP_PROFILES_JSON"))
 	defaultProfile := strings.TrimSpace(os.Getenv("CODEX_ACP_DEFAULT_PROFILE"))
@@ -59,6 +61,7 @@ func Parse() Config {
 	flag.StringVar(&cfg.AppServerCommand, "app-server-cmd", defaultCommand, "app server command")
 	flag.StringVar(&argsRaw, "app-server-args", defaultArgsRaw, "app server args, space separated")
 	flag.BoolVar(&cfg.TraceJSON, "trace-json", false, "enable raw json tracing")
+	flag.StringVar(&cfg.TraceJSONFile, "trace-json-file", defaultTraceFile, "trace jsonl output file")
 	flag.StringVar(&cfg.LogLevel, "log-level", defaultLogLevel, "log level: debug|info|warn|error")
 	flag.StringVar(
 		&cfg.PatchApplyMode,

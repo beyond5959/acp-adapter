@@ -31,6 +31,20 @@ func main() {
 		}
 	}
 
+	var traceFile *observability.JSONTraceFile
+	if cfg.TraceJSON {
+		var err error
+		traceFile, err = observability.NewJSONTraceFile(cfg.TraceJSONFile)
+		if err != nil {
+			logger.Error("failed to open trace-json file", slog.String("error", err.Error()))
+			os.Exit(1)
+		}
+		logger.Info("trace-json enabled", slog.String("path", traceFile.Path()))
+		defer func() {
+			_ = traceFile.Close()
+		}()
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -39,6 +53,11 @@ func main() {
 			Command: cfg.AppServerCommand,
 			Args:    cfg.AppServerArgs,
 			Stderr:  os.Stderr,
+			Trace: func(direction string, payload []byte) {
+				if traceFile != nil {
+					traceFile.TraceAppServer(direction, payload)
+				}
+			},
 		},
 		Logger:            logger,
 		InitializeTimeout: 5 * time.Second,
@@ -52,7 +71,11 @@ func main() {
 	}()
 
 	server := acp.NewServer(
-		acp.NewStdioCodec(os.Stdin, os.Stdout),
+		acp.NewStdioCodecWithTrace(os.Stdin, os.Stdout, func(direction string, payload []byte) {
+			if traceFile != nil {
+				traceFile.TraceACP(direction, payload)
+			}
+		}),
 		supervisor,
 		bridge.NewStore(),
 		logger,

@@ -15,6 +15,7 @@ type ProcessConfig struct {
 	Args    []string
 	Env     []string
 	Stderr  io.Writer
+	Trace   TraceFunc
 }
 
 // Process wraps a running app-server subprocess.
@@ -22,6 +23,7 @@ type Process struct {
 	cmd        *exec.Cmd
 	stdinPipe  io.WriteCloser
 	stdoutPipe io.ReadCloser
+	trace      TraceFunc
 
 	waitCh    chan error
 	waitMu    sync.Mutex
@@ -61,6 +63,7 @@ func StartProcess(ctx context.Context, cfg ProcessConfig) (*Process, error) {
 		cmd:        cmd,
 		stdinPipe:  stdinPipe,
 		stdoutPipe: stdoutPipe,
+		trace:      cfg.Trace,
 		waitCh:     make(chan error, 1),
 	}
 

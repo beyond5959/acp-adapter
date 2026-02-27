@@ -23,6 +23,9 @@
 - ADR-0017：Profiles 解析与运行参数优先级（default profile + per-session/per-turn override）
 - ADR-0018：认证状态模型（启动时检测 + `/logout` fail-closed）
 - ADR-0019：MCP 命令面（list/call/oauth）与 side-effect 审批上收至 ACP permission
+- ADR-0020：真实 codex app-server e2e 开关与 schema 前置策略
+- ADR-0021：`--trace-json` 脱敏 JSONL 调试与 stdout 严格 JSON-RPC 校验
+- ADR-0022：真实 prompt 交互回归（多轮问答 smoke）
 
 ---
 
@@ -303,3 +306,75 @@
 - 验证方式（测试/验收项）：
   - `TestE2EAcceptanceMCPListCallAndOAuth`
   - 对应验收：PR5 MCP 功能点（并回归 D4、D5 的审批语义）
+
+### ADR-0020：真实 codex app-server e2e 开关与 schema 前置策略
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - 需要新增“本机真实 codex app-server”端到端验证，同时保留现有 fake harness 的可重复性。
+  - 真实 e2e 运行前必须先生成并校验 schema，避免协议漂移导致误判。
+- 决策：
+  - 引入 `E2E_REAL_CODEX=1` 开关，新增 `TestE2ERealCodexInitializePromptAndCancel`。
+  - 真实模式下测试前执行 `make schema`（`generate-json-schema + schema-check + SHA256SUMS`）。
+  - 旧 fake e2e 在真实模式下跳过，避免与真实后端行为差异导致噪声。
+  - 若本机缺少可用 codex 认证，real e2e 用例给出 skip 原因，避免把环境问题误判为代码回归。
+- 备选方案：
+  - 方案A：让所有 E2E 测试在开关打开时都跑真实后端。
+  - 方案B：保留 fake 与 real 两套用例，按开关切换。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：真实联调与稳定回归可并存，执行成本可控。
+  - Cons：维护两套 e2e 路径，需要持续对齐覆盖范围。
+- 影响范围（文件/模块）：
+  - `test/integration/e2e_test.go`
+  - `Makefile`
+- 验证方式（测试/验收项）：
+  - `E2E_REAL_CODEX=1 go test ./... -run TestE2E -count=1`
+  - 对应验收：A1、A2、A3、A4、A5（真实后端基线）
+
+### ADR-0021：`--trace-json` 脱敏 JSONL 调试与 stdout 严格 JSON-RPC 校验
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - 需要可落盘的双向协议调试能力，同时不能把敏感字段直接写入 trace。
+  - A1 要求 stdout 只允许 ACP JSON-RPC，需在测试端强化判定。
+- 决策：
+  - 新增 `--trace-json`、`--trace-json-file`，记录 ACP/AppServer 双向协议到 JSONL。
+  - trace 写入前按 key/value 规则脱敏（api_key/token/authorization/cookie 等）。
+  - e2e `rpcReader` 改为严格 JSON-RPC envelope 校验。
+- 备选方案：
+  - 方案A：仅输出原始文本 trace，不做结构化脱敏。
+  - 方案B：结构化 JSONL + 脱敏规则。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：定位问题更快，兼顾安全与可审计性。
+  - Cons：脱敏规则是启发式，仍需持续补充边界场景。
+- 影响范围（文件/模块）：
+  - `internal/observability/trace.go`
+  - `internal/acp/codec_stdio.go`
+  - `internal/appserver/codec_jsonl.go`
+  - `internal/appserver/process.go`
+  - `cmd/codex-acp-go/main.go`
+  - `test/integration/e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `TestE2ERealCodexInitializePromptAndCancel`（trace 文件存在 + 脱敏断言）
+  - `TestRPCReaderDetectsInvalidStdoutLine`
+  - 对应验收：A1、J2
+
+### ADR-0022：真实 prompt 交互回归（多轮问答 smoke）
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - 仅有“单 prompt + cancel”不足以覆盖真实 codex 在连续自然语言问答下的基本稳定性。
+- 决策：
+  - 新增 `TestE2ERealCodexPromptInteractions`，在同一真实 session 连续执行多轮 prompt。
+  - 覆盖固定问题集（包含 `What is this project?`），每轮要求 `>=1 session/update` 且 `stopReason=end_turn`。
+  - 若 real 环境缺少认证则按既有策略 skip，避免环境不确定性污染回归信号。
+- 备选方案：
+  - 方案A：继续只保留单轮 smoke。
+  - 方案B：增加多轮 prompt 交互回归。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：更接近真实交互，能更早发现 session 累积状态问题。
+  - Cons：真实环境下执行时长略增，仍受本机认证前置影响。
+- 影响范围（文件/模块）：
+  - `test/integration/e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `E2E_REAL_CODEX=1 go test ./... -run TestE2ERealCodexPromptInteractions -count=1`

@@ -14,14 +14,24 @@ import (
 type JSONLCodec struct {
 	reader *bufio.Reader
 	writer *bufio.Writer
+	trace  TraceFunc
 	mu     sync.Mutex
 }
 
+// TraceFunc records one json-rpc line for debug tracing.
+type TraceFunc func(direction string, payload []byte)
+
 // NewJSONLCodec creates a codec backed by stdin/stdout-like streams.
 func NewJSONLCodec(r io.Reader, w io.Writer) *JSONLCodec {
+	return NewJSONLCodecWithTrace(r, w, nil)
+}
+
+// NewJSONLCodecWithTrace creates a codec with optional line tracer.
+func NewJSONLCodecWithTrace(r io.Reader, w io.Writer, trace TraceFunc) *JSONLCodec {
 	return &JSONLCodec{
 		reader: bufio.NewReader(r),
 		writer: bufio.NewWriter(w),
+		trace:  trace,
 	}
 }
 
@@ -50,6 +60,9 @@ func (c *JSONLCodec) ReadMessage() (RPCMessage, error) {
 		if unmarshalErr := json.Unmarshal([]byte(payload), &msg); unmarshalErr != nil {
 			return RPCMessage{}, fmt.Errorf("decode app-server jsonl: %w", unmarshalErr)
 		}
+		if c.trace != nil {
+			c.trace("in", []byte(payload))
+		}
 		return msg, nil
 	}
 }
@@ -76,6 +89,9 @@ func (c *JSONLCodec) WriteMessage(msg RPCMessage) error {
 	}
 	if err := c.writer.Flush(); err != nil {
 		return fmt.Errorf("flush app-server jsonl: %w", err)
+	}
+	if c.trace != nil {
+		c.trace("out", data)
 	}
 	return nil
 }

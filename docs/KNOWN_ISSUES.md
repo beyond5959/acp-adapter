@@ -19,6 +19,8 @@
 - KI-0013：profiles 配置目前仅支持 JSON（未实现 toml）
 - KI-0014：J1 压测默认不在 `go test ./...` 中执行
 - KI-0015：MCP/compact/auth 方法名对真实 app-server 版本敏感
+- KI-0016：真实 codex e2e 依赖本机 codex 命令与认证态
+- KI-0017：trace-json 脱敏规则为启发式，可能存在漏网字段
 
 ---
 
@@ -139,3 +141,26 @@
   - 通过兼容错误处理回退（例如 `auth/logout` 不支持时仅清理本地状态），并优先使用对齐版本联调。
 - 后续计划：
   - 在 B2 schema 锁定后引入 endpoint capability 检测与版本门控。
+
+## KI-0016：真实 codex e2e 依赖本机 codex 命令与认证态
+- 现象：`E2E_REAL_CODEX=1` 时测试会执行 `make schema` 并启动真实 `codex app-server`。
+- 影响：
+  - 若本机未安装 `codex` 或认证不可用，真实 e2e 会跳过（带原因），不会覆盖真实链路。
+- 复现：
+  - 执行 `E2E_REAL_CODEX=1 go test ./... -run TestE2E -count=1`，且环境缺少 codex/auth。
+  - 例如 `TestE2ERealCodexInitializePromptAndCancel` / `TestE2ERealCodexPromptInteractions` 会因 `thread/start failed` skip。
+- Workaround：
+  - 安装并确保 `codex app-server` 可运行；准备可用认证态（API key 或 subscription）以让 real e2e 实际执行。
+- 后续计划：
+  - 在 CI 增加可选 real-e2e job，并明确环境先决条件。
+
+## KI-0017：trace-json 脱敏规则为启发式，可能存在漏网字段
+- 现象：当前 trace 脱敏按 key/token 模式匹配，不是全量语义理解。
+- 影响：
+  - 非标准字段名承载敏感信息时，理论上可能未被识别并脱敏。
+- 复现：
+  - 在自定义字段中写入敏感值且字段名不含敏感关键字。
+- Workaround：
+  - 生产环境谨慎开启 trace；优先在本地调试使用并定期审查脱敏规则。
+- 后续计划：
+  - 基于真实日志样本扩充脱敏词典，并支持可配置的自定义脱敏 key 列表。

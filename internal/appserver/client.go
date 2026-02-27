@@ -46,7 +46,7 @@ func NewClient(process *Process, logger *slog.Logger) *Client {
 
 	client := &Client{
 		process:     process,
-		codec:       NewJSONLCodec(process.Stdout(), process.Stdin()),
+		codec:       NewJSONLCodecWithTrace(process.Stdout(), process.Stdin(), process.trace),
 		logger:      logger,
 		pending:     make(map[string]chan RPCMessage),
 		approvals:   make(map[string]pendingApproval),
