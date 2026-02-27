@@ -24,12 +24,17 @@ type fakeServer struct {
 	nextThread int
 	nextTurn   int
 	turns      map[string]*turnControl
+
+	receivedInitialize  bool
+	receivedInitialized bool
+	crashOnThreadStart  bool
 }
 
 func main() {
 	server := &fakeServer{
-		codec: appserver.NewJSONLCodec(os.Stdin, os.Stdout),
-		turns: make(map[string]*turnControl),
+		codec:              appserver.NewJSONLCodec(os.Stdin, os.Stdout),
+		turns:              make(map[string]*turnControl),
+		crashOnThreadStart: os.Getenv("FAKE_APP_SERVER_CRASH_ON_THREAD_START") == "1",
 	}
 
 	if err := server.serve(); err != nil && err != io.EOF {
@@ -54,6 +59,7 @@ func (s *fakeServer) serve() error {
 func (s *fakeServer) handle(msg appserver.RPCMessage) {
 	switch msg.Method {
 	case "initialize":
+		s.receivedInitialize = true
 		s.writeResult(msg.ID, map[string]any{
 			"serverInfo": map[string]any{
 				"name":    "fake-codex-app-server",
@@ -62,8 +68,19 @@ func (s *fakeServer) handle(msg appserver.RPCMessage) {
 			"capabilities": map[string]any{},
 		})
 	case "initialized":
-		// no-op
+		if !s.receivedInitialize {
+			s.writeError(msg.ID, -32000, "initialize must be called before initialized")
+			return
+		}
+		s.receivedInitialized = true
 	case "thread/start":
+		if !s.receivedInitialize || !s.receivedInitialized {
+			s.writeError(msg.ID, -32000, "initialize/initialized handshake required")
+			return
+		}
+		if s.crashOnThreadStart {
+			os.Exit(42)
+		}
 		threadID := s.newThreadID()
 		s.writeResult(msg.ID, appserver.ThreadStartResult{
 			ThreadID: threadID,

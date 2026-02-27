@@ -15,6 +15,12 @@ import (
 	"time"
 )
 
+const (
+	responseTimeout = 4 * time.Second
+	cancelTimeout   = 2 * time.Second
+	quietWindow     = 300 * time.Millisecond
+)
+
 type rpcMessage struct {
 	JSONRPC string           `json:"jsonrpc,omitempty"`
 	ID      *json.RawMessage `json:"id,omitempty"`
@@ -27,6 +33,14 @@ type rpcMessage struct {
 type rpcError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+}
+
+type sessionUpdateParams struct {
+	SessionID string `json:"sessionId"`
+	TurnID    string `json:"turnId"`
+	Type      string `json:"type"`
+	Delta     string `json:"delta,omitempty"`
+	Status    string `json:"status,omitempty"`
 }
 
 type rpcReader struct {
@@ -84,6 +98,19 @@ func (r *rpcReader) next(timeout time.Duration) rpcMessage {
 	return rpcMessage{}
 }
 
+func (r *rpcReader) poll(timeout time.Duration) (rpcMessage, bool) {
+	r.t.Helper()
+	select {
+	case msg, ok := <-r.messages:
+		if !ok {
+			r.t.Fatalf("adapter stdout closed: %v", r.readErr())
+		}
+		return msg, true
+	case <-time.After(timeout):
+		return rpcMessage{}, false
+	}
+}
+
 func (r *rpcReader) readErr() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -98,7 +125,19 @@ func (r *rpcReader) setErr(err error) {
 	}
 }
 
-func TestE2EInitializeNewPromptAndCancel(t *testing.T) {
+type adapterHarness struct {
+	t      *testing.T
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	reader *rpcReader
+
+	waitCh   chan error
+	stopOnce sync.Once
+}
+
+func startAdapter(t *testing.T, extraEnv ...string) *adapterHarness {
+	t.Helper()
+
 	rootDir := repoRoot(t)
 	fakeServerBin := buildBinary(t, rootDir, "./testdata/fake_codex_app_server")
 	adapterBin := buildBinary(t, rootDir, "./cmd/codex-acp-go")
@@ -106,9 +145,11 @@ func TestE2EInitializeNewPromptAndCancel(t *testing.T) {
 	cmd := exec.Command(adapterBin)
 	cmd.Dir = rootDir
 	cmd.Env = append(os.Environ(),
-		"CODEX_APP_SERVER_CMD="+fakeServerBin,
-		"CODEX_APP_SERVER_ARGS=",
-		"LOG_LEVEL=debug",
+		append([]string{
+			"CODEX_APP_SERVER_CMD=" + fakeServerBin,
+			"CODEX_APP_SERVER_ARGS=",
+			"LOG_LEVEL=debug",
+		}, extraEnv...)...,
 	)
 
 	stdin, err := cmd.StdinPipe()
@@ -127,23 +168,65 @@ func TestE2EInitializeNewPromptAndCancel(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start adapter: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = stdin.Close()
-		waitCh := make(chan error, 1)
-		go func() { waitCh <- cmd.Wait() }()
-		select {
-		case <-time.After(3 * time.Second):
-			_ = cmd.Process.Kill()
-			<-waitCh
-		case <-waitCh:
-		}
-	})
+
+	waitCh := make(chan error, 1)
+	go func() {
+		waitCh <- cmd.Wait()
+		close(waitCh)
+	}()
 	go func() { _, _ = io.Copy(io.Discard, stderr) }()
 
-	reader := newRPCReader(t, stdout)
+	h := &adapterHarness{
+		t:      t,
+		cmd:    cmd,
+		stdin:  stdin,
+		reader: newRPCReader(t, stdout),
+		waitCh: waitCh,
+	}
+	t.Cleanup(h.stop)
+	return h
+}
 
-	writeRequest(t, stdin, "1", "initialize", map[string]any{})
-	initResp := waitForResponse(t, reader, "1", 3*time.Second, nil)
+func (h *adapterHarness) stop() {
+	h.stopOnce.Do(func() {
+		_ = h.stdin.Close()
+		select {
+		case err := <-h.waitCh:
+			if err != nil {
+				h.t.Fatalf("adapter exited with error: %v", err)
+			}
+		case <-time.After(3 * time.Second):
+			_ = h.cmd.Process.Kill()
+			<-h.waitCh
+			h.t.Fatalf("adapter did not exit after stdin closed")
+		}
+	})
+}
+
+func (h *adapterHarness) sendRequest(id, method string, params any) {
+	writeRequest(h.t, h.stdin, id, method, params)
+}
+
+func (h *adapterHarness) waitResponse(id string, timeout time.Duration) rpcMessage {
+	return waitForResponse(h.t, h.reader, id, timeout, nil)
+}
+
+func (h *adapterHarness) nextMessage(timeout time.Duration) rpcMessage {
+	return h.reader.next(timeout)
+}
+
+func (h *adapterHarness) assertStdoutPureJSONRPC() {
+	if err := h.reader.readErr(); err != nil {
+		h.t.Fatalf("stdout contains non JSON-RPC output: %v", err)
+	}
+}
+
+func TestE2EAcceptanceA1ToA5AndB1(t *testing.T) {
+	h := startAdapter(t)
+
+	// A2 initialize
+	h.sendRequest("1", "initialize", map[string]any{})
+	initResp := h.waitResponse("1", responseTimeout)
 	var initResult struct {
 		AgentCapabilities struct {
 			Sessions      bool `json:"sessions"`
@@ -162,8 +245,10 @@ func TestE2EInitializeNewPromptAndCancel(t *testing.T) {
 		t.Fatalf("initialize capabilities mismatch: %+v", initResult.AgentCapabilities)
 	}
 
-	writeRequest(t, stdin, "2", "session/new", map[string]any{})
-	newResp := waitForResponse(t, reader, "2", 3*time.Second, nil)
+	// A3 + B1: fake app-server will reject thread/start if adapter did not
+	// complete initialize/initialized handshake before serving ACP requests.
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
 	var newResult struct {
 		SessionID string `json:"sessionId"`
 	}
@@ -172,7 +257,8 @@ func TestE2EInitializeNewPromptAndCancel(t *testing.T) {
 		t.Fatalf("session/new returned empty sessionId")
 	}
 
-	writeRequest(t, stdin, "3", "session/prompt", map[string]any{
+	// A4 session/prompt streaming
+	h.sendRequest("3", "session/prompt", map[string]any{
 		"sessionId": newResult.SessionID,
 		"prompt":    "hello",
 	})
@@ -180,7 +266,7 @@ func TestE2EInitializeNewPromptAndCancel(t *testing.T) {
 	gotUpdate := false
 	gotPromptResp := false
 	for !gotPromptResp {
-		msg := reader.next(4 * time.Second)
+		msg := h.nextMessage(responseTimeout)
 		if msg.Method == "session/update" {
 			gotUpdate = true
 			continue
@@ -201,17 +287,19 @@ func TestE2EInitializeNewPromptAndCancel(t *testing.T) {
 		t.Fatalf("session/prompt expected at least one session/update")
 	}
 
-	writeRequest(t, stdin, "4", "session/prompt", map[string]any{
+	// A5 session/cancel should quickly stop turn and end with cancelled.
+	h.sendRequest("4", "session/prompt", map[string]any{
 		"sessionId": newResult.SessionID,
 		"prompt":    "slow task",
 	})
 
-	sawSlowUpdate := false
-	for !sawSlowUpdate {
-		msg := reader.next(4 * time.Second)
+	cancelledTurnID := ""
+	for cancelledTurnID == "" {
+		msg := h.nextMessage(responseTimeout)
 		if msg.Method == "session/update" {
-			sawSlowUpdate = true
-			break
+			update := decodeSessionUpdate(t, msg)
+			cancelledTurnID = update.TurnID
+			continue
 		}
 		if messageID(msg) == "4" {
 			var earlyResult struct {
@@ -222,14 +310,19 @@ func TestE2EInitializeNewPromptAndCancel(t *testing.T) {
 		}
 	}
 
-	writeRequest(t, stdin, "5", "session/cancel", map[string]any{
+	h.sendRequest("5", "session/cancel", map[string]any{
 		"sessionId": newResult.SessionID,
 	})
 
+	cancelStartedAt := time.Now()
 	gotCancelResp := false
 	gotCancelledPromptResp := false
 	for !(gotCancelResp && gotCancelledPromptResp) {
-		msg := reader.next(5 * time.Second)
+		if time.Since(cancelStartedAt) > cancelTimeout {
+			t.Fatalf("cancel did not complete within %s", cancelTimeout)
+		}
+
+		msg := h.nextMessage(cancelTimeout)
 		switch messageID(msg) {
 		case "5":
 			var cancelResult struct {
@@ -251,6 +344,67 @@ func TestE2EInitializeNewPromptAndCancel(t *testing.T) {
 			gotCancelledPromptResp = true
 		}
 	}
+
+	assertNoFurtherTurnUpdates(t, h.reader, cancelledTurnID, quietWindow)
+
+	// Keep adapter usable after cancel (sanity for no crash/no stuck process).
+	h.sendRequest("6", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "after cancel",
+	})
+	gotPostCancelUpdate := false
+	gotPostCancelResp := false
+	for !gotPostCancelResp {
+		msg := h.nextMessage(responseTimeout)
+		if msg.Method == "session/update" {
+			gotPostCancelUpdate = true
+			continue
+		}
+		if messageID(msg) != "6" {
+			continue
+		}
+		var promptResult struct {
+			StopReason string `json:"stopReason"`
+		}
+		unmarshalResult(t, msg, &promptResult)
+		if promptResult.StopReason != "end_turn" {
+			t.Fatalf("post-cancel prompt expected stopReason=end_turn, got %q", promptResult.StopReason)
+		}
+		gotPostCancelResp = true
+	}
+	if !gotPostCancelUpdate {
+		t.Fatalf("post-cancel prompt expected at least one session/update")
+	}
+
+	// A1: stdout purity is continuously checked by rpcReader scanner.
+	h.assertStdoutPureJSONRPC()
+}
+
+func TestE2EAcceptanceB1AppServerCrashReturnsClearError(t *testing.T) {
+	h := startAdapter(t, "FAKE_APP_SERVER_CRASH_ON_THREAD_START=1")
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	initResp := h.waitResponse("1", responseTimeout)
+	var initResult struct {
+		AgentCapabilities struct {
+			Sessions bool `json:"sessions"`
+		} `json:"agentCapabilities"`
+	}
+	unmarshalResult(t, initResp, &initResult)
+	if !initResult.AgentCapabilities.Sessions {
+		t.Fatalf("initialize should still succeed before app-server crash scenario")
+	}
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	resp := h.waitResponse("2", responseTimeout)
+	if resp.Error == nil {
+		t.Fatalf("session/new expected error when app-server crashes")
+	}
+	if !strings.Contains(resp.Error.Message, "thread/start failed") {
+		t.Fatalf("session/new error should be clear, got %q", resp.Error.Message)
+	}
+
+	h.assertStdoutPureJSONRPC()
 }
 
 func repoRoot(t *testing.T) string {
@@ -313,6 +467,33 @@ func waitForResponse(t *testing.T, reader *rpcReader, id string, timeout time.Du
 			onOther(msg)
 		}
 	}
+}
+
+func assertNoFurtherTurnUpdates(t *testing.T, reader *rpcReader, turnID string, duration time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(duration)
+	for time.Now().Before(deadline) {
+		msg, ok := reader.poll(time.Until(deadline))
+		if !ok {
+			return
+		}
+		if msg.Method != "session/update" {
+			continue
+		}
+		update := decodeSessionUpdate(t, msg)
+		if update.TurnID == turnID {
+			t.Fatalf("received unexpected update for cancelled turn %q after cancellation", turnID)
+		}
+	}
+}
+
+func decodeSessionUpdate(t *testing.T, msg rpcMessage) sessionUpdateParams {
+	t.Helper()
+	var params sessionUpdateParams
+	if err := json.Unmarshal(msg.Params, &params); err != nil {
+		t.Fatalf("decode session/update params: %v", err)
+	}
+	return params
 }
 
 func messageID(msg rpcMessage) string {

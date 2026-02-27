@@ -6,7 +6,7 @@
 ## 项目概览
 - 项目：codex-acp-go（基于 Codex App Server 的 ACP 适配器）
 - 当前阶段：PR1
-- 最近更新：2026-02-26
+- 最近更新：2026-02-27
 
 ## 关键链接/文档
 - docs/SPEC.md：技术方案（权威）
@@ -18,7 +18,7 @@
 ## 当前里程碑状态（按 PR）
 - [ ] PR1：工程骨架 + 双 codec + 最小 e2e harness（initialize/new/prompt/cancel）
   - 状态：Done
-  - 说明：已完成可运行骨架、ACP stdio codec、App Server 子进程 client、e2e harness（含 cancel）
+  - 说明：已完成可运行骨架、ACP stdio codec、App Server 子进程 client、e2e harness（A1-A5 + B1 自动化覆盖）
 - [ ] PR2：流式映射与 turn 生命周期（notifications -> session/update; cancel 语义）
   - 状态：Not started
   - 说明：待实现完整 notifications 映射与更细粒度 turn state machine
@@ -96,7 +96,12 @@
 5. 增加 e2e 测试基建：
    - fake app-server（可控 turn/update/completed/cancel）
    - 启动真实 adapter 进程进行协议级测试。
-6. 增加 `make schema` 目标与 `internal/appserver/schema/` 目录占位。
+6. 补齐 PR1 自动化验收到 A1-A5 + B1：
+   - 验证 stdout 纯 JSON-RPC
+   - 验证 initialize/new/prompt/cancel
+   - 验证 app-server 初始化握手约束（initialize/initialized）
+   - 验证 app-server thread/start 崩溃时错误可见
+7. 增加 `make schema` 目标与 `internal/appserver/schema/` 目录占位。
 
 ## 影响范围是什么
 1. 运行行为：adapter 启动后会自动拉起下游 app-server 并完成初始化握手。
@@ -108,7 +113,10 @@
 1. 执行：
    - `go test ./...`
 2. 预期：
-   - `test/integration` 通过，覆盖 initialize/new/prompt/cancel 主流程。
+   - `test/integration` 通过，包含：
+     - `TestE2EAcceptanceA1ToA5AndB1`
+     - `TestE2EAcceptanceB1AppServerCrashReturnsClearError`
+   - A1-A5 + B1 由 e2e 自动验证。
    - 测试中会校验 adapter stdout 每行都是合法 JSON-RPC。
 3. 可选手工验证：
    - 启动 `cmd/codex-acp-go`。
@@ -135,6 +143,7 @@
   - 完成 initialize/new/prompt/cancel 最小链路
   - 完成 app-server 子进程 client 与 session state
   - 完成 fake app-server + e2e 测试
+  - e2e 补齐 A1-A5 + B1（含 app-server 崩溃错误路径）
 - Tests:
   - `go test ./...` 通过
 - Notes/Follow-ups:
