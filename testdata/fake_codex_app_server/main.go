@@ -27,6 +27,7 @@ type fakeServer struct {
 	nextReq    int
 	turns      map[string]*turnControl
 	pending    map[string]chan appserver.RPCMessage
+	threadOpts map[string]appserver.RunOptions
 
 	receivedInitialize  bool
 	receivedInitialized bool
@@ -39,6 +40,7 @@ func main() {
 		codec:              appserver.NewJSONLCodec(os.Stdin, os.Stdout),
 		turns:              make(map[string]*turnControl),
 		pending:            make(map[string]chan appserver.RPCMessage),
+		threadOpts:         make(map[string]appserver.RunOptions),
 		crashOnThreadStart: os.Getenv("FAKE_APP_SERVER_CRASH_ON_THREAD_START") == "1",
 		crashOnceFile:      os.Getenv("FAKE_APP_SERVER_CRASH_ON_THREAD_START_ONCE_FILE"),
 	}
@@ -86,10 +88,16 @@ func (s *fakeServer) handle(msg appserver.RPCMessage) {
 			s.writeError(msg.ID, -32000, "initialize/initialized handshake required")
 			return
 		}
+		var params appserver.ThreadStartParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			s.writeError(msg.ID, -32602, "invalid params")
+			return
+		}
 		if s.shouldCrashOnThreadStart() {
 			os.Exit(42)
 		}
 		threadID := s.newThreadID()
+		s.storeThreadOptions(threadID, params.RunOptions)
 		s.writeResult(msg.ID, appserver.ThreadStartResult{
 			ThreadID: threadID,
 		})
@@ -109,7 +117,8 @@ func (s *fakeServer) handle(msg appserver.RPCMessage) {
 			TurnID: turnID,
 		})
 
-		go s.runTurn(params.ThreadID, turnID, params.Input, control)
+		effective := s.effectiveRunOptions(params.ThreadID, params.RunOptions)
+		go s.runTurn(params.ThreadID, turnID, params.Input, effective, control)
 	case "review/start":
 		var params appserver.ReviewStartParams
 		if err := json.Unmarshal(msg.Params, &params); err != nil {
@@ -124,7 +133,63 @@ func (s *fakeServer) handle(msg appserver.RPCMessage) {
 		turnID, control := s.newTurn()
 		s.writeResult(msg.ID, appserver.ReviewStartResult{TurnID: turnID})
 
-		go s.runReviewTurn(params.ThreadID, turnID, params.Instructions, control)
+		effective := s.effectiveRunOptions(params.ThreadID, params.RunOptions)
+		go s.runReviewTurn(params.ThreadID, turnID, params.Instructions, effective, control)
+	case "thread/compact/start":
+		var params appserver.CompactStartParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			s.writeError(msg.ID, -32602, "invalid params")
+			return
+		}
+		if params.ThreadID == "" {
+			s.writeError(msg.ID, -32602, "threadId required")
+			return
+		}
+		turnID, control := s.newTurn()
+		s.writeResult(msg.ID, appserver.CompactStartResult{TurnID: turnID})
+		go s.runCompactTurn(params.ThreadID, turnID, control)
+	case "mcpServer/list":
+		s.writeResult(msg.ID, appserver.MCPServerListResult{
+			Servers: []appserver.MCPServer{
+				{Name: "demo-mcp", OAuthRequired: true, Tools: []string{"dangerous-write", "read-info"}},
+				{Name: "metrics-mcp", OAuthRequired: false, Tools: []string{"query"}},
+			},
+		})
+	case "mcpServer/call":
+		var params appserver.MCPToolCallParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			s.writeError(msg.ID, -32602, "invalid params")
+			return
+		}
+		if strings.TrimSpace(params.Server) == "" || strings.TrimSpace(params.Tool) == "" {
+			s.writeError(msg.ID, -32602, "server and tool are required")
+			return
+		}
+		s.writeResult(msg.ID, appserver.MCPToolCallResult{
+			Output: fmt.Sprintf(
+				"mcp call ok server=%s tool=%s args=%s",
+				params.Server,
+				params.Tool,
+				params.Arguments,
+			),
+		})
+	case "mcpServer/oauth/login":
+		var params appserver.MCPOAuthLoginParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			s.writeError(msg.ID, -32602, "invalid params")
+			return
+		}
+		if strings.TrimSpace(params.Server) == "" {
+			s.writeError(msg.ID, -32602, "server is required")
+			return
+		}
+		s.writeResult(msg.ID, appserver.MCPOAuthLoginResult{
+			Status:  "started",
+			URL:     fmt.Sprintf("https://auth.example.com/%s", params.Server),
+			Message: "open the URL to complete oauth",
+		})
+	case "auth/logout":
+		s.writeResult(msg.ID, map[string]any{"loggedOut": true})
 	case "turn/interrupt":
 		var params appserver.TurnInterruptParams
 		if err := json.Unmarshal(msg.Params, &params); err != nil {
@@ -165,6 +230,35 @@ func (s *fakeServer) newThreadID() string {
 	return fmt.Sprintf("thread-%d", s.nextThread)
 }
 
+func (s *fakeServer) storeThreadOptions(threadID string, options appserver.RunOptions) {
+	s.mu.Lock()
+	s.threadOpts[threadID] = options
+	s.mu.Unlock()
+}
+
+func (s *fakeServer) effectiveRunOptions(threadID string, turnOptions appserver.RunOptions) appserver.RunOptions {
+	s.mu.Lock()
+	base := s.threadOpts[threadID]
+	s.mu.Unlock()
+
+	if strings.TrimSpace(turnOptions.Model) != "" {
+		base.Model = turnOptions.Model
+	}
+	if strings.TrimSpace(turnOptions.ApprovalPolicy) != "" {
+		base.ApprovalPolicy = turnOptions.ApprovalPolicy
+	}
+	if strings.TrimSpace(turnOptions.Sandbox) != "" {
+		base.Sandbox = turnOptions.Sandbox
+	}
+	if strings.TrimSpace(turnOptions.Personality) != "" {
+		base.Personality = turnOptions.Personality
+	}
+	if strings.TrimSpace(turnOptions.SystemInstructions) != "" {
+		base.SystemInstructions = turnOptions.SystemInstructions
+	}
+	return base
+}
+
 func (s *fakeServer) newTurn() (string, *turnControl) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -192,7 +286,13 @@ func (s *fakeServer) removeTurn(turnID string) {
 	s.mu.Unlock()
 }
 
-func (s *fakeServer) runTurn(threadID, turnID, input string, control *turnControl) {
+func (s *fakeServer) runTurn(
+	threadID string,
+	turnID string,
+	input string,
+	options appserver.RunOptions,
+	control *turnControl,
+) {
 	defer s.removeTurn(turnID)
 	lowerInput := strings.ToLower(input)
 	if strings.Contains(lowerInput, "approval command") ||
@@ -213,6 +313,22 @@ func (s *fakeServer) runTurn(threadID, turnID, input string, control *turnContro
 	case <-time.After(40 * time.Millisecond):
 		s.writeItemStarted(threadID, turnID, itemID, "agent_message")
 		s.writeAgentMessageDelta(threadID, turnID, itemID, "working")
+	}
+
+	if strings.Contains(lowerInput, "profile probe") {
+		s.writeAgentMessageDelta(
+			threadID,
+			turnID,
+			itemID,
+			fmt.Sprintf(
+				"profile model=%s approval=%s sandbox=%s personality=%s system=%s",
+				options.Model,
+				options.ApprovalPolicy,
+				options.Sandbox,
+				options.Personality,
+				options.SystemInstructions,
+			),
+		)
 	}
 
 	duration := 120 * time.Millisecond
@@ -292,7 +408,13 @@ func (s *fakeServer) runApprovalTurn(threadID, turnID, input string, control *tu
 	s.writeTurnCompleted(threadID, turnID, "end_turn")
 }
 
-func (s *fakeServer) runReviewTurn(threadID, turnID, instructions string, control *turnControl) {
+func (s *fakeServer) runReviewTurn(
+	threadID string,
+	turnID string,
+	instructions string,
+	_ appserver.RunOptions,
+	control *turnControl,
+) {
 	defer s.removeTurn(turnID)
 
 	itemID := fmt.Sprintf("review-item-%s", turnID)
@@ -355,6 +477,25 @@ func (s *fakeServer) runReviewTurn(threadID, turnID, instructions string, contro
 
 	s.writeItemCompleted(threadID, turnID, itemID, "review")
 	s.writeReviewModeExited(threadID, turnID)
+	s.writeTurnCompleted(threadID, turnID, "end_turn")
+}
+
+func (s *fakeServer) runCompactTurn(threadID, turnID string, control *turnControl) {
+	defer s.removeTurn(turnID)
+
+	itemID := fmt.Sprintf("compact-item-%s", turnID)
+	s.writeTurnStarted(threadID, turnID)
+	s.writeItemStarted(threadID, turnID, itemID, "compact")
+
+	select {
+	case <-control.cancel:
+		s.writeTurnCompleted(threadID, turnID, "cancelled")
+		return
+	case <-time.After(30 * time.Millisecond):
+		s.writeAgentMessageDelta(threadID, turnID, itemID, "conversation compacted")
+	}
+
+	s.writeItemCompleted(threadID, turnID, itemID, "compact")
 	s.writeTurnCompleted(threadID, turnID, "end_turn")
 }
 

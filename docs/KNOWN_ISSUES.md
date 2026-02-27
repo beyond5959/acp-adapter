@@ -15,6 +15,10 @@
 - KI-0009：真实 App Server 与 fake server 事件形态可能不完全一致
 - KI-0010：审批超时默认取消可能影响长时间人工确认场景
 - KI-0011：Mode B（ACP fs 落盘）依赖客户端 `fs/write_text_file` 契约
+- KI-0012：`/logout` 后缺少同进程重新登录入口
+- KI-0013：profiles 配置目前仅支持 JSON（未实现 toml）
+- KI-0014：J1 压测默认不在 `go test ./...` 中执行
+- KI-0015：MCP/compact/auth 方法名对真实 app-server 版本敏感
 
 ---
 
@@ -91,3 +95,47 @@
   - 在对接特定 ACP client 时适配其 fs RPC 形状。
 - 后续计划：
   - PR5 增加 fs 方法适配层与 capability 检测，按客户端能力动态选择模式。
+
+## KI-0012：`/logout` 后缺少同进程重新登录入口
+- 现象：执行 `/logout` 后，适配器进入未认证状态，后续 `session/new`/`session/prompt` 会被 auth gate 拒绝。
+- 影响：
+  - 满足“logout 后需重新认证”，但当前只能通过外部重新配置环境变量或重启进程恢复。
+- 复现：
+  - 先正常对话，再发送 `/logout`，随后发送任意 prompt。
+- Workaround：
+  - 重新设置认证环境（`CODEX_API_KEY`/`OPENAI_API_KEY`/subscription）并重启 adapter。
+- 后续计划：
+  - 评估增加显式 re-auth RPC 或与下游 auth 流程对接，实现无重启恢复。
+
+## KI-0013：profiles 配置目前仅支持 JSON（未实现 toml）
+- 现象：PR5 新增 profile 配置读取仅支持 `CODEX_ACP_PROFILES_JSON`/`CODEX_ACP_PROFILES_FILE(JSON)`。
+- 影响：
+  - 与 SPEC 中提及的 `config.toml` 形态暂未完全对齐。
+- 复现：
+  - 提供 toml profile 文件并通过 `CODEX_ACP_PROFILES_FILE` 指向，profiles 不生效。
+- Workaround：
+  - 使用 JSON profile 配置（内联或文件）。
+- 后续计划：
+  - 补充 toml 解析与 schema 校验，保持与文档示例一致。
+
+## KI-0014：J1 压测默认不在 `go test ./...` 中执行
+- 现象：`TestE2EAcceptanceJ1Stress100Turns` 需要 `RUN_STRESS_J1=1` 才运行。
+- 影响：
+  - 常规 CI 只覆盖功能回归，不会自动覆盖 100 turns 压力路径。
+- 复现：
+  - 直接执行 `go test ./...`，J1 用例显示 skipped。
+- Workaround：
+  - 执行 `make stress-j1` 或 `scripts/j1_stress.sh`。
+- 后续计划：
+  - 在 CI 增加定时/夜间压力作业，独立于常规 PR 快速回归。
+
+## KI-0015：MCP/compact/auth 方法名对真实 app-server 版本敏感
+- 现象：当前实现依赖 `thread/compact/start`、`mcpServer/*`、`auth/logout` 方法名。
+- 影响：
+  - 若真实 app-server 不同版本方法名/参数变更，PR5 相关能力会出现 `method not found` 或参数不兼容。
+- 复现：
+  - 连接不支持上述 endpoint 的 app-server 版本执行相应 slash 命令。
+- Workaround：
+  - 通过兼容错误处理回退（例如 `auth/logout` 不支持时仅清理本地状态），并优先使用对齐版本联调。
+- 后续计划：
+  - 在 B2 schema 锁定后引入 endpoint capability 检测与版本门控。

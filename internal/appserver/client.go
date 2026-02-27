@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -76,8 +77,11 @@ func (c *Client) Initialized() error {
 }
 
 // ThreadStart starts a new thread and returns thread id.
-func (c *Client) ThreadStart(ctx context.Context, cwd string) (string, error) {
-	params := ThreadStartParams{CWD: cwd}
+func (c *Client) ThreadStart(ctx context.Context, cwd string, options RunOptions) (string, error) {
+	params := ThreadStartParams{
+		CWD:        cwd,
+		RunOptions: options,
+	}
 	var result ThreadStartResult
 	if err := c.call(ctx, methodThreadStart, params, &result); err != nil {
 		return "", err
@@ -89,10 +93,16 @@ func (c *Client) ThreadStart(ctx context.Context, cwd string) (string, error) {
 }
 
 // TurnStart starts a turn and returns turn id plus event stream.
-func (c *Client) TurnStart(ctx context.Context, threadID, input string) (string, <-chan TurnEvent, error) {
+func (c *Client) TurnStart(
+	ctx context.Context,
+	threadID string,
+	input string,
+	options RunOptions,
+) (string, <-chan TurnEvent, error) {
 	params := TurnStartParams{
-		ThreadID: threadID,
-		Input:    input,
+		ThreadID:   threadID,
+		Input:      input,
+		RunOptions: options,
 	}
 	var result TurnStartResult
 	if err := c.call(ctx, methodTurnStart, params, &result); err != nil {
@@ -107,10 +117,16 @@ func (c *Client) TurnStart(ctx context.Context, threadID, input string) (string,
 }
 
 // ReviewStart starts one review workflow turn.
-func (c *Client) ReviewStart(ctx context.Context, threadID, instructions string) (string, <-chan TurnEvent, error) {
+func (c *Client) ReviewStart(
+	ctx context.Context,
+	threadID string,
+	instructions string,
+	options RunOptions,
+) (string, <-chan TurnEvent, error) {
 	params := ReviewStartParams{
 		ThreadID:     threadID,
 		Instructions: instructions,
+		RunOptions:   options,
 	}
 	var result ReviewStartResult
 	if err := c.call(ctx, methodReviewStart, params, &result); err != nil {
@@ -124,6 +140,22 @@ func (c *Client) ReviewStart(ctx context.Context, threadID, instructions string)
 	return result.TurnID, stream, nil
 }
 
+// CompactStart starts one compact operation and returns turn stream.
+func (c *Client) CompactStart(ctx context.Context, threadID string) (string, <-chan TurnEvent, error) {
+	params := CompactStartParams{
+		ThreadID: threadID,
+	}
+	var result CompactStartResult
+	if err := c.call(ctx, methodThreadCompact, params, &result); err != nil {
+		return "", nil, err
+	}
+	if result.TurnID == "" {
+		return "", nil, fmt.Errorf("thread/compact/start returned empty turnId")
+	}
+	stream := c.registerTurnStream(result.TurnID)
+	return result.TurnID, stream, nil
+}
+
 // TurnInterrupt requests turn interruption.
 func (c *Client) TurnInterrupt(ctx context.Context, threadID, turnID string) error {
 	params := TurnInterruptParams{
@@ -132,6 +164,47 @@ func (c *Client) TurnInterrupt(ctx context.Context, threadID, turnID string) err
 	}
 	var result map[string]any
 	return c.call(ctx, methodTurnInterrupt, params, &result)
+}
+
+// MCPServersList fetches available MCP servers.
+func (c *Client) MCPServersList(ctx context.Context) ([]MCPServer, error) {
+	var result MCPServerListResult
+	if err := c.call(ctx, methodMCPServerList, map[string]any{}, &result); err != nil {
+		return nil, err
+	}
+	return result.Servers, nil
+}
+
+// MCPToolCall calls one MCP tool.
+func (c *Client) MCPToolCall(ctx context.Context, params MCPToolCallParams) (MCPToolCallResult, error) {
+	var result MCPToolCallResult
+	if err := c.call(ctx, methodMCPServerCall, params, &result); err != nil {
+		return MCPToolCallResult{}, err
+	}
+	return result, nil
+}
+
+// MCPOAuthLogin starts OAuth flow for one MCP server.
+func (c *Client) MCPOAuthLogin(ctx context.Context, server string) (MCPOAuthLoginResult, error) {
+	params := MCPOAuthLoginParams{Server: server}
+	var result MCPOAuthLoginResult
+	if err := c.call(ctx, methodMCPOAuthLogin, params, &result); err != nil {
+		return MCPOAuthLoginResult{}, err
+	}
+	return result, nil
+}
+
+// Logout clears app-server auth state when supported.
+func (c *Client) Logout(ctx context.Context) error {
+	var result map[string]any
+	if err := c.call(ctx, methodAuthLogout, map[string]any{}, &result); err != nil {
+		// Keep compatibility with app-server versions that don't expose auth/logout.
+		if strings.Contains(err.Error(), "rpc error code=-32601") {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // ApprovalRespond sends user decision for one server-initiated approval request.

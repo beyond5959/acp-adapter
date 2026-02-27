@@ -5,7 +5,7 @@
 
 ## 项目概览
 - 项目：codex-acp-go（基于 Codex App Server 的 ACP 适配器）
-- 当前阶段：PR4
+- 当前阶段：PR5
 - 最近更新：2026-02-27
 
 ## 关键链接/文档
@@ -28,9 +28,9 @@
 - [x] PR4：Edit review + patch 落盘两模式
   - 状态：Done
   - 说明：已实现 /review 工作流、review mode 状态映射、Mode A/Mode B 落盘与冲突可见
-- [ ] PR5：Slash commands + Custom prompts + MCP + Auth 收尾
-  - 状态：Not started
-  - 说明：待完成功能收尾与全量验收
+- [x] PR5：Slash commands + Custom prompts + MCP + Auth 收尾
+  - 状态：Done
+  - 说明：已补齐 G1-G6、H1、I1-I3、J1（脚本化压力回归）与 MCP list/call/oauth 主流程
 
 ## 验收进度（从 docs/ACCEPTANCE.md 勾选）
 ### A. 协议合规（ACP）
@@ -63,40 +63,53 @@
 - [ ] F1 结构化 TODO
 
 ### G. Slash commands
-- [ ] G1 /review
-- [ ] G2 /review-branch
-- [ ] G3 /review-commit
-- [ ] G4 /init
-- [ ] G5 /compact
-- [ ] G6 /logout
+- [x] G1 /review
+- [x] G2 /review-branch
+- [x] G3 /review-commit
+- [x] G4 /init
+- [x] G5 /compact
+- [x] G6 /logout
 
 ### H. Custom Prompts
-- [ ] H1 profiles 生效
+- [x] H1 profiles 生效
 
 ### I. Auth methods
-- [ ] I1 CODEX_API_KEY
-- [ ] I2 OPENAI_API_KEY
-- [ ] I3 subscription 登录态（如环境支持）
+- [x] I1 CODEX_API_KEY
+- [x] I2 OPENAI_API_KEY
+- [x] I3 subscription 登录态（如环境支持）
 
 ### J. 可靠性
-- [ ] J1 压力回归（100 turns 含 approve/deny/cancel）
+- [x] J1 压力回归（100 turns 含 approve/deny/cancel）
 - [x] J2 stdout 纯净（trace 脱敏）
 
 ## 本 PR 做了什么
-1. 新增 `/review` 工作流：adapter 识别 review prompt 并走 `review/start`，映射 review mode entered/exited 到 `session/update`。
-2. 完成 diff 展示：review 流中输出可读 diff message chunk（markdown diff）。
-3. 实现 patch 落盘两模式：
-   - Mode A：AppServer 落盘
-   - Mode B：ACP fs 落盘（adapter 调用上游 `fs/write_text_file`）
-4. 增加 Mode B 冲突/失败可见：落盘失败时输出 `review_apply_failed`，并保持 tool 状态可追踪。
-5. 回归并保持 D2：文件修改仍需 permission，拒绝/取消不落盘。
+1. 补齐 slash commands：
+   - `/review-branch`、`/review-commit`：统一路由 `review/start`
+   - `/init`：进入文件改动审批路径
+   - `/compact`：路由 `thread/compact/start`
+   - `/logout`：清理适配器 auth 状态并要求重新认证
+2. 增加 MCP commands：
+   - `/mcp list`：列出 MCP servers
+   - `/mcp call <server> <tool> [args]`：调用前强制 `session/request_permission`（mcp）
+   - `/mcp oauth <server>`：触发 OAuth 登录引导
+3. 增加 profiles 配置生效链路：
+   - 支持从 `CODEX_ACP_PROFILES_JSON` / `CODEX_ACP_PROFILES_FILE` 读取 profile
+   - session/new 与 session/prompt 支持 `profile/model/approvalPolicy/sandbox/personality/systemInstructions` 并映射到 app-server runtime options
+4. 增加 auth 方法收尾：
+   - 初始化返回 `activeAuthMethod`
+   - 启动时识别 `CODEX_API_KEY` / `OPENAI_API_KEY` / subscription
+   - 无认证时 `session/new` / `session/prompt` 返回明确错误
+5. 补充 J1 压力回归：
+   - 新增 `TestE2EAcceptanceJ1Stress100Turns`（`RUN_STRESS_J1=1` 启用）
+   - 新增 `scripts/j1_stress.sh` 与 `make stress-j1`
 
 ## 影响范围是什么
-1. `internal/acp`：新增 patch apply mode、`/review` 路由、Mode B fs 落盘桥、review 状态映射。
-2. `internal/appserver`：新增 `review/start` client/supervisor 调用与 review mode notifications 解码。
-3. `internal/config`/`cmd`：新增 `PATCH_APPLY_MODE`（`appserver|acp_fs`）配置并传入 server。
-4. `testdata/fake_codex_app_server`：新增 review/start 与 review mode 事件、review patch 审批与冲突模拟。
-5. `test/integration`：新增 E1/E2 + D2 回归自动化测试。
+1. `internal/acp`：slash 路由矩阵、inline MCP command 执行、auth gate、profile 解析与运行参数透传。
+2. `internal/appserver`：新增 `thread/compact/start`、`mcpServer/*`、`auth/logout` client/supervisor 方法。
+3. `internal/config`/`cmd`：新增 profiles 加载、初始 auth 模式识别、配置到 server options 的映射。
+4. `testdata/fake_codex_app_server`：新增 compact/mcp/oauth/logout 伪实现与 runtime options 回显（profile probe）。
+5. `test/integration`：新增 G2-G6、H1、I1-I3、MCP 覆盖与 J1 压力测试入口。
+6. `scripts`/`Makefile`：新增 `scripts/j1_stress.sh` 与 `make stress-j1`。
 
 ## 如何验证
 1. 执行：
@@ -111,29 +124,35 @@
      - `TestE2EAcceptanceE2PatchModeAAppServer`
      - `TestE2EAcceptanceE2PatchModeBACPFS`
      - `TestE2EReviewPatchConflictVisibleModeB`
+     - `TestE2EAcceptanceG2G3ReviewBranchAndCommit`
+     - `TestE2EAcceptanceG4InitRequiresPermission`
+     - `TestE2EAcceptanceG5Compact`
+     - `TestE2EAcceptanceG6LogoutRequiresReauth`
+     - `TestE2EAcceptanceH1ProfilesAffectRuntime`
+     - `TestE2EAcceptanceMCPListCallAndOAuth`
+     - `TestE2EAcceptanceI1ToI3AuthMethods`
+     - `TestE2EAuthRequiredWithoutConfiguredMethod`
      - `TestRPCReaderDetectsInvalidStdoutLine`
-   - PR4 相关验收由 e2e 自动覆盖：E1、E2，并回归 D2。
+   - PR5 相关验收由 e2e 自动覆盖：G/H/I + MCP；J1 由脚本触发专项回归。
    - 测试中持续校验 adapter stdout 每行均为合法 JSON-RPC。
-3. 可选手工验证：
-   - 启动 `cmd/codex-acp-go`。
-   - 发送 `/review <instructions>` 触发 review workflow。
-   - 在 Mode A/Mode B 下分别批准文件变更，观察 patch 应用路径与状态输出。
-   - 构造冲突场景，确认 `review_apply_failed` 与失败原因可见。
+3. J1 压测专项：
+   - `make stress-j1` 或 `scripts/j1_stress.sh`
+   - 预期：100 turns（含 approve/deny/cancel）完成，无崩溃、stdout 仍纯 JSON-RPC
 
 ## 遗留问题是什么
 1. B2 尚未完成：schema 仍为目录占位，缺少真实产物与 hash 追踪校验。
-2. 当前崩溃恢复策略对“当次请求”返回可读失败，需要客户端重试一次（已在 KNOWN_ISSUES 记录）。
-3. 审批等待期间若上游长期不响应，会触发默认取消；真实客户端超时体验仍需联调优化。
-4. Mode B 当前依赖 `fs/write_text_file` 约定，真实 ACP client 兼容性需在后续联调确认。
-5. e2e 仍主要依赖 fake app-server，真实 codex app-server review/edit 事件回归需在后续 PR 补齐。
+2. C1/C2/F1 尚未完成：mentions、images、结构化 TODO 仍需实现。
+3. 当前崩溃恢复策略对“当次请求”返回可读失败，需要客户端重试一次（已在 KNOWN_ISSUES 记录）。
+4. `/logout` 当前仅清理适配器侧认证态，不含交互式重新登录入口（需外部重新配置/重启）。
+5. e2e 仍主要依赖 fake app-server，真实 codex app-server 的 mcp/auth/compact 行为仍需联调回归。
 
 ## 当前阻塞（Blockers）
 - 无
 
 ## 下一步（Next）
-1. 进入 PR5：补齐 slash commands（G1-G6）、custom prompts、MCP servers、auth methods。
-2. 补充真实 codex app-server review/edit 联调样例（脱敏录制）以降低 fake 偏差风险。
-3. 评估并收敛 Mode B 与不同 ACP client 的 fs 协议兼容层。
+1. 完成 B2：落地真实 schema 产物与 hash 可追踪校验（CI 校验）。
+2. 完成 C1/C2/F1：mentions、images、TODO 结构化输出。
+3. 做真实 codex app-server 联调：重点覆盖 `/compact`、`mcpServer/*`、`auth/logout` 与 profile 参数映射。
 
 ## 变更摘要（每 PR 一条）
 ### 2026-02-26 — PR1 工程骨架 + 双 codec + 最小 e2e harness
@@ -197,6 +216,30 @@
     - `TestE2EAcceptanceE2PatchModeAAppServer`
     - `TestE2EAcceptanceE2PatchModeBACPFS`
     - `TestE2EReviewPatchConflictVisibleModeB`
+  - `go test ./...` 通过
+- D. 文档:
+  - 更新 `PROGRESS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`
+
+### 2026-02-27 — PR5 Slash commands + Profiles + MCP + Auth 收尾
+- A. 范围与目标:
+  - 覆盖 G1-G6、H1、I1-I3、J1，并补齐 MCP list/call/oauth 主流程
+- B. 实现:
+  - slash commands：`/review-branch`、`/review-commit`、`/init`、`/compact`、`/logout`
+  - profiles：支持 `CODEX_ACP_PROFILES_JSON` / `CODEX_ACP_PROFILES_FILE`，并映射 `model/approvalPolicy/sandbox/personality/systemInstructions`
+  - MCP：支持 `/mcp list`、`/mcp call`（ACP permission gate）、`/mcp oauth`
+  - auth：初始化暴露 `activeAuthMethod`；无认证 fail-closed；`/logout` 清空认证态
+  - J1：新增 `TestE2EAcceptanceJ1Stress100Turns`（环境变量门控）与 `scripts/j1_stress.sh`
+- C. 验证:
+  - 新增：
+    - `TestE2EAcceptanceG2G3ReviewBranchAndCommit`
+    - `TestE2EAcceptanceG4InitRequiresPermission`
+    - `TestE2EAcceptanceG5Compact`
+    - `TestE2EAcceptanceG6LogoutRequiresReauth`
+    - `TestE2EAcceptanceH1ProfilesAffectRuntime`
+    - `TestE2EAcceptanceMCPListCallAndOAuth`
+    - `TestE2EAcceptanceI1ToI3AuthMethods`
+    - `TestE2EAuthRequiredWithoutConfiguredMethod`
+    - `TestE2EAcceptanceJ1Stress100Turns`（`RUN_STRESS_J1=1`）
   - `go test ./...` 通过
 - D. 文档:
   - 更新 `PROGRESS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`

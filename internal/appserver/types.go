@@ -38,9 +38,19 @@ type InitializeResult struct {
 	Raw        map[string]any `json:"-"`
 }
 
+// RunOptions carries per-thread/per-turn runtime overrides.
+type RunOptions struct {
+	Model              string `json:"model,omitempty"`
+	ApprovalPolicy     string `json:"approvalPolicy,omitempty"`
+	Sandbox            string `json:"sandbox,omitempty"`
+	Personality        string `json:"personality,omitempty"`
+	SystemInstructions string `json:"systemInstructions,omitempty"`
+}
+
 // ThreadStartParams starts a new conversation thread.
 type ThreadStartParams struct {
 	CWD string `json:"cwd,omitempty"`
+	RunOptions
 }
 
 // ThreadStartResult carries new thread id.
@@ -52,6 +62,7 @@ type ThreadStartResult struct {
 type TurnStartParams struct {
 	ThreadID string `json:"threadId"`
 	Input    string `json:"input"`
+	RunOptions
 }
 
 // TurnStartResult carries new turn id.
@@ -63,10 +74,21 @@ type TurnStartResult struct {
 type ReviewStartParams struct {
 	ThreadID     string `json:"threadId"`
 	Instructions string `json:"instructions,omitempty"`
+	RunOptions
 }
 
 // ReviewStartResult returns review turn id.
 type ReviewStartResult struct {
+	TurnID string `json:"turnId"`
+}
+
+// CompactStartParams starts one compact operation under one thread.
+type CompactStartParams struct {
+	ThreadID string `json:"threadId"`
+}
+
+// CompactStartResult returns compact turn id.
+type CompactStartResult struct {
 	TurnID string `json:"turnId"`
 }
 
@@ -170,6 +192,42 @@ type ApprovalDecisionResult struct {
 	Outcome string `json:"outcome"`
 }
 
+// MCPServer describes one MCP server capability snapshot.
+type MCPServer struct {
+	Name          string   `json:"name"`
+	OAuthRequired bool     `json:"oauthRequired,omitempty"`
+	Tools         []string `json:"tools,omitempty"`
+}
+
+// MCPServerListResult is returned by mcpServer/list.
+type MCPServerListResult struct {
+	Servers []MCPServer `json:"servers"`
+}
+
+// MCPToolCallParams invokes one MCP tool.
+type MCPToolCallParams struct {
+	Server    string `json:"server"`
+	Tool      string `json:"tool"`
+	Arguments string `json:"arguments,omitempty"`
+}
+
+// MCPToolCallResult returns MCP tool output payload.
+type MCPToolCallResult struct {
+	Output string `json:"output,omitempty"`
+}
+
+// MCPOAuthLoginParams starts one MCP OAuth flow for one server.
+type MCPOAuthLoginParams struct {
+	Server string `json:"server"`
+}
+
+// MCPOAuthLoginResult reports MCP OAuth login bootstrap state.
+type MCPOAuthLoginResult struct {
+	Status  string `json:"status,omitempty"`
+	URL     string `json:"url,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
 // TurnEventType is an internal event kind consumed by ACP bridge.
 type TurnEventType string
 
@@ -212,10 +270,15 @@ type TurnEvent struct {
 const (
 	methodInitialized   = "initialized"
 	methodThreadStart   = "thread/start"
+	methodThreadCompact = "thread/compact/start"
 	methodTurnStart     = "turn/start"
 	methodReviewStart   = "review/start"
 	methodTurnInterrupt = "turn/interrupt"
 	methodApprovalReq   = "approval/request"
+	methodMCPServerList = "mcpServer/list"
+	methodMCPServerCall = "mcpServer/call"
+	methodMCPOAuthLogin = "mcpServer/oauth/login"
+	methodAuthLogout    = "auth/logout"
 
 	notificationTurnStarted           = "turn/started"
 	notificationTurnUpdate            = "turn/update"

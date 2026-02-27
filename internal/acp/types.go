@@ -23,6 +23,7 @@ type RPCError struct {
 type InitializeResult struct {
 	AgentCapabilities AgentCapabilities `json:"agentCapabilities"`
 	AuthMethods       []AuthMethod      `json:"authMethods,omitempty"`
+	ActiveAuthMethod  string            `json:"activeAuthMethod,omitempty"`
 }
 
 // AgentCapabilities describes top-level ACP abilities.
@@ -43,6 +44,7 @@ type AuthMethod struct {
 // SessionNewParams are optional fields for session/new.
 type SessionNewParams struct {
 	CWD string `json:"cwd,omitempty"`
+	PromptConfig
 }
 
 // SessionNewResult returns new session id.
@@ -54,6 +56,7 @@ type SessionNewResult struct {
 type SessionPromptParams struct {
 	SessionID string `json:"sessionId"`
 	Prompt    string `json:"prompt,omitempty"`
+	PromptConfig
 }
 
 // SessionPromptResult returns final stop reason.
@@ -64,6 +67,25 @@ type SessionPromptResult struct {
 // SessionCancelParams requests turn cancellation.
 type SessionCancelParams struct {
 	SessionID string `json:"sessionId"`
+}
+
+// PromptConfig carries runtime model/policy/personality overrides.
+type PromptConfig struct {
+	Profile            string `json:"profile,omitempty"`
+	Model              string `json:"model,omitempty"`
+	ApprovalPolicy     string `json:"approvalPolicy,omitempty"`
+	Sandbox            string `json:"sandbox,omitempty"`
+	Personality        string `json:"personality,omitempty"`
+	SystemInstructions string `json:"systemInstructions,omitempty"`
+}
+
+// ProfileConfig is one named profile loaded from adapter configuration.
+type ProfileConfig struct {
+	Model              string `json:"model,omitempty"`
+	ApprovalPolicy     string `json:"approvalPolicy,omitempty"`
+	Sandbox            string `json:"sandbox,omitempty"`
+	Personality        string `json:"personality,omitempty"`
+	SystemInstructions string `json:"systemInstructions,omitempty"`
 }
 
 // SessionCancelResult reports if active turn was cancelled.

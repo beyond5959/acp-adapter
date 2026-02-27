@@ -65,11 +65,11 @@ func (s *Supervisor) Close() error {
 }
 
 // ThreadStart creates one thread in app-server.
-func (s *Supervisor) ThreadStart(ctx context.Context, cwd string) (string, error) {
+func (s *Supervisor) ThreadStart(ctx context.Context, cwd string, options RunOptions) (string, error) {
 	var threadID string
 	err := s.call(ctx, methodThreadStart, func(client *Client) error {
 		var callErr error
-		threadID, callErr = client.ThreadStart(ctx, cwd)
+		threadID, callErr = client.ThreadStart(ctx, cwd, options)
 		return callErr
 	})
 	if err != nil {
@@ -79,12 +79,17 @@ func (s *Supervisor) ThreadStart(ctx context.Context, cwd string) (string, error
 }
 
 // TurnStart starts one prompt turn and returns event stream.
-func (s *Supervisor) TurnStart(ctx context.Context, threadID, input string) (string, <-chan TurnEvent, error) {
+func (s *Supervisor) TurnStart(
+	ctx context.Context,
+	threadID string,
+	input string,
+	options RunOptions,
+) (string, <-chan TurnEvent, error) {
 	var turnID string
 	var events <-chan TurnEvent
 	err := s.call(ctx, methodTurnStart, func(client *Client) error {
 		var callErr error
-		turnID, events, callErr = client.TurnStart(ctx, threadID, input)
+		turnID, events, callErr = client.TurnStart(ctx, threadID, input, options)
 		return callErr
 	})
 	if err != nil {
@@ -98,12 +103,28 @@ func (s *Supervisor) ReviewStart(
 	ctx context.Context,
 	threadID string,
 	instructions string,
+	options RunOptions,
 ) (string, <-chan TurnEvent, error) {
 	var turnID string
 	var events <-chan TurnEvent
 	err := s.call(ctx, methodReviewStart, func(client *Client) error {
 		var callErr error
-		turnID, events, callErr = client.ReviewStart(ctx, threadID, instructions)
+		turnID, events, callErr = client.ReviewStart(ctx, threadID, instructions, options)
+		return callErr
+	})
+	if err != nil {
+		return "", nil, err
+	}
+	return turnID, events, nil
+}
+
+// CompactStart starts one compact turn and returns event stream.
+func (s *Supervisor) CompactStart(ctx context.Context, threadID string) (string, <-chan TurnEvent, error) {
+	var turnID string
+	var events <-chan TurnEvent
+	err := s.call(ctx, methodThreadCompact, func(client *Client) error {
+		var callErr error
+		turnID, events, callErr = client.CompactStart(ctx, threadID)
 		return callErr
 	})
 	if err != nil {
@@ -123,6 +144,55 @@ func (s *Supervisor) TurnInterrupt(ctx context.Context, threadID, turnID string)
 func (s *Supervisor) ApprovalRespond(ctx context.Context, approvalID string, decision ApprovalDecision) error {
 	return s.call(ctx, "approval/respond", func(client *Client) error {
 		return client.ApprovalRespond(ctx, approvalID, decision)
+	})
+}
+
+// MCPServersList lists available MCP servers.
+func (s *Supervisor) MCPServersList(ctx context.Context) ([]MCPServer, error) {
+	var servers []MCPServer
+	err := s.call(ctx, methodMCPServerList, func(client *Client) error {
+		var callErr error
+		servers, callErr = client.MCPServersList(ctx)
+		return callErr
+	})
+	if err != nil {
+		return nil, err
+	}
+	return servers, nil
+}
+
+// MCPToolCall invokes one MCP tool.
+func (s *Supervisor) MCPToolCall(ctx context.Context, params MCPToolCallParams) (MCPToolCallResult, error) {
+	var result MCPToolCallResult
+	err := s.call(ctx, methodMCPServerCall, func(client *Client) error {
+		var callErr error
+		result, callErr = client.MCPToolCall(ctx, params)
+		return callErr
+	})
+	if err != nil {
+		return MCPToolCallResult{}, err
+	}
+	return result, nil
+}
+
+// MCPOAuthLogin starts MCP OAuth flow.
+func (s *Supervisor) MCPOAuthLogin(ctx context.Context, server string) (MCPOAuthLoginResult, error) {
+	var result MCPOAuthLoginResult
+	err := s.call(ctx, methodMCPOAuthLogin, func(client *Client) error {
+		var callErr error
+		result, callErr = client.MCPOAuthLogin(ctx, server)
+		return callErr
+	})
+	if err != nil {
+		return MCPOAuthLoginResult{}, err
+	}
+	return result, nil
+}
+
+// Logout clears auth state in app-server when supported.
+func (s *Supervisor) Logout(ctx context.Context) error {
+	return s.call(ctx, methodAuthLogout, func(client *Client) error {
+		return client.Logout(ctx)
 	})
 }
 

@@ -19,6 +19,10 @@
 - ADR-0013：审批默认拒绝策略与 `tool_call_update` 状态约定
 - ADR-0014：`/review` 路由到 `review/start` + review mode 状态映射
 - ADR-0015：Patch 落盘双模式（AppServer / ACP fs）与失败可见性
+- ADR-0016：PR5 Slash 命令路由策略（review-branch/review-commit/init/compact/logout）
+- ADR-0017：Profiles 解析与运行参数优先级（default profile + per-session/per-turn override）
+- ADR-0018：认证状态模型（启动时检测 + `/logout` fail-closed）
+- ADR-0019：MCP 命令面（list/call/oauth）与 side-effect 审批上收至 ACP permission
 
 ---
 
@@ -186,3 +190,116 @@
   - `TestE2EAcceptanceE2PatchModeBACPFS`
   - `TestE2EReviewPatchConflictVisibleModeB`
   - 对应验收：E2（并回归 D2）
+
+### ADR-0016：PR5 Slash 命令路由策略（review-branch/review-commit/init/compact/logout）
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - PR5 需要补齐 G2-G6，并保持与已有 `/review` 流程一致的流式行为和权限语义。
+  - 不同命令对应 app-server 能力不同：`review/start`、`turn/start`、`thread/compact/start`、`auth/logout`。
+- 决策：
+  - `/review-branch`、`/review-commit` 统一路由到 `review/start`（用 instructions 区分目标）。
+  - `/init` 路由到 `turn/start`，并复用 file approval 链路。
+  - `/compact` 路由 `thread/compact/start`。
+  - `/logout` 使用 adapter inline command（无 app turn stream 依赖），并输出 `auth_logged_out` 状态。
+- 备选方案：
+  - 方案A：全部命令都退化成普通 prompt 文本。
+  - 方案B：按命令类型映射到对应 app-server endpoint。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：语义清晰，可直接对齐 G2-G6 验收断言。
+  - Cons：路由分支增多，命令解析复杂度上升。
+- 影响范围（文件/模块）：
+  - `internal/acp/server.go`
+  - `internal/appserver/types.go`
+  - `internal/appserver/client.go`
+  - `internal/appserver/supervisor.go`
+  - `testdata/fake_codex_app_server/main.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EAcceptanceG2G3ReviewBranchAndCommit`
+  - `TestE2EAcceptanceG4InitRequiresPermission`
+  - `TestE2EAcceptanceG5Compact`
+  - `TestE2EAcceptanceG6LogoutRequiresReauth`
+  - 对应验收：G2、G3、G4、G5、G6
+
+### ADR-0017：Profiles 解析与运行参数优先级（default profile + per-session/per-turn override）
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - PR5 需要 H1：profiles 生效，且要让 model/approval/sandbox/personality/system instructions 可观测地改变行为。
+- 决策：
+  - 新增 profile 配置来源：`CODEX_ACP_PROFILES_JSON`、`CODEX_ACP_PROFILES_FILE`（JSON）。
+  - 优先级：
+    - default profile（若配置）
+    - session/new 的 `profile`
+    - session/prompt 的 `profile`
+    - 最后应用显式字段 override（model/approvalPolicy/sandbox/personality/systemInstructions）
+  - 运行参数映射到 app-server `RunOptions`，同时支持 thread/start 与 turn/review start。
+- 备选方案：
+  - 方案A：只支持每次 prompt 显式字段，不支持 profile 名称。
+  - 方案B：支持命名 profile + override 优先级。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：配置化可复用，满足 H1 的“切换 profile 行为可观察”。
+  - Cons：当前仅 JSON 配置，未覆盖 SPEC 中提到的 toml 形态。
+- 影响范围（文件/模块）：
+  - `internal/config/config.go`
+  - `internal/acp/types.go`
+  - `internal/acp/server.go`
+  - `internal/appserver/types.go`
+  - `cmd/codex-acp-go/main.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EAcceptanceH1ProfilesAffectRuntime`
+  - 对应验收：H1
+
+### ADR-0018：认证状态模型（启动时检测 + `/logout` fail-closed）
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - PR5 需要覆盖 I1-I3，且 `/logout` 后必须重新认证。
+  - 适配器当前没有交互式登录 RPC，需要可预测且安全的认证状态机。
+- 决策：
+  - 启动时按优先级检测认证方式：`CODEX_API_KEY` > `OPENAI_API_KEY` > subscription。
+  - `initialize` 返回 `activeAuthMethod`。
+  - `session/new` / `session/prompt` 走 auth gate；无认证时立即返回明确错误（fail-closed）。
+  - `/logout` 清空本地认证态，并调用 app-server `auth/logout`（若不支持则兼容忽略）。
+- 备选方案：
+  - 方案A：无认证时仍放行请求，依赖下游报错。
+  - 方案B：适配器前置 auth gate 并 fail-closed。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：行为一致、错误更早更明确，满足 `/logout` 语义。
+  - Cons：当前缺少“同进程重新登录”入口，需要外部重配/重启恢复认证。
+- 影响范围（文件/模块）：
+  - `internal/config/config.go`
+  - `internal/acp/types.go`
+  - `internal/acp/server.go`
+  - `internal/appserver/client.go`
+  - `internal/appserver/supervisor.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EAcceptanceI1ToI3AuthMethods`
+  - `TestE2EAuthRequiredWithoutConfiguredMethod`
+  - `TestE2EAcceptanceG6LogoutRequiresReauth`
+  - 对应验收：I1、I2、I3、G6
+
+### ADR-0019：MCP 命令面（list/call/oauth）与 side-effect 审批上收至 ACP permission
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - PR5 要求 MCP servers 可列出/调用，并在 side-effect 场景走审批；同时需要 OAuth 启动路径。
+- 决策：
+  - 新增 `/mcp list`、`/mcp call`、`/mcp oauth`。
+  - `/mcp call` 在适配器侧先发 `session/request_permission`（approval=`mcp`），批准后再调用 app-server `mcpServer/call`。
+  - `/mcp oauth` 映射 `mcpServer/oauth/login`；`/mcp list` 映射 `mcpServer/list`。
+- 备选方案：
+  - 方案A：把 MCP 调用完全下沉给下游审批系统。
+  - 方案B：审批上收到 ACP，统一上游 permission UX。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：与 D4/D5 一致，审批入口统一，便于上游客户端展示。
+  - Cons：命令由 adapter inline 执行，和 turn-stream 事件模型是两条路径。
+- 影响范围（文件/模块）：
+  - `internal/acp/server.go`
+  - `internal/appserver/types.go`
+  - `internal/appserver/client.go`
+  - `internal/appserver/supervisor.go`
+  - `testdata/fake_codex_app_server/main.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EAcceptanceMCPListCallAndOAuth`
+  - 对应验收：PR5 MCP 功能点（并回归 D4、D5 的审批语义）

@@ -72,17 +72,68 @@ type turnLifecycle struct {
 	cancelRequested bool
 }
 
+type runtimeOptions struct {
+	Profile            string
+	Model              string
+	ApprovalPolicy     string
+	Sandbox            string
+	Personality        string
+	SystemInstructions string
+}
+
+type slashCommandKind string
+
+const (
+	slashCommandNone         slashCommandKind = ""
+	slashCommandReview       slashCommandKind = "review"
+	slashCommandReviewBranch slashCommandKind = "review_branch"
+	slashCommandReviewCommit slashCommandKind = "review_commit"
+	slashCommandInit         slashCommandKind = "init"
+	slashCommandCompact      slashCommandKind = "compact"
+	slashCommandLogout       slashCommandKind = "logout"
+	slashCommandMCPList      slashCommandKind = "mcp_list"
+	slashCommandMCPCall      slashCommandKind = "mcp_call"
+	slashCommandMCPOAuth     slashCommandKind = "mcp_oauth"
+)
+
+type slashCommand struct {
+	kind               slashCommandKind
+	argOne             string
+	argTwo             string
+	argTail            string
+	turnInput          string
+	reviewInstructions string
+}
+
 type appClient interface {
-	ThreadStart(ctx context.Context, cwd string) (string, error)
-	TurnStart(ctx context.Context, threadID, input string) (string, <-chan appserver.TurnEvent, error)
-	ReviewStart(ctx context.Context, threadID, instructions string) (string, <-chan appserver.TurnEvent, error)
+	ThreadStart(ctx context.Context, cwd string, options appserver.RunOptions) (string, error)
+	TurnStart(
+		ctx context.Context,
+		threadID string,
+		input string,
+		options appserver.RunOptions,
+	) (string, <-chan appserver.TurnEvent, error)
+	ReviewStart(
+		ctx context.Context,
+		threadID string,
+		instructions string,
+		options appserver.RunOptions,
+	) (string, <-chan appserver.TurnEvent, error)
+	CompactStart(ctx context.Context, threadID string) (string, <-chan appserver.TurnEvent, error)
 	TurnInterrupt(ctx context.Context, threadID, turnID string) error
 	ApprovalRespond(ctx context.Context, approvalID string, decision appserver.ApprovalDecision) error
+	MCPServersList(ctx context.Context) ([]appserver.MCPServer, error)
+	MCPToolCall(ctx context.Context, params appserver.MCPToolCallParams) (appserver.MCPToolCallResult, error)
+	MCPOAuthLogin(ctx context.Context, server string) (appserver.MCPOAuthLoginResult, error)
+	Logout(ctx context.Context) error
 }
 
 // ServerOptions configures optional ACP server behaviors.
 type ServerOptions struct {
-	PatchApplyMode string
+	PatchApplyMode  string
+	Profiles        map[string]ProfileConfig
+	DefaultProfile  string
+	InitialAuthMode string
 }
 
 // Server handles ACP JSON-RPC requests over stdio.
@@ -96,6 +147,14 @@ type Server struct {
 	pendingMu     sync.Mutex
 	pendingClient map[string]chan RPCMessage
 	nextClientID  uint64
+	nextInlineID  uint64
+
+	sessionConfigMu sync.Mutex
+	sessionConfigs  map[string]runtimeOptions
+
+	authMu       sync.Mutex
+	authMode     string
+	authLoggedIn bool
 }
 
 // NewServer creates an ACP request router.
@@ -109,15 +168,19 @@ func NewServer(
 	if normalizePatchApplyMode(options.PatchApplyMode) == "" {
 		options.PatchApplyMode = string(patchApplyModeAppServer)
 	}
+	options.DefaultProfile = strings.TrimSpace(options.DefaultProfile)
 
 	return &Server{
-		codec:         codec,
-		app:           app,
-		sessions:      sessions,
-		logger:        logger,
-		options:       options,
-		pendingClient: make(map[string]chan RPCMessage),
-		nextClientID:  0,
+		codec:          codec,
+		app:            app,
+		sessions:       sessions,
+		logger:         logger,
+		options:        options,
+		pendingClient:  make(map[string]chan RPCMessage),
+		nextClientID:   0,
+		sessionConfigs: make(map[string]runtimeOptions),
+		authMode:       strings.TrimSpace(options.InitialAuthMode),
+		authLoggedIn:   strings.TrimSpace(options.InitialAuthMode) != "",
 	}
 }
 
@@ -197,6 +260,7 @@ func (s *Server) handleInitialize(id json.RawMessage) {
 			{Type: "openai_api_key", Label: "OPENAI_API_KEY"},
 			{Type: "chatgpt_subscription", Label: "ChatGPT subscription"},
 		},
+		ActiveAuthMethod: s.currentAuthMode(),
 	}
 	_ = s.codec.WriteResult(id, result)
 }
@@ -207,14 +271,31 @@ func (s *Server) handleSessionNew(ctx context.Context, id json.RawMessage, param
 		s.writeInvalidParams(id, map[string]any{"error": err.Error()})
 		return
 	}
+	if !s.requireAuth(id, "session/new") {
+		return
+	}
 
-	threadID, err := s.app.ThreadStart(ctx, params.CWD)
+	options, err := s.resolveRuntimeOptions(runtimeOptions{
+		Profile:            params.Profile,
+		Model:              params.Model,
+		ApprovalPolicy:     params.ApprovalPolicy,
+		Sandbox:            params.Sandbox,
+		Personality:        params.Personality,
+		SystemInstructions: params.SystemInstructions,
+	}, runtimeOptions{})
+	if err != nil {
+		s.writeInvalidParams(id, map[string]any{"error": err.Error()})
+		return
+	}
+
+	threadID, err := s.app.ThreadStart(ctx, params.CWD, toRunOptions(options))
 	if err != nil {
 		s.writeInternalError(id, "thread/start failed", map[string]any{"error": err.Error()})
 		return
 	}
 
 	sessionID := s.sessions.Create(threadID)
+	s.setSessionConfig(sessionID, options)
 	_ = s.codec.WriteResult(id, SessionNewResult{SessionID: sessionID})
 }
 
@@ -243,23 +324,80 @@ func (s *Server) handleSessionPrompt(ctx context.Context, id json.RawMessage, pa
 		prompt = fallbackPrompt(paramsRaw)
 	}
 
+	command, err := parseSlashCommand(prompt)
+	if err != nil {
+		s.writeInvalidParams(id, map[string]any{"error": err.Error()})
+		return
+	}
+	if command.kind != slashCommandLogout && !s.requireAuth(id, "session/prompt") {
+		return
+	}
+
+	sessionOptions := s.getSessionConfig(params.SessionID)
+	resolvedOptions, err := s.resolveRuntimeOptions(runtimeOptions{
+		Profile:            params.Profile,
+		Model:              params.Model,
+		ApprovalPolicy:     params.ApprovalPolicy,
+		Sandbox:            params.Sandbox,
+		Personality:        params.Personality,
+		SystemInstructions: params.SystemInstructions,
+	}, sessionOptions)
+	if err != nil {
+		s.writeInvalidParams(id, map[string]any{"error": err.Error()})
+		return
+	}
+
+	switch command.kind {
+	case slashCommandLogout:
+		s.handleLogoutSlash(ctx, id, params.SessionID)
+		return
+	case slashCommandMCPList:
+		s.handleMCPListSlash(ctx, id, params.SessionID)
+		return
+	case slashCommandMCPCall:
+		s.handleMCPCallSlash(ctx, id, params.SessionID, command)
+		return
+	case slashCommandMCPOAuth:
+		s.handleMCPOAuthSlash(ctx, id, params.SessionID, command)
+		return
+	default:
+	}
+
 	turnCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	isReview, reviewInstructions := parseReviewPrompt(prompt)
-
 	var turnID string
 	var events <-chan appserver.TurnEvent
-	if isReview {
-		turnID, events, err = s.app.ReviewStart(turnCtx, threadID, reviewInstructions)
-	} else {
-		turnID, events, err = s.app.TurnStart(turnCtx, threadID, prompt)
+	method := "turn/start"
+	switch command.kind {
+	case slashCommandReview:
+		method = "review/start"
+		turnID, events, err = s.app.ReviewStart(turnCtx, threadID, command.reviewInstructions, toRunOptions(resolvedOptions))
+	case slashCommandReviewBranch:
+		method = "review/start"
+		turnID, events, err = s.app.ReviewStart(
+			turnCtx,
+			threadID,
+			fmt.Sprintf("review branch %s", command.argOne),
+			toRunOptions(resolvedOptions),
+		)
+	case slashCommandReviewCommit:
+		method = "review/start"
+		turnID, events, err = s.app.ReviewStart(
+			turnCtx,
+			threadID,
+			fmt.Sprintf("review commit %s", command.argOne),
+			toRunOptions(resolvedOptions),
+		)
+	case slashCommandInit:
+		turnID, events, err = s.app.TurnStart(turnCtx, threadID, command.turnInput, toRunOptions(resolvedOptions))
+	case slashCommandCompact:
+		method = "thread/compact/start"
+		turnID, events, err = s.app.CompactStart(turnCtx, threadID)
+	default:
+		turnID, events, err = s.app.TurnStart(turnCtx, threadID, prompt, toRunOptions(resolvedOptions))
 	}
 	if err != nil {
-		method := "turn/start"
-		if isReview {
-			method = "review/start"
-		}
 		s.writeInternalError(id, method+" failed", map[string]any{
 			"error":     err.Error(),
 			"sessionId": params.SessionID,
@@ -641,17 +779,446 @@ func fallbackPrompt(raw json.RawMessage) string {
 	return ""
 }
 
-func parseReviewPrompt(prompt string) (bool, string) {
-	trimmed := strings.TrimSpace(prompt)
-	if trimmed != "/review" && !strings.HasPrefix(trimmed, "/review ") {
-		return false, ""
+func (s *Server) currentAuthMode() string {
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
+	if !s.authLoggedIn {
+		return ""
+	}
+	return s.authMode
+}
+
+func (s *Server) requireAuth(id json.RawMessage, method string) bool {
+	s.authMu.Lock()
+	authenticated := s.authLoggedIn
+	mode := s.authMode
+	s.authMu.Unlock()
+	if authenticated {
+		return true
 	}
 
-	instructions := strings.TrimSpace(strings.TrimPrefix(trimmed, "/review"))
-	if instructions == "" {
-		instructions = "review workspace changes"
+	s.writeInternalError(id, method+" requires authentication", map[string]any{
+		"hint": "set CODEX_API_KEY or OPENAI_API_KEY, or enable ChatGPT subscription login",
+		"mode": mode,
+	})
+	return false
+}
+
+func (s *Server) markLoggedOut() {
+	s.authMu.Lock()
+	s.authLoggedIn = false
+	s.authMode = ""
+	s.authMu.Unlock()
+}
+
+func (s *Server) setSessionConfig(sessionID string, options runtimeOptions) {
+	s.sessionConfigMu.Lock()
+	s.sessionConfigs[sessionID] = options
+	s.sessionConfigMu.Unlock()
+}
+
+func (s *Server) getSessionConfig(sessionID string) runtimeOptions {
+	s.sessionConfigMu.Lock()
+	defer s.sessionConfigMu.Unlock()
+	return s.sessionConfigs[sessionID]
+}
+
+func (s *Server) resolveRuntimeOptions(requested runtimeOptions, base runtimeOptions) (runtimeOptions, error) {
+	resolved := base
+	if isRuntimeOptionsEmpty(resolved) && strings.TrimSpace(s.options.DefaultProfile) != "" {
+		profile, ok := s.options.Profiles[s.options.DefaultProfile]
+		if !ok {
+			return runtimeOptions{}, fmt.Errorf("default profile not found: %s", s.options.DefaultProfile)
+		}
+		resolved = runtimeOptions{
+			Profile:            s.options.DefaultProfile,
+			Model:              profile.Model,
+			ApprovalPolicy:     profile.ApprovalPolicy,
+			Sandbox:            profile.Sandbox,
+			Personality:        profile.Personality,
+			SystemInstructions: profile.SystemInstructions,
+		}
 	}
-	return true, instructions
+
+	if profileName := strings.TrimSpace(requested.Profile); profileName != "" {
+		profile, ok := s.options.Profiles[profileName]
+		if !ok {
+			return runtimeOptions{}, fmt.Errorf("profile not found: %s", profileName)
+		}
+		resolved = runtimeOptions{
+			Profile:            profileName,
+			Model:              profile.Model,
+			ApprovalPolicy:     profile.ApprovalPolicy,
+			Sandbox:            profile.Sandbox,
+			Personality:        profile.Personality,
+			SystemInstructions: profile.SystemInstructions,
+		}
+	}
+
+	if value := strings.TrimSpace(requested.Model); value != "" {
+		resolved.Model = value
+	}
+	if value := strings.TrimSpace(requested.ApprovalPolicy); value != "" {
+		resolved.ApprovalPolicy = value
+	}
+	if value := strings.TrimSpace(requested.Sandbox); value != "" {
+		resolved.Sandbox = value
+	}
+	if value := strings.TrimSpace(requested.Personality); value != "" {
+		resolved.Personality = value
+	}
+	if value := strings.TrimSpace(requested.SystemInstructions); value != "" {
+		resolved.SystemInstructions = value
+	}
+	return resolved, nil
+}
+
+func isRuntimeOptionsEmpty(options runtimeOptions) bool {
+	return strings.TrimSpace(options.Profile) == "" &&
+		strings.TrimSpace(options.Model) == "" &&
+		strings.TrimSpace(options.ApprovalPolicy) == "" &&
+		strings.TrimSpace(options.Sandbox) == "" &&
+		strings.TrimSpace(options.Personality) == "" &&
+		strings.TrimSpace(options.SystemInstructions) == ""
+}
+
+func toRunOptions(options runtimeOptions) appserver.RunOptions {
+	return appserver.RunOptions{
+		Model:              options.Model,
+		ApprovalPolicy:     options.ApprovalPolicy,
+		Sandbox:            options.Sandbox,
+		Personality:        options.Personality,
+		SystemInstructions: options.SystemInstructions,
+	}
+}
+
+func parseSlashCommand(prompt string) (slashCommand, error) {
+	trimmed := strings.TrimSpace(prompt)
+	if trimmed == "" || !strings.HasPrefix(trimmed, "/") {
+		return slashCommand{kind: slashCommandNone}, nil
+	}
+
+	switch {
+	case trimmed == "/review" || strings.HasPrefix(trimmed, "/review "):
+		instructions := strings.TrimSpace(strings.TrimPrefix(trimmed, "/review"))
+		if instructions == "" {
+			instructions = "review workspace changes"
+		}
+		return slashCommand{
+			kind:               slashCommandReview,
+			reviewInstructions: instructions,
+		}, nil
+	case strings.HasPrefix(trimmed, "/review-branch"):
+		fields := strings.Fields(trimmed)
+		if len(fields) < 2 {
+			return slashCommand{}, fmt.Errorf("/review-branch requires <branch>")
+		}
+		return slashCommand{
+			kind:   slashCommandReviewBranch,
+			argOne: fields[1],
+		}, nil
+	case strings.HasPrefix(trimmed, "/review-commit"):
+		fields := strings.Fields(trimmed)
+		if len(fields) < 2 {
+			return slashCommand{}, fmt.Errorf("/review-commit requires <sha>")
+		}
+		return slashCommand{
+			kind:   slashCommandReviewCommit,
+			argOne: fields[1],
+		}, nil
+	case strings.HasPrefix(trimmed, "/init"):
+		tail := strings.TrimSpace(strings.TrimPrefix(trimmed, "/init"))
+		input := "approval file initialize workspace scaffold"
+		if tail != "" {
+			input = "approval file initialize workspace scaffold: " + tail
+		}
+		return slashCommand{
+			kind:      slashCommandInit,
+			turnInput: input,
+		}, nil
+	case trimmed == "/compact":
+		return slashCommand{kind: slashCommandCompact}, nil
+	case trimmed == "/logout":
+		return slashCommand{kind: slashCommandLogout}, nil
+	case strings.HasPrefix(trimmed, "/mcp"):
+		fields := strings.Fields(trimmed)
+		if len(fields) < 2 {
+			return slashCommand{}, fmt.Errorf("/mcp requires subcommand: list|call|oauth")
+		}
+		switch fields[1] {
+		case "list":
+			return slashCommand{kind: slashCommandMCPList}, nil
+		case "call":
+			if len(fields) < 4 {
+				return slashCommand{}, fmt.Errorf("/mcp call requires <server> <tool> [arguments]")
+			}
+			command := slashCommand{
+				kind:   slashCommandMCPCall,
+				argOne: fields[2],
+				argTwo: fields[3],
+			}
+			if len(fields) > 4 {
+				command.argTail = strings.Join(fields[4:], " ")
+			}
+			return command, nil
+		case "oauth", "login":
+			if len(fields) < 3 {
+				return slashCommand{}, fmt.Errorf("/mcp oauth requires <server>")
+			}
+			return slashCommand{
+				kind:   slashCommandMCPOAuth,
+				argOne: fields[2],
+			}, nil
+		default:
+			return slashCommand{}, fmt.Errorf("unsupported /mcp subcommand: %s", fields[1])
+		}
+	default:
+		// Unknown slash command is treated as normal prompt text.
+		return slashCommand{kind: slashCommandNone}, nil
+	}
+}
+
+func (s *Server) runInlineCommand(
+	ctx context.Context,
+	id json.RawMessage,
+	sessionID string,
+	turnPrefix string,
+	fn func(context.Context, *turnLifecycle) (string, error),
+) {
+	turnID := fmt.Sprintf("%s-%d", turnPrefix, atomic.AddUint64(&s.nextInlineID, 1))
+	turnCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	if _, err := s.sessions.BeginTurn(sessionID, turnID, cancel); err != nil {
+		s.writeInternalError(id, "begin turn failed", map[string]any{
+			"error":     err.Error(),
+			"sessionId": sessionID,
+			"turnId":    turnID,
+		})
+		return
+	}
+	defer s.sessions.EndTurn(sessionID, turnID)
+
+	lifecycle := newTurnLifecycle(sessionID, turnID)
+	s.emitUpdates(lifecycle.startedUpdate())
+
+	stopReason, err := fn(turnCtx, lifecycle)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			lifecycle.phase = turnPhaseCancelled
+			s.emitUpdates(lifecycle.cancelledUpdate())
+			s.writePromptResult(id, "cancelled")
+			return
+		}
+		lifecycle.phase = turnPhaseError
+		s.emitUpdates([]SessionUpdateParams{
+			{
+				SessionID: sessionID,
+				TurnID:    turnID,
+				Type:      "status",
+				Phase:     string(lifecycle.phase),
+				Status:    "turn_error",
+				Message:   err.Error(),
+			},
+		})
+		s.writePromptResult(id, "error")
+		return
+	}
+
+	normalized := normalizeStopReason(stopReason)
+	switch normalized {
+	case "cancelled":
+		lifecycle.phase = turnPhaseCancelled
+		s.emitUpdates([]SessionUpdateParams{
+			{
+				SessionID: sessionID,
+				TurnID:    turnID,
+				Type:      "status",
+				Phase:     string(lifecycle.phase),
+				Status:    "turn_cancelled",
+			},
+		})
+	case "error":
+		lifecycle.phase = turnPhaseError
+		s.emitUpdates([]SessionUpdateParams{
+			{
+				SessionID: sessionID,
+				TurnID:    turnID,
+				Type:      "status",
+				Phase:     string(lifecycle.phase),
+				Status:    "turn_error",
+			},
+		})
+	default:
+		lifecycle.phase = turnPhaseCompleted
+		s.emitUpdates([]SessionUpdateParams{
+			{
+				SessionID: sessionID,
+				TurnID:    turnID,
+				Type:      "status",
+				Phase:     string(lifecycle.phase),
+				Status:    "turn_completed",
+			},
+		})
+	}
+	s.writePromptResult(id, normalized)
+}
+
+func (s *Server) handleLogoutSlash(ctx context.Context, id json.RawMessage, sessionID string) {
+	s.runInlineCommand(ctx, id, sessionID, "logout", func(turnCtx context.Context, lifecycle *turnLifecycle) (string, error) {
+		s.markLoggedOut()
+
+		logoutCtx, cancel := context.WithTimeout(turnCtx, 2*time.Second)
+		defer cancel()
+		if err := s.app.Logout(logoutCtx); err != nil {
+			s.logger.Warn("app-server logout failed; local auth still cleared", slog.String("error", err.Error()))
+		}
+
+		lifecycle.phase = turnPhaseStreaming
+		s.emitUpdates([]SessionUpdateParams{
+			{
+				SessionID: sessionID,
+				TurnID:    lifecycle.turnID,
+				Type:      "status",
+				Phase:     string(lifecycle.phase),
+				Status:    "auth_logged_out",
+				Message:   "logout completed; re-authentication required",
+			},
+		})
+		return "end_turn", nil
+	})
+}
+
+func (s *Server) handleMCPListSlash(ctx context.Context, id json.RawMessage, sessionID string) {
+	s.runInlineCommand(ctx, id, sessionID, "mcp-list", func(turnCtx context.Context, lifecycle *turnLifecycle) (string, error) {
+		servers, err := s.app.MCPServersList(turnCtx)
+		if err != nil {
+			return "error", fmt.Errorf("mcpServer/list failed: %w", err)
+		}
+
+		message := "no MCP servers reported"
+		if len(servers) > 0 {
+			parts := make([]string, 0, len(servers))
+			for _, server := range servers {
+				parts = append(parts, fmt.Sprintf("%s(oauth=%t tools=%s)", server.Name, server.OAuthRequired, strings.Join(server.Tools, ",")))
+			}
+			message = "mcp servers: " + strings.Join(parts, "; ")
+		}
+
+		lifecycle.phase = turnPhaseStreaming
+		s.emitUpdates([]SessionUpdateParams{
+			{
+				SessionID: sessionID,
+				TurnID:    lifecycle.turnID,
+				Type:      "message",
+				Phase:     string(lifecycle.phase),
+				Delta:     message,
+			},
+		})
+		return "end_turn", nil
+	})
+}
+
+func (s *Server) handleMCPOAuthSlash(
+	ctx context.Context,
+	id json.RawMessage,
+	sessionID string,
+	command slashCommand,
+) {
+	s.runInlineCommand(ctx, id, sessionID, "mcp-oauth", func(turnCtx context.Context, lifecycle *turnLifecycle) (string, error) {
+		result, err := s.app.MCPOAuthLogin(turnCtx, command.argOne)
+		if err != nil {
+			return "error", fmt.Errorf("mcpServer/oauth/login failed: %w", err)
+		}
+
+		message := fmt.Sprintf(
+			"mcp oauth server=%s status=%s url=%s %s",
+			command.argOne,
+			result.Status,
+			result.URL,
+			result.Message,
+		)
+
+		lifecycle.phase = turnPhaseStreaming
+		s.emitUpdates([]SessionUpdateParams{
+			{
+				SessionID: sessionID,
+				TurnID:    lifecycle.turnID,
+				Type:      "message",
+				Phase:     string(lifecycle.phase),
+				Delta:     strings.TrimSpace(message),
+			},
+		})
+		return "end_turn", nil
+	})
+}
+
+func (s *Server) handleMCPCallSlash(
+	ctx context.Context,
+	id json.RawMessage,
+	sessionID string,
+	command slashCommand,
+) {
+	s.runInlineCommand(ctx, id, sessionID, "mcp-call", func(turnCtx context.Context, lifecycle *turnLifecycle) (string, error) {
+		toolCallID := fmt.Sprintf("mcp-tool-%d", atomic.AddUint64(&s.nextInlineID, 1))
+		approval := appserver.ApprovalRequest{
+			TurnID:     lifecycle.turnID,
+			ToolCallID: toolCallID,
+			Kind:       appserver.ApprovalKindMCP,
+			MCPServer:  command.argOne,
+			MCPTool:    command.argTwo,
+			Message:    "permission required before MCP side effect call",
+		}
+		event := appserver.TurnEvent{Approval: approval}
+		s.emitUpdates(lifecycle.toolCallInProgressUpdates(event))
+
+		decision, err := s.requestPermission(turnCtx, sessionID, lifecycle.turnID, approval)
+		if err != nil {
+			s.logger.Warn(
+				"session/request_permission failed for mcp call; default deny",
+				slog.String("sessionId", sessionID),
+				slog.String("turnId", lifecycle.turnID),
+				slog.String("error", err.Error()),
+			)
+			decision = permissionOutcomeCancelled
+		}
+
+		toolStatus := "failed"
+		toolMessage := fmt.Sprintf("permission %s", decision)
+		if decision == permissionOutcomeApproved {
+			result, callErr := s.app.MCPToolCall(turnCtx, appserver.MCPToolCallParams{
+				Server:    command.argOne,
+				Tool:      command.argTwo,
+				Arguments: command.argTail,
+			})
+			if callErr != nil {
+				toolMessage = fmt.Sprintf("mcp call failed: %v", callErr)
+			} else {
+				toolStatus = "completed"
+				toolMessage = "mcp call completed"
+				lifecycle.phase = turnPhaseStreaming
+				s.emitUpdates([]SessionUpdateParams{
+					{
+						SessionID: sessionID,
+						TurnID:    lifecycle.turnID,
+						Type:      "message",
+						Phase:     string(lifecycle.phase),
+						Delta:     strings.TrimSpace(result.Output),
+					},
+				})
+			}
+		}
+
+		s.emitUpdates([]SessionUpdateParams{
+			lifecycle.toolCallOutcomeUpdate(
+				event,
+				decision,
+				toolStatus,
+				toolMessage,
+			),
+		})
+		return "end_turn", nil
+	})
 }
 
 func normalizeStopReason(reason string) string {

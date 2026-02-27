@@ -1031,6 +1031,636 @@ func TestE2EReviewPatchConflictVisibleModeB(t *testing.T) {
 	}
 }
 
+func TestE2EAcceptanceG2G3ReviewBranchAndCommit(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	cases := []struct {
+		id      string
+		command string
+	}{
+		{id: "3", command: "/review-branch main"},
+		{id: "4", command: "/review-commit abc1234"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.command, func(t *testing.T) {
+			h.sendRequest(tc.id, "session/prompt", map[string]any{
+				"sessionId": newResult.SessionID,
+				"prompt":    tc.command,
+			})
+
+			gotPromptResp := false
+			sawReviewEnter := false
+			sawReviewExit := false
+
+			for !gotPromptResp {
+				msg := h.nextMessage(responseTimeout)
+				switch msg.Method {
+				case "session/request_permission":
+					req := decodeSessionRequestPermission(t, msg)
+					if req.Approval != "file" {
+						t.Fatalf("review command should request file approval, got %q", req.Approval)
+					}
+					h.sendResultResponse(messageID(msg), map[string]any{"outcome": "approved"})
+				case "session/update":
+					update := decodeSessionUpdate(t, msg)
+					if update.Status == "review_mode_entered" {
+						sawReviewEnter = true
+					}
+					if update.Status == "review_mode_exited" {
+						sawReviewExit = true
+					}
+				default:
+					if messageID(msg) != tc.id {
+						continue
+					}
+					var result struct {
+						StopReason string `json:"stopReason"`
+					}
+					unmarshalResult(t, msg, &result)
+					if result.StopReason != "end_turn" {
+						t.Fatalf("%s expected stopReason=end_turn, got %q", tc.command, result.StopReason)
+					}
+					gotPromptResp = true
+				}
+			}
+
+			if !sawReviewEnter || !sawReviewExit {
+				t.Fatalf("%s expected review mode transitions, entered=%v exited=%v", tc.command, sawReviewEnter, sawReviewExit)
+			}
+		})
+	}
+}
+
+func TestE2EAcceptanceG4InitRequiresPermission(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "/init setup project defaults",
+	})
+
+	gotPermission := false
+	gotPromptResp := false
+	gotToolCompleted := false
+	for !gotPromptResp {
+		msg := h.nextMessage(responseTimeout)
+		switch msg.Method {
+		case "session/request_permission":
+			gotPermission = true
+			req := decodeSessionRequestPermission(t, msg)
+			if req.Approval != "file" {
+				t.Fatalf("/init should request file approval, got %q", req.Approval)
+			}
+			h.sendResultResponse(messageID(msg), map[string]any{"outcome": "approved"})
+		case "session/update":
+			update := decodeSessionUpdate(t, msg)
+			if update.Type == "tool_call_update" && update.Status == "completed" {
+				gotToolCompleted = true
+			}
+		default:
+			if messageID(msg) != "3" {
+				continue
+			}
+			var result struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, msg, &result)
+			if result.StopReason != "end_turn" {
+				t.Fatalf("/init expected stopReason=end_turn, got %q", result.StopReason)
+			}
+			gotPromptResp = true
+		}
+	}
+
+	if !gotPermission {
+		t.Fatalf("/init expected permission request")
+	}
+	if !gotToolCompleted {
+		t.Fatalf("/init expected completed tool_call_update")
+	}
+}
+
+func TestE2EAcceptanceG5Compact(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "/compact",
+	})
+
+	gotPromptResp := false
+	sawCompactMessage := false
+	for !gotPromptResp {
+		msg := h.nextMessage(responseTimeout)
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.Type == "message" && strings.Contains(update.Delta, "conversation compacted") {
+				sawCompactMessage = true
+			}
+			continue
+		}
+		if messageID(msg) != "3" {
+			continue
+		}
+		var result struct {
+			StopReason string `json:"stopReason"`
+		}
+		unmarshalResult(t, msg, &result)
+		if result.StopReason != "end_turn" {
+			t.Fatalf("/compact expected stopReason=end_turn, got %q", result.StopReason)
+		}
+		gotPromptResp = true
+	}
+
+	if !sawCompactMessage {
+		t.Fatalf("/compact expected compact summary message")
+	}
+}
+
+func TestE2EAcceptanceG6LogoutRequiresReauth(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "/logout",
+	})
+
+	gotLogoutResp := false
+	sawLogoutStatus := false
+	for !gotLogoutResp {
+		msg := h.nextMessage(responseTimeout)
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.Status == "auth_logged_out" {
+				sawLogoutStatus = true
+			}
+			continue
+		}
+		if messageID(msg) != "3" {
+			continue
+		}
+		var result struct {
+			StopReason string `json:"stopReason"`
+		}
+		unmarshalResult(t, msg, &result)
+		if result.StopReason != "end_turn" {
+			t.Fatalf("/logout expected stopReason=end_turn, got %q", result.StopReason)
+		}
+		gotLogoutResp = true
+	}
+	if !sawLogoutStatus {
+		t.Fatalf("/logout expected auth_logged_out status update")
+	}
+
+	h.sendRequest("4", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "after logout",
+	})
+	resp4 := h.waitResponse("4", responseTimeout)
+	if resp4.Error == nil || !strings.Contains(strings.ToLower(resp4.Error.Message), "authentication") {
+		t.Fatalf("session/prompt after logout should require authentication, got %+v", resp4.Error)
+	}
+
+	h.sendRequest("5", "session/new", map[string]any{})
+	resp5 := h.waitResponse("5", responseTimeout)
+	if resp5.Error == nil || !strings.Contains(strings.ToLower(resp5.Error.Message), "authentication") {
+		t.Fatalf("session/new after logout should require authentication, got %+v", resp5.Error)
+	}
+}
+
+func TestE2EAcceptanceH1ProfilesAffectRuntime(t *testing.T) {
+	profilesJSON := `[{"name":"safe","model":"gpt-safe","approvalPolicy":"on-request","sandbox":"read-only","personality":"cautious","systemInstructions":"safe-first"},{"name":"fast","model":"gpt-fast","approvalPolicy":"never","sandbox":"workspace-write","personality":"direct","systemInstructions":"ship-it"}]`
+	h := startAdapter(t, "CODEX_ACP_PROFILES_JSON="+profilesJSON)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	runProbe := func(requestPrefix string, profile string) string {
+		h.sendRequest(requestPrefix+"-new", "session/new", map[string]any{
+			"profile": profile,
+		})
+		newResp := h.waitResponse(requestPrefix+"-new", responseTimeout)
+		var newResult struct {
+			SessionID string `json:"sessionId"`
+		}
+		unmarshalResult(t, newResp, &newResult)
+
+		h.sendRequest(requestPrefix+"-prompt", "session/prompt", map[string]any{
+			"sessionId": newResult.SessionID,
+			"prompt":    "profile probe",
+		})
+
+		var deltas []string
+		gotPromptResp := false
+		for !gotPromptResp {
+			msg := h.nextMessage(responseTimeout)
+			if msg.Method == "session/update" {
+				update := decodeSessionUpdate(t, msg)
+				if update.Type == "message" && update.Delta != "" {
+					deltas = append(deltas, update.Delta)
+				}
+				continue
+			}
+			if messageID(msg) != requestPrefix+"-prompt" {
+				continue
+			}
+			var result struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, msg, &result)
+			if result.StopReason != "end_turn" {
+				t.Fatalf("profile probe expected stopReason=end_turn, got %q", result.StopReason)
+			}
+			gotPromptResp = true
+		}
+		return strings.Join(deltas, "\n")
+	}
+
+	safeOutput := runProbe("safe", "safe")
+	if !strings.Contains(safeOutput, "model=gpt-safe") || !strings.Contains(safeOutput, "approval=on-request") {
+		t.Fatalf("safe profile output mismatch: %s", safeOutput)
+	}
+
+	fastOutput := runProbe("fast", "fast")
+	if !strings.Contains(fastOutput, "model=gpt-fast") || !strings.Contains(fastOutput, "approval=never") {
+		t.Fatalf("fast profile output mismatch: %s", fastOutput)
+	}
+	if safeOutput == fastOutput {
+		t.Fatalf("expected profile-specific runtime behavior to differ")
+	}
+}
+
+func TestE2EAcceptanceMCPListCallAndOAuth(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "/mcp list",
+	})
+	gotListResp := false
+	sawServerList := false
+	for !gotListResp {
+		msg := h.nextMessage(responseTimeout)
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.Type == "message" && strings.Contains(update.Delta, "demo-mcp") {
+				sawServerList = true
+			}
+			continue
+		}
+		if messageID(msg) != "3" {
+			continue
+		}
+		var result struct {
+			StopReason string `json:"stopReason"`
+		}
+		unmarshalResult(t, msg, &result)
+		if result.StopReason != "end_turn" {
+			t.Fatalf("/mcp list expected stopReason=end_turn, got %q", result.StopReason)
+		}
+		gotListResp = true
+	}
+	if !sawServerList {
+		t.Fatalf("/mcp list expected server listing output")
+	}
+
+	h.sendRequest("4", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    `/mcp call demo-mcp dangerous-write {"path":"docs/README.md"}`,
+	})
+	gotCallResp := false
+	sawPermission := false
+	sawToolCompleted := false
+	sawCallOutput := false
+	for !gotCallResp {
+		msg := h.nextMessage(responseTimeout)
+		switch msg.Method {
+		case "session/request_permission":
+			req := decodeSessionRequestPermission(t, msg)
+			if req.Approval != "mcp" {
+				t.Fatalf("/mcp call expected mcp approval, got %q", req.Approval)
+			}
+			sawPermission = true
+			h.sendResultResponse(messageID(msg), map[string]any{"outcome": "approved"})
+		case "session/update":
+			update := decodeSessionUpdate(t, msg)
+			if update.Type == "tool_call_update" && update.Status == "completed" {
+				sawToolCompleted = true
+			}
+			if update.Type == "message" && strings.Contains(update.Delta, "mcp call ok") {
+				sawCallOutput = true
+			}
+		default:
+			if messageID(msg) != "4" {
+				continue
+			}
+			var result struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, msg, &result)
+			if result.StopReason != "end_turn" {
+				t.Fatalf("/mcp call expected stopReason=end_turn, got %q", result.StopReason)
+			}
+			gotCallResp = true
+		}
+	}
+	if !sawPermission || !sawToolCompleted || !sawCallOutput {
+		t.Fatalf("/mcp call expected permission + completed tool update + output")
+	}
+
+	h.sendRequest("5", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "/mcp oauth demo-mcp",
+	})
+	gotOAuthResp := false
+	sawOAuthOutput := false
+	for !gotOAuthResp {
+		msg := h.nextMessage(responseTimeout)
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.Type == "message" && strings.Contains(update.Delta, "oauth") {
+				sawOAuthOutput = true
+			}
+			continue
+		}
+		if messageID(msg) != "5" {
+			continue
+		}
+		var result struct {
+			StopReason string `json:"stopReason"`
+		}
+		unmarshalResult(t, msg, &result)
+		if result.StopReason != "end_turn" {
+			t.Fatalf("/mcp oauth expected stopReason=end_turn, got %q", result.StopReason)
+		}
+		gotOAuthResp = true
+	}
+	if !sawOAuthOutput {
+		t.Fatalf("/mcp oauth expected oauth output")
+	}
+}
+
+func TestE2EAcceptanceI1ToI3AuthMethods(t *testing.T) {
+	cases := []struct {
+		name           string
+		env            []string
+		activeAuthMode string
+	}{
+		{
+			name: "codex_api_key",
+			env: []string{
+				"CODEX_API_KEY=sk-codex",
+				"OPENAI_API_KEY=",
+				"CHATGPT_SUBSCRIPTION_ACTIVE=0",
+			},
+			activeAuthMode: "codex_api_key",
+		},
+		{
+			name: "openai_api_key",
+			env: []string{
+				"CODEX_API_KEY=",
+				"OPENAI_API_KEY=sk-openai",
+				"CHATGPT_SUBSCRIPTION_ACTIVE=0",
+			},
+			activeAuthMode: "openai_api_key",
+		},
+		{
+			name: "subscription",
+			env: []string{
+				"CODEX_API_KEY=",
+				"OPENAI_API_KEY=",
+				"CHATGPT_SUBSCRIPTION_ACTIVE=1",
+			},
+			activeAuthMode: "chatgpt_subscription",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := startAdapter(t, tc.env...)
+
+			h.sendRequest("1", "initialize", map[string]any{})
+			initResp := h.waitResponse("1", responseTimeout)
+			var initResult struct {
+				ActiveAuthMethod string `json:"activeAuthMethod"`
+			}
+			unmarshalResult(t, initResp, &initResult)
+			if initResult.ActiveAuthMethod != tc.activeAuthMode {
+				t.Fatalf("active auth mode mismatch: got=%q want=%q", initResult.ActiveAuthMethod, tc.activeAuthMode)
+			}
+
+			h.sendRequest("2", "session/new", map[string]any{})
+			newResp := h.waitResponse("2", responseTimeout)
+			var newResult struct {
+				SessionID string `json:"sessionId"`
+			}
+			unmarshalResult(t, newResp, &newResult)
+			if newResult.SessionID == "" {
+				t.Fatalf("session/new should succeed for auth mode %s", tc.name)
+			}
+
+			h.sendRequest("3", "session/prompt", map[string]any{
+				"sessionId": newResult.SessionID,
+				"prompt":    "hello",
+			})
+			resp := waitForResponse(t, h.reader, "3", responseTimeout, nil)
+			var promptResult struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, resp, &promptResult)
+			if promptResult.StopReason != "end_turn" {
+				t.Fatalf("session/prompt expected stopReason=end_turn, got %q", promptResult.StopReason)
+			}
+		})
+	}
+}
+
+func TestE2EAuthRequiredWithoutConfiguredMethod(t *testing.T) {
+	h := startAdapter(t,
+		"CODEX_API_KEY=",
+		"OPENAI_API_KEY=",
+		"CHATGPT_SUBSCRIPTION_ACTIVE=0",
+	)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	initResp := h.waitResponse("1", responseTimeout)
+	var initResult struct {
+		ActiveAuthMethod string `json:"activeAuthMethod"`
+	}
+	unmarshalResult(t, initResp, &initResult)
+	if initResult.ActiveAuthMethod != "" {
+		t.Fatalf("expected empty active auth method when no auth configured, got %q", initResult.ActiveAuthMethod)
+	}
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	resp := h.waitResponse("2", responseTimeout)
+	if resp.Error == nil || !strings.Contains(strings.ToLower(resp.Error.Message), "authentication") {
+		t.Fatalf("session/new without auth expected clear auth error, got %+v", resp.Error)
+	}
+}
+
+func TestE2EAcceptanceJ1Stress100Turns(t *testing.T) {
+	if os.Getenv("RUN_STRESS_J1") != "1" {
+		t.Skip("set RUN_STRESS_J1=1 to run J1 stress regression")
+	}
+
+	h := startAdapter(t)
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	for i := 0; i < 100; i++ {
+		switch {
+		case i%10 == 0:
+			promptID := fmt.Sprintf("p-cancel-%d", i)
+			cancelID := fmt.Sprintf("c-%d", i)
+			h.sendRequest(promptID, "session/prompt", map[string]any{
+				"sessionId": newResult.SessionID,
+				"prompt":    "slow task",
+			})
+
+			seenTurn := false
+			for !seenTurn {
+				msg := h.nextMessage(responseTimeout)
+				if msg.Method == "session/update" {
+					update := decodeSessionUpdate(t, msg)
+					if update.TurnID != "" {
+						seenTurn = true
+					}
+					continue
+				}
+				if messageID(msg) == promptID {
+					t.Fatalf("cancel stress prompt completed before cancel")
+				}
+			}
+
+			h.sendRequest(cancelID, "session/cancel", map[string]any{
+				"sessionId": newResult.SessionID,
+			})
+
+			gotCancelResp := false
+			gotPromptResp := false
+			deadline := time.Now().Add(cancelTimeout)
+			for !(gotCancelResp && gotPromptResp) {
+				if time.Now().After(deadline) {
+					t.Fatalf("cancel stress flow timed out")
+				}
+				msg := h.nextMessage(time.Until(deadline))
+				switch messageID(msg) {
+				case cancelID:
+					gotCancelResp = true
+				case promptID:
+					var result struct {
+						StopReason string `json:"stopReason"`
+					}
+					unmarshalResult(t, msg, &result)
+					if result.StopReason != "cancelled" {
+						t.Fatalf("cancel stress expected cancelled stopReason, got %q", result.StopReason)
+					}
+					gotPromptResp = true
+				}
+			}
+		case i%4 == 0:
+			promptID := fmt.Sprintf("p-approval-%d", i)
+			outcome := "declined"
+			if i%8 == 0 {
+				outcome = "approved"
+			}
+			h.sendRequest(promptID, "session/prompt", map[string]any{
+				"sessionId": newResult.SessionID,
+				"prompt":    "approval command",
+			})
+
+			resp := waitForResponse(t, h.reader, promptID, 2*responseTimeout, func(msg rpcMessage) {
+				if msg.Method != "session/request_permission" {
+					return
+				}
+				h.sendResultResponse(messageID(msg), map[string]any{"outcome": outcome})
+			})
+			var promptResult struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, resp, &promptResult)
+			if promptResult.StopReason != "end_turn" {
+				t.Fatalf("stress approval prompt expected stopReason=end_turn, got %q", promptResult.StopReason)
+			}
+		default:
+			promptID := fmt.Sprintf("p-%d", i)
+			h.sendRequest(promptID, "session/prompt", map[string]any{
+				"sessionId": newResult.SessionID,
+				"prompt":    fmt.Sprintf("ping %d", i),
+			})
+			resp := waitForResponse(t, h.reader, promptID, responseTimeout, nil)
+			var promptResult struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, resp, &promptResult)
+			if promptResult.StopReason != "end_turn" {
+				t.Fatalf("stress prompt expected stopReason=end_turn, got %q", promptResult.StopReason)
+			}
+		}
+	}
+
+	h.assertStdoutPureJSONRPC()
+}
+
 func TestRPCReaderDetectsInvalidStdoutLine(t *testing.T) {
 	reader := newRPCReader(t, strings.NewReader("not-json-rpc\n"))
 	time.Sleep(100 * time.Millisecond)

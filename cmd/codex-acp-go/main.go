@@ -20,6 +20,16 @@ import (
 func main() {
 	cfg := config.Parse()
 	logger := observability.NewJSONLogger(cfg.LogLevel)
+	profiles := make(map[string]acp.ProfileConfig, len(cfg.Profiles))
+	for name, profile := range cfg.Profiles {
+		profiles[name] = acp.ProfileConfig{
+			Model:              profile.Model,
+			ApprovalPolicy:     profile.ApprovalPolicy,
+			Sandbox:            profile.Sandbox,
+			Personality:        profile.Personality,
+			SystemInstructions: profile.SystemInstructions,
+		}
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -47,7 +57,10 @@ func main() {
 		bridge.NewStore(),
 		logger,
 		acp.ServerOptions{
-			PatchApplyMode: cfg.PatchApplyMode,
+			PatchApplyMode:  cfg.PatchApplyMode,
+			Profiles:        profiles,
+			DefaultProfile:  cfg.DefaultProfile,
+			InitialAuthMode: cfg.InitialAuthMode,
 		},
 	)
 
