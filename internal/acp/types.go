@@ -71,15 +71,41 @@ type SessionCancelResult struct {
 	Cancelled bool `json:"cancelled"`
 }
 
+// SessionRequestPermissionParams requests user permission from ACP client.
+type SessionRequestPermissionParams struct {
+	SessionID  string   `json:"sessionId"`
+	TurnID     string   `json:"turnId"`
+	Approval   string   `json:"approval"`
+	ToolCallID string   `json:"toolCallId,omitempty"`
+	Command    string   `json:"command,omitempty"`
+	Files      []string `json:"files,omitempty"`
+	Host       string   `json:"host,omitempty"`
+	Protocol   string   `json:"protocol,omitempty"`
+	Port       int      `json:"port,omitempty"`
+	MCPServer  string   `json:"mcpServer,omitempty"`
+	MCPTool    string   `json:"mcpTool,omitempty"`
+	Message    string   `json:"message,omitempty"`
+}
+
+// SessionRequestPermissionResult is ACP client decision for one permission prompt.
+type SessionRequestPermissionResult struct {
+	Outcome  string `json:"outcome,omitempty"`
+	Decision string `json:"decision,omitempty"`
+	Approved *bool  `json:"approved,omitempty"`
+}
+
 // SessionUpdateParams is emitted via session/update notification.
 type SessionUpdateParams struct {
-	SessionID string `json:"sessionId"`
-	TurnID    string `json:"turnId"`
-	Type      string `json:"type"`
-	Phase     string `json:"phase,omitempty"`
-	ItemID    string `json:"itemId,omitempty"`
-	ItemType  string `json:"itemType,omitempty"`
-	Delta     string `json:"delta,omitempty"`
-	Status    string `json:"status,omitempty"`
-	Message   string `json:"message,omitempty"`
+	SessionID          string `json:"sessionId"`
+	TurnID             string `json:"turnId"`
+	Type               string `json:"type"`
+	Phase              string `json:"phase,omitempty"`
+	ItemID             string `json:"itemId,omitempty"`
+	ItemType           string `json:"itemType,omitempty"`
+	Delta              string `json:"delta,omitempty"`
+	Status             string `json:"status,omitempty"`
+	Message            string `json:"message,omitempty"`
+	ToolCallID         string `json:"toolCallId,omitempty"`
+	Approval           string `json:"approval,omitempty"`
+	PermissionDecision string `json:"permissionDecision,omitempty"`
 }

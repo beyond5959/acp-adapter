@@ -100,6 +100,13 @@ func (s *Supervisor) TurnInterrupt(ctx context.Context, threadID, turnID string)
 	})
 }
 
+// ApprovalRespond forwards one user decision back to app-server.
+func (s *Supervisor) ApprovalRespond(ctx context.Context, approvalID string, decision ApprovalDecision) error {
+	return s.call(ctx, "approval/respond", func(client *Client) error {
+		return client.ApprovalRespond(ctx, approvalID, decision)
+	})
+}
+
 func (s *Supervisor) call(ctx context.Context, method string, fn func(*Client) error) error {
 	client, err := s.ensureClient(ctx)
 	if err != nil {

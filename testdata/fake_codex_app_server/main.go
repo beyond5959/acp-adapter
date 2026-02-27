@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,7 +24,9 @@ type fakeServer struct {
 	mu         sync.Mutex
 	nextThread int
 	nextTurn   int
+	nextReq    int
 	turns      map[string]*turnControl
+	pending    map[string]chan appserver.RPCMessage
 
 	receivedInitialize  bool
 	receivedInitialized bool
@@ -35,6 +38,7 @@ func main() {
 	server := &fakeServer{
 		codec:              appserver.NewJSONLCodec(os.Stdin, os.Stdout),
 		turns:              make(map[string]*turnControl),
+		pending:            make(map[string]chan appserver.RPCMessage),
 		crashOnThreadStart: os.Getenv("FAKE_APP_SERVER_CRASH_ON_THREAD_START") == "1",
 		crashOnceFile:      os.Getenv("FAKE_APP_SERVER_CRASH_ON_THREAD_START_ONCE_FILE"),
 	}
@@ -51,10 +55,12 @@ func (s *fakeServer) serve() error {
 		if err != nil {
 			return err
 		}
-		if msg.Method == "" {
-			continue
+		switch {
+		case msg.Method != "":
+			s.handle(msg)
+		case msg.Method == "" && msg.ID != nil:
+			s.handleResponse(msg)
 		}
-		s.handle(msg)
 	}
 }
 
@@ -117,6 +123,26 @@ func (s *fakeServer) handle(msg appserver.RPCMessage) {
 	}
 }
 
+func (s *fakeServer) handleResponse(msg appserver.RPCMessage) {
+	if msg.ID == nil {
+		return
+	}
+	id := normalizeID(*msg.ID)
+
+	s.mu.Lock()
+	ch, ok := s.pending[id]
+	if ok {
+		delete(s.pending, id)
+	}
+	s.mu.Unlock()
+	if !ok {
+		return
+	}
+
+	ch <- msg
+	close(ch)
+}
+
 func (s *fakeServer) newThreadID() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -153,6 +179,14 @@ func (s *fakeServer) removeTurn(turnID string) {
 
 func (s *fakeServer) runTurn(threadID, turnID, input string, control *turnControl) {
 	defer s.removeTurn(turnID)
+	lowerInput := strings.ToLower(input)
+	if strings.Contains(lowerInput, "approval command") ||
+		strings.Contains(lowerInput, "approval file") ||
+		strings.Contains(lowerInput, "approval network") ||
+		strings.Contains(lowerInput, "approval mcp") {
+		s.runApprovalTurn(threadID, turnID, lowerInput, control)
+		return
+	}
 
 	itemID := fmt.Sprintf("item-%s", turnID)
 	s.writeTurnStarted(threadID, turnID)
@@ -179,6 +213,68 @@ func (s *fakeServer) runTurn(threadID, turnID, input string, control *turnContro
 		s.writeItemCompleted(threadID, turnID, itemID, "agent_message")
 		s.writeTurnCompleted(threadID, turnID, "end_turn")
 	}
+}
+
+func (s *fakeServer) runApprovalTurn(threadID, turnID, input string, control *turnControl) {
+	itemID := fmt.Sprintf("item-%s", turnID)
+	toolCallID := fmt.Sprintf("tool-%s", turnID)
+	approvalID := fmt.Sprintf("approval-%s", turnID)
+	approval := appserver.ApprovalRequest{
+		ThreadID:   threadID,
+		TurnID:     turnID,
+		ApprovalID: approvalID,
+		ToolCallID: toolCallID,
+		Message:    "approval required before side effect tool call",
+	}
+
+	switch {
+	case strings.Contains(input, "approval command"):
+		approval.Kind = appserver.ApprovalKindCommand
+		approval.Command = "go test ./..."
+	case strings.Contains(input, "approval file"):
+		approval.Kind = appserver.ApprovalKindFile
+		approval.Files = []string{"docs/README.md"}
+	case strings.Contains(input, "approval network"):
+		approval.Kind = appserver.ApprovalKindNetwork
+		approval.Host = "api.example.com"
+		approval.Protocol = "https"
+		approval.Port = 443
+	case strings.Contains(input, "approval mcp"):
+		approval.Kind = appserver.ApprovalKindMCP
+		approval.MCPServer = "demo-mcp"
+		approval.MCPTool = "dangerous-write"
+	default:
+		approval.Kind = appserver.ApprovalKindCommand
+		approval.Command = "go test ./..."
+	}
+
+	s.writeTurnStarted(threadID, turnID)
+	s.writeItemStarted(threadID, turnID, itemID, "tool_call")
+	s.writeAgentMessageDelta(threadID, turnID, itemID, "waiting permission")
+
+	select {
+	case <-control.cancel:
+		s.writeTurnCompleted(threadID, turnID, "cancelled")
+		return
+	default:
+	}
+
+	decision, err := s.requestApproval(approval)
+	if err != nil {
+		s.writeAgentMessageDelta(threadID, turnID, itemID, "permission bridge failed")
+		s.writeItemCompleted(threadID, turnID, itemID, "tool_call")
+		s.writeTurnCompleted(threadID, turnID, "error")
+		return
+	}
+
+	switch decision {
+	case appserver.ApprovalDecisionApproved:
+		s.writeAgentMessageDelta(threadID, turnID, itemID, fmt.Sprintf("executed %s tool", approval.Kind))
+	default:
+		s.writeAgentMessageDelta(threadID, turnID, itemID, fmt.Sprintf("permission %s; tool not executed", decision))
+	}
+	s.writeItemCompleted(threadID, turnID, itemID, "tool_call")
+	s.writeTurnCompleted(threadID, turnID, "end_turn")
 }
 
 func (s *fakeServer) writeTurnStarted(threadID, turnID string) {
@@ -289,3 +385,90 @@ func (s *fakeServer) shouldCrashOnThreadStart() bool {
 	}
 	return true
 }
+
+func (s *fakeServer) requestApproval(approval appserver.ApprovalRequest) (appserver.ApprovalDecision, error) {
+	resp, err := s.callAdapter(methodApprovalRequest, approval, 3*time.Second)
+	if err != nil {
+		return "", err
+	}
+	if resp.Error != nil {
+		return "", fmt.Errorf("approval/request failed code=%d message=%s", resp.Error.Code, resp.Error.Message)
+	}
+
+	var result appserver.ApprovalDecisionResult
+	if len(resp.Result) > 0 {
+		if err := json.Unmarshal(resp.Result, &result); err != nil {
+			return "", fmt.Errorf("decode approval decision: %w", err)
+		}
+	}
+	switch result.Outcome {
+	case string(appserver.ApprovalDecisionApproved):
+		return appserver.ApprovalDecisionApproved, nil
+	case string(appserver.ApprovalDecisionDeclined):
+		return appserver.ApprovalDecisionDeclined, nil
+	default:
+		return appserver.ApprovalDecisionCancelled, nil
+	}
+}
+
+func (s *fakeServer) callAdapter(method string, params any, timeout time.Duration) (appserver.RPCMessage, error) {
+	id := s.nextRequestID()
+	rawID := json.RawMessage(strconv.Quote(id))
+
+	msg := appserver.RPCMessage{
+		JSONRPC: "2.0",
+		Method:  method,
+		ID:      cloneID(&rawID),
+	}
+	if params != nil {
+		rawParams, err := json.Marshal(params)
+		if err != nil {
+			return appserver.RPCMessage{}, fmt.Errorf("%s encode params: %w", method, err)
+		}
+		msg.Params = rawParams
+	}
+
+	ch := make(chan appserver.RPCMessage, 1)
+	s.mu.Lock()
+	s.pending[id] = ch
+	s.mu.Unlock()
+
+	if err := s.codec.WriteMessage(msg); err != nil {
+		s.mu.Lock()
+		delete(s.pending, id)
+		s.mu.Unlock()
+		return appserver.RPCMessage{}, fmt.Errorf("%s write request: %w", method, err)
+	}
+
+	select {
+	case resp := <-ch:
+		return resp, nil
+	case <-time.After(timeout):
+		s.mu.Lock()
+		delete(s.pending, id)
+		s.mu.Unlock()
+		return appserver.RPCMessage{}, fmt.Errorf("%s response timeout", method)
+	}
+}
+
+func (s *fakeServer) nextRequestID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nextReq++
+	return fmt.Sprintf("server-request-%d", s.nextReq)
+}
+
+func normalizeID(raw json.RawMessage) string {
+	var idString string
+	if err := json.Unmarshal(raw, &idString); err == nil {
+		return idString
+	}
+
+	var idNumber int64
+	if err := json.Unmarshal(raw, &idNumber); err == nil {
+		return strconv.FormatInt(idNumber, 10)
+	}
+	return string(raw)
+}
+
+const methodApprovalRequest = "approval/request"

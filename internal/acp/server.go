@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"codex-acp/internal/appserver"
@@ -15,11 +18,14 @@ import (
 )
 
 const (
-	methodInitialize    = "initialize"
-	methodSessionNew    = "session/new"
-	methodSessionPrompt = "session/prompt"
-	methodSessionCancel = "session/cancel"
-	methodSessionUpdate = "session/update"
+	methodInitialize               = "initialize"
+	methodSessionNew               = "session/new"
+	methodSessionPrompt            = "session/prompt"
+	methodSessionCancel            = "session/cancel"
+	methodSessionUpdate            = "session/update"
+	methodSessionRequestPermission = "session/request_permission"
+
+	defaultPermissionTimeout = 30 * time.Second
 
 	rpcErrMethodNotFound = -32601
 	rpcErrInvalidParams  = -32602
@@ -36,6 +42,14 @@ const (
 	turnPhaseError     turnPhase = "error"
 )
 
+type permissionOutcome string
+
+const (
+	permissionOutcomeApproved  permissionOutcome = "approved"
+	permissionOutcomeDeclined  permissionOutcome = "declined"
+	permissionOutcomeCancelled permissionOutcome = "cancelled"
+)
+
 type turnLifecycle struct {
 	sessionID       string
 	turnID          string
@@ -47,6 +61,7 @@ type appClient interface {
 	ThreadStart(ctx context.Context, cwd string) (string, error)
 	TurnStart(ctx context.Context, threadID, input string) (string, <-chan appserver.TurnEvent, error)
 	TurnInterrupt(ctx context.Context, threadID, turnID string) error
+	ApprovalRespond(ctx context.Context, approvalID string, decision appserver.ApprovalDecision) error
 }
 
 // Server handles ACP JSON-RPC requests over stdio.
@@ -55,15 +70,21 @@ type Server struct {
 	app      appClient
 	sessions *bridge.Store
 	logger   *slog.Logger
+
+	pendingMu     sync.Mutex
+	pendingClient map[string]chan RPCMessage
+	nextClientID  uint64
 }
 
 // NewServer creates an ACP request router.
 func NewServer(codec *StdioCodec, app appClient, sessions *bridge.Store, logger *slog.Logger) *Server {
 	return &Server{
-		codec:    codec,
-		app:      app,
-		sessions: sessions,
-		logger:   logger,
+		codec:         codec,
+		app:           app,
+		sessions:      sessions,
+		logger:        logger,
+		pendingClient: make(map[string]chan RPCMessage),
+		nextClientID:  0,
 	}
 }
 
@@ -72,18 +93,42 @@ func (s *Server) Serve(ctx context.Context) error {
 	for {
 		msg, err := s.codec.ReadMessage()
 		if err != nil {
+			s.failPendingClientRequests(err)
 			if errors.Is(err, io.EOF) {
 				return nil
 			}
 			return err
 		}
 
-		if msg.Method == "" || msg.ID == nil {
+		switch {
+		case msg.Method != "" && msg.ID != nil:
+			go s.handleRequest(ctx, msg)
+		case msg.Method == "" && msg.ID != nil:
+			s.handleClientResponse(msg)
+		default:
 			continue
 		}
-
-		go s.handleRequest(ctx, msg)
 	}
+}
+
+func (s *Server) handleClientResponse(msg RPCMessage) {
+	if msg.ID == nil {
+		return
+	}
+	id := normalizeMessageID(*msg.ID)
+
+	s.pendingMu.Lock()
+	ch, ok := s.pendingClient[id]
+	if ok {
+		delete(s.pendingClient, id)
+	}
+	s.pendingMu.Unlock()
+	if !ok {
+		return
+	}
+
+	ch <- msg
+	close(ch)
 }
 
 func (s *Server) handleRequest(ctx context.Context, msg RPCMessage) {
@@ -205,6 +250,15 @@ func (s *Server) handleSessionPrompt(ctx context.Context, id json.RawMessage, pa
 				s.writePromptResult(id, lifecycle.fallbackStopReason())
 				return
 			}
+			if event.Type == appserver.TurnEventTypeApprovalRequired {
+				updates, done, stopReason := s.handleApprovalEvent(turnCtx, lifecycle, event)
+				s.emitUpdates(updates)
+				if done {
+					s.writePromptResult(id, stopReason)
+					return
+				}
+				continue
+			}
 
 			updates, done, stopReason := lifecycle.apply(event)
 			s.emitUpdates(updates)
@@ -257,6 +311,57 @@ func (s *Server) handleSessionCancel(ctx context.Context, id json.RawMessage, pa
 	_ = s.codec.WriteResult(id, SessionCancelResult{Cancelled: true})
 }
 
+func (s *Server) handleApprovalEvent(
+	ctx context.Context,
+	lifecycle *turnLifecycle,
+	event appserver.TurnEvent,
+) ([]SessionUpdateParams, bool, string) {
+	if event.Approval.ApprovalID == "" {
+		return []SessionUpdateParams{
+			{
+				SessionID: lifecycle.sessionID,
+				TurnID:    lifecycle.turnID,
+				Type:      "status",
+				Phase:     string(turnPhaseError),
+				Status:    "turn_error",
+				Message:   "approval event missing approvalId",
+			},
+		}, true, "error"
+	}
+
+	updates := lifecycle.toolCallInProgressUpdates(event)
+	decision, err := s.requestPermission(ctx, lifecycle.sessionID, lifecycle.turnID, event.Approval)
+	if err != nil {
+		s.logger.Warn(
+			"session/request_permission failed; default deny",
+			slog.String("sessionId", lifecycle.sessionID),
+			slog.String("turnId", lifecycle.turnID),
+			slog.String("approvalId", event.Approval.ApprovalID),
+			slog.String("error", err.Error()),
+		)
+		decision = permissionOutcomeCancelled
+	}
+
+	outcomeUpdates := lifecycle.toolCallOutcomeUpdates(event, decision)
+	updates = append(updates, outcomeUpdates...)
+
+	respondCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if respondErr := s.app.ApprovalRespond(respondCtx, event.Approval.ApprovalID, mapDecisionToAppServer(decision)); respondErr != nil {
+		updates = append(updates, SessionUpdateParams{
+			SessionID: lifecycle.sessionID,
+			TurnID:    lifecycle.turnID,
+			Type:      "status",
+			Phase:     string(turnPhaseError),
+			Status:    "turn_error",
+			Message:   fmt.Sprintf("approval respond failed: %v", respondErr),
+		})
+		return updates, true, "error"
+	}
+
+	return updates, false, ""
+}
+
 func (s *Server) writePromptResult(id json.RawMessage, stopReason string) {
 	_ = s.codec.WriteResult(id, SessionPromptResult{
 		StopReason: normalizeStopReason(stopReason),
@@ -281,6 +386,98 @@ func (s *Server) emitUpdates(updates []SessionUpdateParams) {
 			s.logger.Warn("failed to write session/update", slog.String("error", err.Error()))
 			return
 		}
+	}
+}
+
+func (s *Server) requestPermission(
+	ctx context.Context,
+	sessionID string,
+	turnID string,
+	approval appserver.ApprovalRequest,
+) (permissionOutcome, error) {
+	callCtx, cancel := context.WithTimeout(ctx, defaultPermissionTimeout)
+	defer cancel()
+
+	params := SessionRequestPermissionParams{
+		SessionID:  sessionID,
+		TurnID:     turnID,
+		Approval:   string(approval.Kind),
+		ToolCallID: approval.ToolCallID,
+		Command:    approval.Command,
+		Files:      approval.Files,
+		Host:       approval.Host,
+		Protocol:   approval.Protocol,
+		Port:       approval.Port,
+		MCPServer:  approval.MCPServer,
+		MCPTool:    approval.MCPTool,
+		Message:    approval.Message,
+	}
+
+	var result SessionRequestPermissionResult
+	if err := s.callClient(callCtx, methodSessionRequestPermission, params, &result); err != nil {
+		return permissionOutcomeCancelled, err
+	}
+	return normalizePermissionOutcome(result), nil
+}
+
+func (s *Server) callClient(ctx context.Context, method string, params any, out any) error {
+	id := strconv.FormatUint(atomic.AddUint64(&s.nextClientID, 1), 10)
+	rawID := json.RawMessage(strconv.Quote("server-" + id))
+
+	msg, err := buildClientRequest(rawID, method, params)
+	if err != nil {
+		return err
+	}
+
+	respCh := make(chan RPCMessage, 1)
+	s.pendingMu.Lock()
+	s.pendingClient["server-"+id] = respCh
+	s.pendingMu.Unlock()
+
+	if err := s.codec.WriteMessage(msg); err != nil {
+		s.removePendingClientRequest("server-" + id)
+		return fmt.Errorf("%s write request: %w", method, err)
+	}
+
+	var resp RPCMessage
+	select {
+	case <-ctx.Done():
+		s.removePendingClientRequest("server-" + id)
+		return fmt.Errorf("%s wait response: %w", method, ctx.Err())
+	case resp = <-respCh:
+	}
+
+	if resp.Error != nil {
+		return fmt.Errorf("%s rpc error code=%d message=%s", method, resp.Error.Code, resp.Error.Message)
+	}
+	if out != nil && len(resp.Result) > 0 {
+		if err := json.Unmarshal(resp.Result, out); err != nil {
+			return fmt.Errorf("%s decode result: %w", method, err)
+		}
+	}
+	return nil
+}
+
+func (s *Server) removePendingClientRequest(id string) {
+	s.pendingMu.Lock()
+	delete(s.pendingClient, id)
+	s.pendingMu.Unlock()
+}
+
+func (s *Server) failPendingClientRequests(err error) {
+	s.pendingMu.Lock()
+	pending := s.pendingClient
+	s.pendingClient = make(map[string]chan RPCMessage)
+	s.pendingMu.Unlock()
+
+	for _, ch := range pending {
+		ch <- RPCMessage{
+			Error: &RPCError{
+				Code:    rpcErrInternal,
+				Message: err.Error(),
+			},
+		}
+		close(ch)
 	}
 }
 
@@ -356,6 +553,43 @@ func (t *turnLifecycle) cancelledUpdate() []SessionUpdateParams {
 			Type:      "status",
 			Phase:     string(t.phase),
 			Status:    "turn_cancelled",
+		},
+	}
+}
+
+func (t *turnLifecycle) toolCallInProgressUpdates(event appserver.TurnEvent) []SessionUpdateParams {
+	t.phase = turnPhaseStreaming
+	return []SessionUpdateParams{
+		{
+			SessionID:  t.sessionID,
+			TurnID:     t.turnID,
+			Type:       "tool_call_update",
+			Phase:      string(t.phase),
+			Status:     "in_progress",
+			ToolCallID: event.Approval.ToolCallID,
+			Approval:   string(event.Approval.Kind),
+			Message:    event.Approval.Message,
+		},
+	}
+}
+
+func (t *turnLifecycle) toolCallOutcomeUpdates(event appserver.TurnEvent, outcome permissionOutcome) []SessionUpdateParams {
+	status := "failed"
+	if outcome == permissionOutcomeApproved {
+		status = "completed"
+	}
+
+	return []SessionUpdateParams{
+		{
+			SessionID:          t.sessionID,
+			TurnID:             t.turnID,
+			Type:               "tool_call_update",
+			Phase:              string(t.phase),
+			Status:             status,
+			ToolCallID:         event.Approval.ToolCallID,
+			Approval:           string(event.Approval.Kind),
+			PermissionDecision: string(outcome),
+			Message:            fmt.Sprintf("permission %s", outcome),
 		},
 	}
 }
@@ -464,4 +698,70 @@ func (t *turnLifecycle) fallbackStopReason() string {
 	default:
 		return "error"
 	}
+}
+
+func normalizePermissionOutcome(result SessionRequestPermissionResult) permissionOutcome {
+	outcome := strings.TrimSpace(strings.ToLower(result.Outcome))
+	if outcome == "" {
+		outcome = strings.TrimSpace(strings.ToLower(result.Decision))
+	}
+
+	switch outcome {
+	case "approve", "approved", "allow", "allowed":
+		return permissionOutcomeApproved
+	case "decline", "declined", "deny", "denied":
+		return permissionOutcomeDeclined
+	case "cancel", "cancelled", "canceled":
+		return permissionOutcomeCancelled
+	}
+
+	if result.Approved != nil {
+		if *result.Approved {
+			return permissionOutcomeApproved
+		}
+		return permissionOutcomeDeclined
+	}
+	return permissionOutcomeCancelled
+}
+
+func mapDecisionToAppServer(outcome permissionOutcome) appserver.ApprovalDecision {
+	switch outcome {
+	case permissionOutcomeApproved:
+		return appserver.ApprovalDecisionApproved
+	case permissionOutcomeDeclined:
+		return appserver.ApprovalDecisionDeclined
+	default:
+		return appserver.ApprovalDecisionCancelled
+	}
+}
+
+func buildClientRequest(rawID json.RawMessage, method string, params any) (RPCMessage, error) {
+	msg := RPCMessage{
+		JSONRPC: "2.0",
+		Method:  method,
+		ID:      cloneRawMessage(rawID),
+	}
+	if params == nil {
+		return msg, nil
+	}
+
+	rawParams, err := json.Marshal(params)
+	if err != nil {
+		return RPCMessage{}, fmt.Errorf("%s encode params: %w", method, err)
+	}
+	msg.Params = rawParams
+	return msg, nil
+}
+
+func normalizeMessageID(raw json.RawMessage) string {
+	var idString string
+	if err := json.Unmarshal(raw, &idString); err == nil {
+		return idString
+	}
+
+	var idNumber int64
+	if err := json.Unmarshal(raw, &idNumber); err == nil {
+		return strconv.FormatInt(idNumber, 10)
+	}
+	return string(raw)
 }

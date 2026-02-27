@@ -36,15 +36,33 @@ type rpcError struct {
 }
 
 type sessionUpdateParams struct {
-	SessionID string `json:"sessionId"`
-	TurnID    string `json:"turnId"`
-	Type      string `json:"type"`
-	Phase     string `json:"phase,omitempty"`
-	ItemID    string `json:"itemId,omitempty"`
-	ItemType  string `json:"itemType,omitempty"`
-	Delta     string `json:"delta,omitempty"`
-	Status    string `json:"status,omitempty"`
-	Message   string `json:"message,omitempty"`
+	SessionID          string `json:"sessionId"`
+	TurnID             string `json:"turnId"`
+	Type               string `json:"type"`
+	Phase              string `json:"phase,omitempty"`
+	ItemID             string `json:"itemId,omitempty"`
+	ItemType           string `json:"itemType,omitempty"`
+	Delta              string `json:"delta,omitempty"`
+	Status             string `json:"status,omitempty"`
+	Message            string `json:"message,omitempty"`
+	ToolCallID         string `json:"toolCallId,omitempty"`
+	Approval           string `json:"approval,omitempty"`
+	PermissionDecision string `json:"permissionDecision,omitempty"`
+}
+
+type sessionRequestPermissionParams struct {
+	SessionID  string   `json:"sessionId"`
+	TurnID     string   `json:"turnId"`
+	Approval   string   `json:"approval"`
+	ToolCallID string   `json:"toolCallId,omitempty"`
+	Command    string   `json:"command,omitempty"`
+	Files      []string `json:"files,omitempty"`
+	Host       string   `json:"host,omitempty"`
+	Protocol   string   `json:"protocol,omitempty"`
+	Port       int      `json:"port,omitempty"`
+	MCPServer  string   `json:"mcpServer,omitempty"`
+	MCPTool    string   `json:"mcpTool,omitempty"`
+	Message    string   `json:"message,omitempty"`
 }
 
 type rpcReader struct {
@@ -209,6 +227,10 @@ func (h *adapterHarness) stop() {
 
 func (h *adapterHarness) sendRequest(id, method string, params any) {
 	writeRequest(h.t, h.stdin, id, method, params)
+}
+
+func (h *adapterHarness) sendResultResponse(id string, result any) {
+	writeResultResponse(h.t, h.stdin, id, result)
 }
 
 func (h *adapterHarness) waitResponse(id string, timeout time.Duration) rpcMessage {
@@ -545,6 +567,208 @@ func TestE2ENotificationRoutingBySessionAndTurn(t *testing.T) {
 	}
 }
 
+func TestE2EAcceptanceD1ToD5ApprovalsBridge(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+	if newResult.SessionID == "" {
+		t.Fatalf("session/new returned empty sessionId")
+	}
+
+	testCases := []struct {
+		name         string
+		prompt       string
+		approvalKind string
+		outcome      string
+		expectStatus string
+		expectExec   bool
+		validate     func(*testing.T, sessionRequestPermissionParams)
+	}{
+		{
+			name:         "command_approve",
+			prompt:       "approval command",
+			approvalKind: "command",
+			outcome:      "approved",
+			expectStatus: "completed",
+			expectExec:   true,
+			validate: func(t *testing.T, req sessionRequestPermissionParams) {
+				if req.Command == "" {
+					t.Fatalf("command approval must include command")
+				}
+			},
+		},
+		{
+			name:         "command_decline",
+			prompt:       "approval command",
+			approvalKind: "command",
+			outcome:      "declined",
+			expectStatus: "failed",
+			expectExec:   false,
+			validate: func(t *testing.T, req sessionRequestPermissionParams) {
+				if req.Command == "" {
+					t.Fatalf("command approval must include command")
+				}
+			},
+		},
+		{
+			name:         "file_decline",
+			prompt:       "approval file",
+			approvalKind: "file",
+			outcome:      "declined",
+			expectStatus: "failed",
+			expectExec:   false,
+			validate: func(t *testing.T, req sessionRequestPermissionParams) {
+				if len(req.Files) == 0 {
+					t.Fatalf("file approval must include file targets")
+				}
+			},
+		},
+		{
+			name:         "network_cancel",
+			prompt:       "approval network",
+			approvalKind: "network",
+			outcome:      "cancelled",
+			expectStatus: "failed",
+			expectExec:   false,
+			validate: func(t *testing.T, req sessionRequestPermissionParams) {
+				if req.Host == "" || req.Protocol == "" || req.Port <= 0 {
+					t.Fatalf("network approval must include host/protocol/port, got %+v", req)
+				}
+			},
+		},
+		{
+			name:         "mcp_decline",
+			prompt:       "approval mcp",
+			approvalKind: "mcp",
+			outcome:      "declined",
+			expectStatus: "failed",
+			expectExec:   false,
+			validate: func(t *testing.T, req sessionRequestPermissionParams) {
+				if req.MCPServer == "" || req.MCPTool == "" {
+					t.Fatalf("mcp approval must include server/tool, got %+v", req)
+				}
+			},
+		},
+	}
+
+	for idx, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			requestID := fmt.Sprintf("30%d", idx+1)
+			h.sendRequest(requestID, "session/prompt", map[string]any{
+				"sessionId": newResult.SessionID,
+				"prompt":    tc.prompt,
+			})
+
+			deadline := time.Now().Add(2 * responseTimeout)
+			gotPermission := false
+			gotPromptResp := false
+			sawToolInProgress := false
+			finalToolStatus := ""
+			finalDecision := ""
+			sawExecuted := false
+			sawNotExecuted := false
+
+			for !(gotPermission && gotPromptResp && finalToolStatus != "") {
+				if time.Now().After(deadline) {
+					t.Fatalf("approval flow timeout: permission=%v promptResp=%v finalToolStatus=%q", gotPermission, gotPromptResp, finalToolStatus)
+				}
+
+				msg := h.nextMessage(time.Until(deadline))
+				switch msg.Method {
+				case "session/request_permission":
+					gotPermission = true
+					req := decodeSessionRequestPermission(t, msg)
+					if req.SessionID != newResult.SessionID {
+						t.Fatalf("permission routed to wrong session: got=%q want=%q", req.SessionID, newResult.SessionID)
+					}
+					if req.Approval != tc.approvalKind {
+						t.Fatalf("permission kind mismatch: got=%q want=%q", req.Approval, tc.approvalKind)
+					}
+					if req.ToolCallID == "" {
+						t.Fatalf("permission missing toolCallId")
+					}
+					tc.validate(t, req)
+					h.sendResultResponse(messageID(msg), map[string]any{"outcome": tc.outcome})
+				case "session/update":
+					update := decodeSessionUpdate(t, msg)
+					if update.Type == "message" {
+						if strings.Contains(update.Delta, "executed ") {
+							sawExecuted = true
+						}
+						if strings.Contains(update.Delta, "not executed") {
+							sawNotExecuted = true
+						}
+						continue
+					}
+					if update.Type != "tool_call_update" {
+						continue
+					}
+					if update.Approval != tc.approvalKind {
+						t.Fatalf("tool_call_update approval mismatch: got=%q want=%q", update.Approval, tc.approvalKind)
+					}
+					if update.ToolCallID == "" {
+						t.Fatalf("tool_call_update missing toolCallId")
+					}
+					if update.Status == "in_progress" {
+						sawToolInProgress = true
+					}
+					if update.Status == "completed" || update.Status == "failed" {
+						finalToolStatus = update.Status
+						finalDecision = update.PermissionDecision
+					}
+				default:
+					if messageID(msg) != requestID {
+						continue
+					}
+					var promptResult struct {
+						StopReason string `json:"stopReason"`
+					}
+					unmarshalResult(t, msg, &promptResult)
+					if promptResult.StopReason != "end_turn" {
+						t.Fatalf("approval prompt expected stopReason=end_turn, got %q", promptResult.StopReason)
+					}
+					gotPromptResp = true
+				}
+			}
+
+			if !gotPermission {
+				t.Fatalf("approval flow expected session/request_permission")
+			}
+			if !sawToolInProgress {
+				t.Fatalf("approval flow expected tool_call_update in_progress")
+			}
+			if finalToolStatus != tc.expectStatus {
+				t.Fatalf("tool_call_update status mismatch: got=%q want=%q", finalToolStatus, tc.expectStatus)
+			}
+			if finalDecision != tc.outcome {
+				t.Fatalf("permission decision mismatch: got=%q want=%q", finalDecision, tc.outcome)
+			}
+			if tc.expectExec {
+				if !sawExecuted {
+					t.Fatalf("approved flow expected executed marker")
+				}
+			} else {
+				if sawExecuted {
+					t.Fatalf("declined/cancelled flow must not execute tool")
+				}
+				if !sawNotExecuted {
+					t.Fatalf("declined/cancelled flow expected not executed marker")
+				}
+			}
+		})
+	}
+
+	h.assertStdoutPureJSONRPC()
+}
+
 func TestRPCReaderDetectsInvalidStdoutLine(t *testing.T) {
 	reader := newRPCReader(t, strings.NewReader("not-json-rpc\n"))
 	time.Sleep(100 * time.Millisecond)
@@ -597,6 +821,22 @@ func writeRequest(t *testing.T, w io.Writer, id, method string, params any) {
 	}
 }
 
+func writeResultResponse(t *testing.T, w io.Writer, id string, result any) {
+	t.Helper()
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"result":  result,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal result response id=%s: %v", id, err)
+	}
+	if _, err := w.Write(append(data, '\n')); err != nil {
+		t.Fatalf("write result response id=%s: %v", id, err)
+	}
+}
+
 func waitForResponse(t *testing.T, reader *rpcReader, id string, timeout time.Duration, onOther func(rpcMessage)) rpcMessage {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -638,6 +878,15 @@ func decodeSessionUpdate(t *testing.T, msg rpcMessage) sessionUpdateParams {
 	var params sessionUpdateParams
 	if err := json.Unmarshal(msg.Params, &params); err != nil {
 		t.Fatalf("decode session/update params: %v", err)
+	}
+	return params
+}
+
+func decodeSessionRequestPermission(t *testing.T, msg rpcMessage) sessionRequestPermissionParams {
+	t.Helper()
+	var params sessionRequestPermissionParams
+	if err := json.Unmarshal(msg.Params, &params); err != nil {
+		t.Fatalf("decode session/request_permission params: %v", err)
 	}
 	return params
 }

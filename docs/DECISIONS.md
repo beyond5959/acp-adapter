@@ -15,6 +15,8 @@
 - ADR-0009：长期记忆外置（PROGRESS/DECISIONS/KNOWN_ISSUES）
 - ADR-0010：turn 生命周期状态机与 session/update 映射
 - ADR-0011：app-server Supervisor 恢复策略（异常退出后重建）
+- ADR-0012：ACP outbound `session/request_permission` 请求通道
+- ADR-0013：审批默认拒绝策略与 `tool_call_update` 状态约定
 
 ---
 
@@ -79,3 +81,51 @@
 - 验证方式（测试/验收项）：
   - `TestE2EAcceptanceB1AppServerCrashReturnsClearError`
   - 对应验收：B1（稳定性/恢复）
+
+### ADR-0012：ACP outbound `session/request_permission` 请求通道
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - PR3 需要把下游 approval 请求桥接到 ACP `session/request_permission`，并等待上游用户决策。
+  - 现有 ACP server 仅支持“上游 -> 适配器”请求处理，不支持“适配器 -> 上游”请求响应匹配。
+- 决策：
+  - 在 ACP server 引入 pending response map 和 request id 生成器。
+  - `Serve` 循环同时处理两类消息：上游请求、上游对 outbound request 的响应。
+  - 以 `session/request_permission` 作为唯一审批入口方法。
+- 备选方案：
+  - 方案A：把 permission 降级为 notification，不等待结果。
+  - 方案B：实现完整 JSON-RPC request/response 往返。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：协议语义完整，可实现 accept/decline/cancel 三分支。
+  - Cons：ACP server 状态复杂度增加，需要维护并发安全。
+- 影响范围（文件/模块）：
+  - `internal/acp/server.go`
+  - `internal/acp/types.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EAcceptanceD1ToD5ApprovalsBridge`
+  - 对应验收：D1、D2、D3、D4
+
+### ADR-0013：审批默认拒绝策略与 `tool_call_update` 状态约定
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - PR3 要求“无 permission 不执行”并把工具状态持续映射到 ACP。
+  - 需要统一定义审批失败/取消时的行为和上游可见状态。
+- 决策：
+  - 审批链路默认安全：permission 失败、超时、解析异常均回传 `cancelled`（不执行副作用）。
+  - `tool_call_update` 状态约定：`in_progress -> completed|failed`。
+  - 在 `tool_call_update` 中携带 `toolCallId`、审批类型（command/file/network/mcp）和最终 decision。
+- 备选方案：
+  - 方案A：失败时自动放行（fail-open）。
+  - 方案B：失败时默认拒绝（fail-closed）。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：满足 D5 安全要求，行为可预测，回归断言清晰。
+  - Cons：当上游客户端异常时，工具会被保守拦截，可能增加“误拒绝”。
+- 影响范围（文件/模块）：
+  - `internal/acp/server.go`
+  - `internal/acp/types.go`
+  - `internal/appserver/client.go`
+  - `internal/appserver/types.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EAcceptanceD1ToD5ApprovalsBridge`
+  - 对应验收：D1、D2、D3、D4、D5

@@ -109,6 +109,47 @@ type TurnCompletedNotification struct {
 	StopReason string `json:"stopReason,omitempty"`
 }
 
+// ApprovalKind describes which side-effect type requires permission.
+type ApprovalKind string
+
+const (
+	ApprovalKindCommand ApprovalKind = "command"
+	ApprovalKindFile    ApprovalKind = "file"
+	ApprovalKindNetwork ApprovalKind = "network"
+	ApprovalKindMCP     ApprovalKind = "mcp"
+)
+
+// ApprovalDecision is the final user decision sent back to app-server.
+type ApprovalDecision string
+
+const (
+	ApprovalDecisionApproved  ApprovalDecision = "approved"
+	ApprovalDecisionDeclined  ApprovalDecision = "declined"
+	ApprovalDecisionCancelled ApprovalDecision = "cancelled"
+)
+
+// ApprovalRequest is server-initiated permission payload.
+type ApprovalRequest struct {
+	ThreadID   string       `json:"threadId"`
+	TurnID     string       `json:"turnId"`
+	ApprovalID string       `json:"approvalId,omitempty"`
+	ToolCallID string       `json:"toolCallId,omitempty"`
+	Kind       ApprovalKind `json:"kind"`
+	Command    string       `json:"command,omitempty"`
+	Files      []string     `json:"files,omitempty"`
+	Host       string       `json:"host,omitempty"`
+	Protocol   string       `json:"protocol,omitempty"`
+	Port       int          `json:"port,omitempty"`
+	MCPServer  string       `json:"mcpServer,omitempty"`
+	MCPTool    string       `json:"mcpTool,omitempty"`
+	Message    string       `json:"message,omitempty"`
+}
+
+// ApprovalDecisionResult is sent as JSON-RPC result for approval request.
+type ApprovalDecisionResult struct {
+	Outcome string `json:"outcome"`
+}
+
 // TurnEventType is an internal event kind consumed by ACP bridge.
 type TurnEventType string
 
@@ -127,6 +168,8 @@ const (
 	TurnEventTypeCompleted TurnEventType = "completed"
 	// TurnEventTypeError indicates stream-level or process-level failure.
 	TurnEventTypeError TurnEventType = "error"
+	// TurnEventTypeApprovalRequired indicates turn is blocked on permission.
+	TurnEventTypeApprovalRequired TurnEventType = "approval_required"
 )
 
 // TurnEvent is emitted to ACP session/prompt handler.
@@ -139,6 +182,7 @@ type TurnEvent struct {
 	Delta      string
 	StopReason string
 	Message    string
+	Approval   ApprovalRequest
 }
 
 const (
@@ -146,6 +190,7 @@ const (
 	methodThreadStart   = "thread/start"
 	methodTurnStart     = "turn/start"
 	methodTurnInterrupt = "turn/interrupt"
+	methodApprovalReq   = "approval/request"
 
 	notificationTurnStarted           = "turn/started"
 	notificationTurnUpdate            = "turn/update"

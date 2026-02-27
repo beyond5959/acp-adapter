@@ -16,6 +16,11 @@ const turnStreamBufferSize = 32
 
 var errClientClosed = errors.New("app-server client is closed")
 
+type pendingApproval struct {
+	requestID json.RawMessage
+	turnID    string
+}
+
 // Client is a minimal JSON-RPC client for codex app-server.
 type Client struct {
 	process *Process
@@ -26,6 +31,7 @@ type Client struct {
 
 	mu          sync.Mutex
 	pending     map[string]chan RPCMessage
+	approvals   map[string]pendingApproval
 	turnStreams map[string]chan TurnEvent
 	queuedTurns map[string][]TurnEvent
 	closed      bool
@@ -42,6 +48,7 @@ func NewClient(process *Process, logger *slog.Logger) *Client {
 		codec:       NewJSONLCodec(process.Stdout(), process.Stdin()),
 		logger:      logger,
 		pending:     make(map[string]chan RPCMessage),
+		approvals:   make(map[string]pendingApproval),
 		turnStreams: make(map[string]chan TurnEvent),
 		queuedTurns: make(map[string][]TurnEvent),
 	}
@@ -107,6 +114,39 @@ func (c *Client) TurnInterrupt(ctx context.Context, threadID, turnID string) err
 	}
 	var result map[string]any
 	return c.call(ctx, methodTurnInterrupt, params, &result)
+}
+
+// ApprovalRespond sends user decision for one server-initiated approval request.
+func (c *Client) ApprovalRespond(ctx context.Context, approvalID string, decision ApprovalDecision) error {
+	if approvalID == "" {
+		return fmt.Errorf("approval id is required")
+	}
+
+	c.mu.Lock()
+	approval, ok := c.approvals[approvalID]
+	if ok {
+		delete(c.approvals, approvalID)
+	}
+	c.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("approval request not found: %s", approvalID)
+	}
+
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("approval response cancelled: %w", ctx.Err())
+	default:
+	}
+
+	resultRaw, err := json.Marshal(ApprovalDecisionResult{Outcome: string(decision)})
+	if err != nil {
+		return fmt.Errorf("encode approval response: %w", err)
+	}
+	return c.codec.WriteMessage(RPCMessage{
+		JSONRPC: "2.0",
+		ID:      cloneRawMessage(approval.requestID),
+		Result:  resultRaw,
+	})
 }
 
 // Close shuts down request waiters and underlying process.
@@ -215,6 +255,8 @@ func (c *Client) readLoop() {
 		switch {
 		case msg.ID != nil && msg.Method == "":
 			c.handleResponse(msg)
+		case msg.ID != nil && msg.Method != "":
+			c.handleServerRequest(msg)
 		case msg.Method != "" && msg.ID == nil:
 			c.handleNotification(msg)
 		}
@@ -237,6 +279,44 @@ func (c *Client) handleResponse(msg RPCMessage) {
 	if ok {
 		ch <- msg
 		close(ch)
+	}
+}
+
+func (c *Client) handleServerRequest(msg RPCMessage) {
+	if msg.ID == nil {
+		return
+	}
+
+	switch msg.Method {
+	case methodApprovalReq:
+		var approval ApprovalRequest
+		if err := json.Unmarshal(msg.Params, &approval); err != nil {
+			c.writeServerErrorResponse(*msg.ID, -32602, "invalid approval/request params")
+			return
+		}
+		if approval.TurnID == "" {
+			c.writeServerErrorResponse(*msg.ID, -32602, "approval/request requires turnId")
+			return
+		}
+
+		if approval.ApprovalID == "" {
+			approval.ApprovalID = normalizeID(*msg.ID)
+		}
+		c.mu.Lock()
+		c.approvals[approval.ApprovalID] = pendingApproval{
+			requestID: *cloneRawMessage(*msg.ID),
+			turnID:    approval.TurnID,
+		}
+		c.mu.Unlock()
+
+		c.pushTurnEvent(approval.TurnID, TurnEvent{
+			Type:     TurnEventTypeApprovalRequired,
+			ThreadID: approval.ThreadID,
+			TurnID:   approval.TurnID,
+			Approval: approval,
+		}, false)
+	default:
+		c.writeServerErrorResponse(*msg.ID, -32601, "method not found")
 	}
 }
 
@@ -345,11 +425,26 @@ func (c *Client) pushTurnEvent(turnID string, event TurnEvent, closeAfter bool) 
 	}
 }
 
+func (c *Client) writeServerErrorResponse(id json.RawMessage, code int, message string) {
+	if err := c.codec.WriteMessage(RPCMessage{
+		JSONRPC: "2.0",
+		ID:      cloneRawMessage(id),
+		Error: &RPCError{
+			Code:    code,
+			Message: message,
+		},
+	}); err != nil {
+		c.logger.Warn("failed to write app-server request error", slog.String("error", err.Error()))
+	}
+}
+
 func (c *Client) failAll(err error) {
 	c.mu.Lock()
 	pending := c.pending
 	streams := c.turnStreams
+	approvals := c.approvals
 	c.pending = make(map[string]chan RPCMessage)
+	c.approvals = make(map[string]pendingApproval)
 	c.turnStreams = make(map[string]chan TurnEvent)
 	c.queuedTurns = make(map[string][]TurnEvent)
 	c.mu.Unlock()
@@ -373,6 +468,10 @@ func (c *Client) failAll(err error) {
 		default:
 		}
 		close(ch)
+	}
+
+	for approvalID := range approvals {
+		c.logger.Warn("dropping pending approval due to client shutdown", slog.String("approvalId", approvalID))
 	}
 }
 
