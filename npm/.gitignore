@@ -1,0 +1,8 @@
+packages/codex-acp-go-darwin-arm64/bin/codex-acp-go
+packages/codex-acp-go-darwin-x64/bin/codex-acp-go
+packages/codex-acp-go-linux-arm64/bin/codex-acp-go
+packages/codex-acp-go-linux-x64/bin/codex-acp-go
+packages/codex-acp-go-win32-arm64/bin/codex-acp-go.exe
+packages/codex-acp-go-win32-x64/bin/codex-acp-go.exe
+*.tgz
+.npm-cache/

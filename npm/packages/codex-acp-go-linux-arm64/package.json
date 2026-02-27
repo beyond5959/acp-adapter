@@ -1,0 +1,18 @@
+{
+  "name": "@beyond5959/codex-acp-go-linux-arm64",
+  "version": "0.1.0",
+  "description": "linux arm64 binary for @beyond5959/codex-acp-go",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "files": [
+    "bin/codex-acp-go"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "UNLICENSED"
+}
