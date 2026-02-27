@@ -294,6 +294,7 @@ const (
 	methodMCPServerCall = "mcpServer/call"
 	methodMCPOAuthLogin = "mcpServer/oauth/login"
 	methodAuthLogout    = "auth/logout"
+	methodAccountLogout = "account/logout"
 
 	notificationTurnStarted           = "turn/started"
 	notificationTurnUpdate            = "turn/update"

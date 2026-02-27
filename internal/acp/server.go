@@ -189,6 +189,7 @@ type Server struct {
 
 	authMu       sync.Mutex
 	authMode     string
+	lastAuthMode string
 	authLoggedIn bool
 }
 
@@ -216,6 +217,7 @@ func NewServer(
 		sessionConfigs: make(map[string]runtimeOptions),
 		sessionTodos:   make(map[string][]TodoItem),
 		authMode:       strings.TrimSpace(options.InitialAuthMode),
+		lastAuthMode:   strings.TrimSpace(options.InitialAuthMode),
 		authLoggedIn:   strings.TrimSpace(options.InitialAuthMode) != "",
 	}
 }
@@ -1563,23 +1565,84 @@ func (s *Server) requireAuth(id json.RawMessage, method string) bool {
 	s.authMu.Lock()
 	authenticated := s.authLoggedIn
 	mode := s.authMode
+	if mode == "" {
+		mode = s.lastAuthMode
+	}
 	s.authMu.Unlock()
 	if authenticated {
 		return true
 	}
 
+	hint, command := authRecoveryHint(mode)
 	s.writeInternalError(id, method+" requires authentication", map[string]any{
-		"hint": "set CODEX_API_KEY or OPENAI_API_KEY, or enable ChatGPT subscription login",
-		"mode": mode,
+		"hint":            hint,
+		"mode":            mode,
+		"nextStepCommand": command,
 	})
 	return false
 }
 
-func (s *Server) markLoggedOut() {
+func (s *Server) markLoggedOut() string {
 	s.authMu.Lock()
+	previousMode := s.authMode
+	if previousMode == "" {
+		previousMode = s.lastAuthMode
+	}
+	if previousMode != "" {
+		s.lastAuthMode = previousMode
+	}
 	s.authLoggedIn = false
 	s.authMode = ""
 	s.authMu.Unlock()
+	return previousMode
+}
+
+func authRecoveryHint(mode string) (string, string) {
+	switch strings.TrimSpace(strings.ToLower(mode)) {
+	case "codex_api_key":
+		return "set CODEX_API_KEY then restart the ACP agent process", `export CODEX_API_KEY="YOUR_CODEX_API_KEY" && unset OPENAI_API_KEY`
+	case "openai_api_key":
+		return "set OPENAI_API_KEY then restart the ACP agent process", `export OPENAI_API_KEY="YOUR_OPENAI_API_KEY" && unset CODEX_API_KEY`
+	case "chatgpt_subscription":
+		return "run codex login then restart the ACP agent process", "codex login"
+	default:
+		return "set CODEX_API_KEY or OPENAI_API_KEY, or run codex login; then restart the ACP agent process", `export CODEX_API_KEY="YOUR_CODEX_API_KEY"`
+	}
+}
+
+func logoutRecoveryInstructions(mode string) string {
+	switch strings.TrimSpace(strings.ToLower(mode)) {
+	case "codex_api_key":
+		return strings.Join([]string{
+			"logout completed; re-authentication required.",
+			"Next step (copy/paste):",
+			`export CODEX_API_KEY="YOUR_CODEX_API_KEY" && unset OPENAI_API_KEY`,
+			"Then restart the ACP agent process (or reopen the editor external agent session).",
+		}, "\n")
+	case "openai_api_key":
+		return strings.Join([]string{
+			"logout completed; re-authentication required.",
+			"Next step (copy/paste):",
+			`export OPENAI_API_KEY="YOUR_OPENAI_API_KEY" && unset CODEX_API_KEY`,
+			"Then restart the ACP agent process (or reopen the editor external agent session).",
+		}, "\n")
+	case "chatgpt_subscription":
+		return strings.Join([]string{
+			"logout completed; re-authentication required.",
+			"Next step (copy/paste):",
+			"codex login",
+			"Complete the browser login/local callback flow, then restart the ACP agent process.",
+		}, "\n")
+	default:
+		return strings.Join([]string{
+			"logout completed; re-authentication required.",
+			"Choose one recovery path:",
+			`1) export CODEX_API_KEY="YOUR_CODEX_API_KEY" && unset OPENAI_API_KEY`,
+			`2) export OPENAI_API_KEY="YOUR_OPENAI_API_KEY" && unset CODEX_API_KEY`,
+			"3) codex login",
+			"After that, restart the ACP agent process.",
+		}, "\n")
+	}
 }
 
 func (s *Server) setSessionConfig(sessionID string, options runtimeOptions) {
@@ -1837,13 +1900,14 @@ func (s *Server) runInlineCommand(
 
 func (s *Server) handleLogoutSlash(ctx context.Context, id json.RawMessage, sessionID string) {
 	s.runInlineCommand(ctx, id, sessionID, "logout", func(turnCtx context.Context, lifecycle *turnLifecycle) (string, error) {
-		s.markLoggedOut()
+		modeBeforeLogout := s.markLoggedOut()
 
 		logoutCtx, cancel := context.WithTimeout(turnCtx, 2*time.Second)
 		defer cancel()
 		if err := s.app.Logout(logoutCtx); err != nil {
 			s.logger.Warn("app-server logout failed; local auth still cleared", slog.String("error", err.Error()))
 		}
+		recovery := logoutRecoveryInstructions(modeBeforeLogout)
 
 		lifecycle.phase = turnPhaseStreaming
 		s.emitUpdates([]SessionUpdateParams{
@@ -1854,6 +1918,13 @@ func (s *Server) handleLogoutSlash(ctx context.Context, id json.RawMessage, sess
 				Phase:     string(lifecycle.phase),
 				Status:    "auth_logged_out",
 				Message:   "logout completed; re-authentication required",
+			},
+			{
+				SessionID: sessionID,
+				TurnID:    lifecycle.turnID,
+				Type:      "message",
+				Phase:     string(lifecycle.phase),
+				Delta:     recovery,
 			},
 		})
 		return "end_turn", nil

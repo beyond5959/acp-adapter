@@ -200,11 +200,15 @@ func (c *Client) MCPOAuthLogin(ctx context.Context, server string) (MCPOAuthLogi
 // Logout clears app-server auth state when supported.
 func (c *Client) Logout(ctx context.Context) error {
 	var result map[string]any
-	if err := c.call(ctx, methodAuthLogout, map[string]any{}, &result); err != nil {
-		// Keep compatibility with app-server versions that don't expose auth/logout.
-		if strings.Contains(err.Error(), "rpc error code=-32601") {
-			return nil
-		}
+	if err := c.call(ctx, methodAccountLogout, map[string]any{}, &result); err == nil {
+		return nil
+	} else if !isMethodNotFoundRPCError(err) {
+		return err
+	}
+
+	if err := c.call(ctx, methodAuthLogout, map[string]any{}, &result); err == nil {
+		return nil
+	} else if !isMethodNotFoundRPCError(err) {
 		return err
 	}
 	return nil
@@ -638,4 +642,11 @@ func isTerminalTurnEvent(eventType TurnEventType) bool {
 	default:
 		return false
 	}
+}
+
+func isMethodNotFoundRPCError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "rpc error code=-32601")
 }

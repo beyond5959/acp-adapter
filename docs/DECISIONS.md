@@ -28,6 +28,7 @@
 - ADR-0022：真实 prompt 交互回归（多轮问答 smoke）
 - ADR-0023：C1/C2/F1 输入映射策略（mentions/images/todo + capability 降级）
 - ADR-0024：app-server 中途崩溃时的“当次 turn 内部重试一次”策略
+- ADR-0025：`/logout` 恢复指引与 app-server auth 清理兼容策略
 
 ---
 
@@ -446,3 +447,33 @@
   - `TestE2EAcceptanceB1AppServerCrashDuringTurnRetryFailureHasHint`
   - `go test ./...`
   - 对应验收：B1（并回归 A1、A4、A5）
+
+### ADR-0025：`/logout` 恢复指引与 app-server auth 清理兼容策略
+- 日期：2026-02-27
+- 状态：Accepted
+- 背景：
+  - 遗留问题 #2：`/logout` 仅清理本地认证态，用户不知道“下一步怎么恢复”。
+  - 不同认证来源（API key / subscription）需要不同恢复动作。
+- 决策：
+  - `/logout` 在 `session/update` 中输出按 auth 模式区分的可复制恢复命令。
+  - 无认证错误返回结构化提示：`hint` + `nextStepCommand`，便于客户端直接展示/复制。
+  - app-server auth 清理采用兼容顺序：优先 `account/logout`，若方法不存在则回退 `auth/logout`。
+- 备选方案：
+  - 方案A：保持仅状态提示，不提供可执行指令。
+  - 方案B：实现同进程 re-auth RPC 后再补 UX。
+  - 方案C：先交付明确恢复引导与兼容 logout 清理，re-auth RPC 后续补齐。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：`/logout` 后恢复路径清晰，降低“已登出但不可用”的支持成本。
+  - Cons：当前仍需重启 adapter；尚无同进程 re-auth。
+- 影响范围（文件/模块）：
+  - `internal/acp/server.go`
+  - `internal/appserver/client.go`
+  - `internal/appserver/types.go`
+  - `testdata/fake_codex_app_server/main.go`
+  - `test/integration/e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EAcceptanceG6LogoutRequiresReauth`
+  - `TestE2EAcceptanceG6LogoutGuidanceWithAPIKeysAndRecoveryAfterRestart`
+  - `TestE2EAcceptanceI1ToI3AuthMethods`
+  - `go test ./...`
+  - 对应验收：G6、I1、I2、I3

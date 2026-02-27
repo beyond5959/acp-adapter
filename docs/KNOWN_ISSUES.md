@@ -107,11 +107,14 @@
 ## KI-0012：`/logout` 后缺少同进程重新登录入口
 - 现象：执行 `/logout` 后，适配器进入未认证状态，后续 `session/new`/`session/prompt` 会被 auth gate 拒绝。
 - 影响：
-  - 满足“logout 后需重新认证”，但当前只能通过外部重新配置环境变量或重启进程恢复。
+  - 现在会提供按 auth 模式区分的可复制恢复指令（API key / `codex login`），但仍需重启 adapter 恢复可用。
+  - subscription 模式在无浏览器或本地回调不可用环境下，`codex login` 可能无法完成。
 - 复现：
   - 先正常对话，再发送 `/logout`，随后发送任意 prompt。
 - Workaround：
-  - 重新设置认证环境（`CODEX_API_KEY`/`OPENAI_API_KEY`/subscription）并重启 adapter。
+  - 按 `/logout` 输出的 next-step 指令执行：
+    - API key：设置 `CODEX_API_KEY` 或 `OPENAI_API_KEY` 后重启 adapter。
+    - subscription：运行 `codex login` 完成浏览器登录/本地回调后重启 adapter。
 - 后续计划：
   - 评估增加显式 re-auth RPC 或与下游 auth 流程对接，实现无重启恢复。
 
@@ -138,13 +141,13 @@
   - 在 CI 增加定时/夜间压力作业，独立于常规 PR 快速回归。
 
 ## KI-0015：MCP/compact/auth 方法名对真实 app-server 版本敏感
-- 现象：当前实现依赖 `thread/compact/start`、`mcpServer/*`、`auth/logout` 方法名。
+- 现象：当前实现依赖 `thread/compact/start`、`mcpServer/*`、`account/logout|auth/logout` 方法名。
 - 影响：
   - 若真实 app-server 不同版本方法名/参数变更，PR5 相关能力会出现 `method not found` 或参数不兼容。
 - 复现：
   - 连接不支持上述 endpoint 的 app-server 版本执行相应 slash 命令。
 - Workaround：
-  - 通过兼容错误处理回退（例如 `auth/logout` 不支持时仅清理本地状态），并优先使用对齐版本联调。
+  - 通过兼容错误处理回退（logout 优先 `account/logout`，回退 `auth/logout`），并优先使用对齐版本联调。
 - 后续计划：
   - 在 B2 schema 锁定后引入 endpoint capability 检测与版本门控。
 

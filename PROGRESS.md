@@ -106,6 +106,10 @@
    - `session/prompt` 在 turn 流中检测到 app-server 崩溃时，默认自动重启后“同次请求内部重试一次”
    - 增加开关 `RETRY_TURN_ON_CRASH` / `--retry-turn-on-crash`（默认开启）
    - 重试失败时返回明确 `turn_error` 并附“可重试一次 prompt”提示
+7. 增强 `/logout`（遗留问题 #2）：
+   - `/logout` 输出按认证方式区分的“可复制粘贴下一步指令”（API key / subscription）
+   - 无认证错误增加 `nextStepCommand` 与更清晰的恢复 hint
+   - app-server 侧 auth 清理支持 `account/logout`（优先）并兼容回退 `auth/logout`
 
 ## 影响范围是什么
 1. `internal/acp`：slash 路由矩阵、inline MCP command 执行、auth gate、profile 解析与运行参数透传。
@@ -115,6 +119,7 @@
 5. `test/integration`：新增 G2-G6、H1、I1-I3、MCP 覆盖与 J1 压力测试入口。
 6. `scripts`/`Makefile`：新增 `scripts/j1_stress.sh` 与 `make stress-j1`。
 7. `internal/bridge`：新增 active turn 替换能力，支持内部重试后把 cancel 目标切换到新 turnId。
+8. `internal/appserver`：logout 方法改为 `account/logout -> auth/logout` 兼容回退。
 
 ## 如何验证
 1. 执行：
@@ -142,6 +147,7 @@
      - `TestE2EAcceptanceG4InitRequiresPermission`
      - `TestE2EAcceptanceG5Compact`
      - `TestE2EAcceptanceG6LogoutRequiresReauth`
+     - `TestE2EAcceptanceG6LogoutGuidanceWithAPIKeysAndRecoveryAfterRestart`
      - `TestE2EAcceptanceH1ProfilesAffectRuntime`
      - `TestE2EAcceptanceMCPListCallAndOAuth`
      - `TestE2EAcceptanceI1ToI3AuthMethods`
@@ -159,7 +165,7 @@
 
 ## 遗留问题是什么
 1. 当前“当次请求自动重试”仅在未发出不可重放内容时启用（幂等边界）；若已进入不可安全重放阶段，仍会 fail-closed 并提示用户重试一次 prompt。
-2. `/logout` 当前仅清理适配器侧认证态，不含交互式重新登录入口（需外部重新配置/重启）。
+2. `/logout` 已提供明确可复制恢复指引并清理 app-server/client 认证态；但仍缺少“同进程无重启 re-auth RPC”。
 3. e2e 仍主要依赖 fake app-server，真实 codex app-server 的 mcp/auth/compact 行为仍需联调回归。
 
 ## 当前阻塞（Blockers）
@@ -310,6 +316,25 @@
   - 新增：
     - `TestE2EAcceptanceB1AppServerCrashDuringTurnAutoRetry`
     - `TestE2EAcceptanceB1AppServerCrashDuringTurnRetryFailureHasHint`
+  - `go test ./...` 通过
+- D. 文档:
+  - 更新 `PROGRESS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`
+
+### 2026-02-27 — `/logout` 增强：可复制恢复指引 + app-server auth 清理兼容
+- A. 范围与目标:
+  - 处理遗留问题 #2：`/logout` 后给出明确恢复路径，而非仅提示“未认证”
+  - 保持 fail-closed，同时降低用户恢复成本
+- B. 实现:
+  - `/logout` 输出按 auth 模式区分的“可复制粘贴”下一步指令（`CODEX_API_KEY` / `OPENAI_API_KEY` / `codex login`）
+  - 未认证错误附带 `nextStepCommand` 与模式化恢复 hint
+  - app-server logout 兼容调用：优先 `account/logout`，回退 `auth/logout`
+- C. 验证:
+  - 新增：
+    - `TestE2EAcceptanceG6LogoutGuidanceWithAPIKeysAndRecoveryAfterRestart`
+  - 回归：
+    - `TestE2EAcceptanceG6LogoutRequiresReauth`
+    - `TestE2EAcceptanceI1ToI3AuthMethods`
+    - `TestE2EAuthRequiredWithoutConfiguredMethod`
   - `go test ./...` 通过
 - D. 文档:
   - 更新 `PROGRESS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`

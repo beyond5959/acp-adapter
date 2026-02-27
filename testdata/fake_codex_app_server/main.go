@@ -194,6 +194,8 @@ func (s *fakeServer) handle(msg appserver.RPCMessage) {
 		})
 	case "auth/logout":
 		s.writeResult(msg.ID, map[string]any{"loggedOut": true})
+	case "account/logout":
+		s.writeResult(msg.ID, map[string]any{"loggedOut": true})
 	case "turn/interrupt":
 		var params appserver.TurnInterruptParams
 		if err := json.Unmarshal(msg.Params, &params); err != nil {

@@ -38,6 +38,7 @@ type rpcMessage struct {
 type rpcError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+	Data    any    `json:"data,omitempty"`
 }
 
 type sessionUpdateParams struct {
@@ -1715,12 +1716,16 @@ func TestE2EAcceptanceG6LogoutRequiresReauth(t *testing.T) {
 
 	gotLogoutResp := false
 	sawLogoutStatus := false
+	sawSubscriptionGuidance := false
 	for !gotLogoutResp {
 		msg := h.nextMessage(responseTimeout)
 		if msg.Method == "session/update" {
 			update := decodeSessionUpdate(t, msg)
 			if update.Status == "auth_logged_out" {
 				sawLogoutStatus = true
+			}
+			if update.Type == "message" && strings.Contains(update.Delta, "codex login") {
+				sawSubscriptionGuidance = true
 			}
 			continue
 		}
@@ -1739,6 +1744,9 @@ func TestE2EAcceptanceG6LogoutRequiresReauth(t *testing.T) {
 	if !sawLogoutStatus {
 		t.Fatalf("/logout expected auth_logged_out status update")
 	}
+	if !sawSubscriptionGuidance {
+		t.Fatalf("/logout expected subscription re-login guidance containing codex login")
+	}
 
 	h.sendRequest("4", "session/prompt", map[string]any{
 		"sessionId": newResult.SessionID,
@@ -1748,11 +1756,139 @@ func TestE2EAcceptanceG6LogoutRequiresReauth(t *testing.T) {
 	if resp4.Error == nil || !strings.Contains(strings.ToLower(resp4.Error.Message), "authentication") {
 		t.Fatalf("session/prompt after logout should require authentication, got %+v", resp4.Error)
 	}
+	data4 := decodeRPCErrorDataMap(t, resp4.Error)
+	hint4 := valueAsStringAny(data4["hint"])
+	if !strings.Contains(strings.ToLower(hint4), "codex login") {
+		t.Fatalf("session/prompt auth error hint should suggest codex login, got %q", hint4)
+	}
 
 	h.sendRequest("5", "session/new", map[string]any{})
 	resp5 := h.waitResponse("5", responseTimeout)
 	if resp5.Error == nil || !strings.Contains(strings.ToLower(resp5.Error.Message), "authentication") {
 		t.Fatalf("session/new after logout should require authentication, got %+v", resp5.Error)
+	}
+}
+
+func TestE2EAcceptanceG6LogoutGuidanceWithAPIKeysAndRecoveryAfterRestart(t *testing.T) {
+	cases := []struct {
+		name        string
+		env         []string
+		guidanceHit []string
+	}{
+		{
+			name: "codex_api_key",
+			env: []string{
+				"CODEX_API_KEY=sk-codex",
+				"OPENAI_API_KEY=",
+				"CHATGPT_SUBSCRIPTION_ACTIVE=0",
+			},
+			guidanceHit: []string{"export CODEX_API_KEY", "unset OPENAI_API_KEY"},
+		},
+		{
+			name: "openai_api_key",
+			env: []string{
+				"CODEX_API_KEY=",
+				"OPENAI_API_KEY=sk-openai",
+				"CHATGPT_SUBSCRIPTION_ACTIVE=0",
+			},
+			guidanceHit: []string{"export OPENAI_API_KEY", "unset CODEX_API_KEY"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := startAdapter(t, tc.env...)
+
+			h.sendRequest("1", "initialize", map[string]any{})
+			_ = h.waitResponse("1", responseTimeout)
+
+			h.sendRequest("2", "session/new", map[string]any{})
+			newResp := h.waitResponse("2", responseTimeout)
+			var newResult struct {
+				SessionID string `json:"sessionId"`
+			}
+			unmarshalResult(t, newResp, &newResult)
+
+			h.sendRequest("3", "session/prompt", map[string]any{
+				"sessionId": newResult.SessionID,
+				"prompt":    "/logout",
+			})
+
+			gotLogoutResp := false
+			var guidance string
+			for !gotLogoutResp {
+				msg := h.nextMessage(responseTimeout)
+				if msg.Method == "session/update" {
+					update := decodeSessionUpdate(t, msg)
+					if update.Type == "message" {
+						guidance += "\n" + update.Delta
+					}
+					continue
+				}
+				if messageID(msg) != "3" {
+					continue
+				}
+				var result struct {
+					StopReason string `json:"stopReason"`
+				}
+				unmarshalResult(t, msg, &result)
+				if result.StopReason != "end_turn" {
+					t.Fatalf("/logout expected stopReason=end_turn, got %q", result.StopReason)
+				}
+				gotLogoutResp = true
+			}
+			for _, token := range tc.guidanceHit {
+				if !strings.Contains(guidance, token) {
+					t.Fatalf("logout guidance missing %q, got: %s", token, guidance)
+				}
+			}
+
+			h.sendRequest("4", "session/prompt", map[string]any{
+				"sessionId": newResult.SessionID,
+				"prompt":    "after logout",
+			})
+			resp4 := h.waitResponse("4", responseTimeout)
+			if resp4.Error == nil || !strings.Contains(strings.ToLower(resp4.Error.Message), "authentication") {
+				t.Fatalf("session/prompt after logout should require authentication, got %+v", resp4.Error)
+			}
+			data4 := decodeRPCErrorDataMap(t, resp4.Error)
+			command := valueAsStringAny(data4["nextStepCommand"])
+			if command == "" {
+				t.Fatalf("auth error should include nextStepCommand")
+			}
+			for _, token := range tc.guidanceHit {
+				if !strings.Contains(command, strings.Fields(token)[1]) && strings.Contains(token, "export") {
+					t.Fatalf("nextStepCommand should align with guidance token %q, got %q", token, command)
+				}
+			}
+
+			h.stop()
+
+			h2 := startAdapter(t, tc.env...)
+			h2.sendRequest("r1", "initialize", map[string]any{})
+			_ = h2.waitResponse("r1", responseTimeout)
+			h2.sendRequest("r2", "session/new", map[string]any{})
+			recoveredNew := h2.waitResponse("r2", responseTimeout)
+			var recovered struct {
+				SessionID string `json:"sessionId"`
+			}
+			unmarshalResult(t, recoveredNew, &recovered)
+			if recovered.SessionID == "" {
+				t.Fatalf("session/new should recover after restart with injected key")
+			}
+			h2.sendRequest("r3", "session/prompt", map[string]any{
+				"sessionId": recovered.SessionID,
+				"prompt":    "hello after relogin",
+			})
+			resp := waitForResponse(t, h2.reader, "r3", responseTimeout, nil)
+			var promptResult struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, resp, &promptResult)
+			if promptResult.StopReason != "end_turn" {
+				t.Fatalf("prompt after restart should succeed, got stopReason=%q", promptResult.StopReason)
+			}
+		})
 	}
 }
 
@@ -2657,6 +2793,28 @@ func decodeSessionUpdate(t *testing.T, msg rpcMessage) sessionUpdateParams {
 		t.Fatalf("decode session/update params: %v", err)
 	}
 	return params
+}
+
+func decodeRPCErrorDataMap(t *testing.T, errObj *rpcError) map[string]any {
+	t.Helper()
+	if errObj == nil || errObj.Data == nil {
+		return map[string]any{}
+	}
+
+	raw, err := json.Marshal(errObj.Data)
+	if err != nil {
+		t.Fatalf("marshal rpc error data: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal rpc error data map: %v", err)
+	}
+	return out
+}
+
+func valueAsStringAny(value any) string {
+	text, _ := value.(string)
+	return text
 }
 
 func decodeSessionRequestPermission(t *testing.T, msg rpcMessage) sessionRequestPermissionParams {
