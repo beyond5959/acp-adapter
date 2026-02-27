@@ -39,8 +39,12 @@ type sessionUpdateParams struct {
 	SessionID string `json:"sessionId"`
 	TurnID    string `json:"turnId"`
 	Type      string `json:"type"`
+	Phase     string `json:"phase,omitempty"`
+	ItemID    string `json:"itemId,omitempty"`
+	ItemType  string `json:"itemType,omitempty"`
 	Delta     string `json:"delta,omitempty"`
 	Status    string `json:"status,omitempty"`
+	Message   string `json:"message,omitempty"`
 }
 
 type rpcReader struct {
@@ -263,12 +267,39 @@ func TestE2EAcceptanceA1ToA5AndB1(t *testing.T) {
 		"prompt":    "hello",
 	})
 
-	gotUpdate := false
 	gotPromptResp := false
+	lifecycle := map[string]bool{
+		"turn_started":   false,
+		"item_started":   false,
+		"item_completed": false,
+		"turn_completed": false,
+	}
+	sawStreamingMessage := false
+	turnID := ""
 	for !gotPromptResp {
 		msg := h.nextMessage(responseTimeout)
 		if msg.Method == "session/update" {
-			gotUpdate = true
+			update := decodeSessionUpdate(t, msg)
+			if update.SessionID != newResult.SessionID {
+				t.Fatalf("session/update routed to wrong session: got %q want %q", update.SessionID, newResult.SessionID)
+			}
+			if turnID == "" {
+				turnID = update.TurnID
+			} else if update.TurnID != turnID {
+				t.Fatalf("same prompt received mixed turn IDs: %q vs %q", turnID, update.TurnID)
+			}
+
+			if update.Status != "" {
+				if _, ok := lifecycle[update.Status]; ok {
+					lifecycle[update.Status] = true
+				}
+			}
+			if update.Type == "message" {
+				if update.Phase != "streaming" {
+					t.Fatalf("message update expected phase=streaming, got %q", update.Phase)
+				}
+				sawStreamingMessage = true
+			}
 			continue
 		}
 		if messageID(msg) != "3" {
@@ -283,8 +314,13 @@ func TestE2EAcceptanceA1ToA5AndB1(t *testing.T) {
 		}
 		gotPromptResp = true
 	}
-	if !gotUpdate {
-		t.Fatalf("session/prompt expected at least one session/update")
+	for status, seen := range lifecycle {
+		if !seen {
+			t.Fatalf("session/prompt missing lifecycle status %q", status)
+		}
+	}
+	if !sawStreamingMessage {
+		t.Fatalf("session/prompt expected streaming message update")
 	}
 
 	// A5 session/cancel should quickly stop turn and end with cancelled.
@@ -317,12 +353,20 @@ func TestE2EAcceptanceA1ToA5AndB1(t *testing.T) {
 	cancelStartedAt := time.Now()
 	gotCancelResp := false
 	gotCancelledPromptResp := false
+	gotCancelledStatusUpdate := false
 	for !(gotCancelResp && gotCancelledPromptResp) {
 		if time.Since(cancelStartedAt) > cancelTimeout {
 			t.Fatalf("cancel did not complete within %s", cancelTimeout)
 		}
 
 		msg := h.nextMessage(cancelTimeout)
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.TurnID == cancelledTurnID && update.Status == "turn_cancelled" {
+				gotCancelledStatusUpdate = true
+			}
+			continue
+		}
 		switch messageID(msg) {
 		case "5":
 			var cancelResult struct {
@@ -345,6 +389,9 @@ func TestE2EAcceptanceA1ToA5AndB1(t *testing.T) {
 		}
 	}
 
+	if !gotCancelledStatusUpdate {
+		t.Fatalf("cancel expected turn_cancelled status update")
+	}
 	assertNoFurtherTurnUpdates(t, h.reader, cancelledTurnID, quietWindow)
 
 	// Keep adapter usable after cancel (sanity for no crash/no stuck process).
@@ -381,7 +428,8 @@ func TestE2EAcceptanceA1ToA5AndB1(t *testing.T) {
 }
 
 func TestE2EAcceptanceB1AppServerCrashReturnsClearError(t *testing.T) {
-	h := startAdapter(t, "FAKE_APP_SERVER_CRASH_ON_THREAD_START=1")
+	crashMarker := filepath.Join(t.TempDir(), "crash-once.marker")
+	h := startAdapter(t, "FAKE_APP_SERVER_CRASH_ON_THREAD_START_ONCE_FILE="+crashMarker)
 
 	h.sendRequest("1", "initialize", map[string]any{})
 	initResp := h.waitResponse("1", responseTimeout)
@@ -400,11 +448,109 @@ func TestE2EAcceptanceB1AppServerCrashReturnsClearError(t *testing.T) {
 	if resp.Error == nil {
 		t.Fatalf("session/new expected error when app-server crashes")
 	}
-	if !strings.Contains(resp.Error.Message, "thread/start failed") {
+	if !strings.Contains(resp.Error.Message, "thread/start") {
 		t.Fatalf("session/new error should be clear, got %q", resp.Error.Message)
 	}
 
+	// Next call should succeed after supervisor restarts app-server.
+	h.sendRequest("3", "session/new", map[string]any{})
+	recoveredResp := h.waitResponse("3", responseTimeout)
+	var recovered struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, recoveredResp, &recovered)
+	if recovered.SessionID == "" {
+		t.Fatalf("expected recovery session/new to succeed after app-server restart")
+	}
+
 	h.assertStdoutPureJSONRPC()
+}
+
+func TestE2ENotificationRoutingBySessionAndTurn(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	resp2 := h.waitResponse("2", responseTimeout)
+	var s1 struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, resp2, &s1)
+
+	h.sendRequest("3", "session/new", map[string]any{})
+	resp3 := h.waitResponse("3", responseTimeout)
+	var s2 struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, resp3, &s2)
+
+	h.sendRequest("10", "session/prompt", map[string]any{
+		"sessionId": s1.SessionID,
+		"prompt":    "slow one",
+	})
+	h.sendRequest("11", "session/prompt", map[string]any{
+		"sessionId": s2.SessionID,
+		"prompt":    "slow two",
+	})
+
+	turnToSession := make(map[string]string)
+	gotDone10 := false
+	gotDone11 := false
+	for !(gotDone10 && gotDone11) {
+		msg := h.nextMessage(responseTimeout)
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.SessionID != s1.SessionID && update.SessionID != s2.SessionID {
+				t.Fatalf("unexpected sessionId in update: %q", update.SessionID)
+			}
+			if update.TurnID == "" {
+				t.Fatalf("session/update missing turnId")
+			}
+
+			existing, ok := turnToSession[update.TurnID]
+			if !ok {
+				turnToSession[update.TurnID] = update.SessionID
+			} else if existing != update.SessionID {
+				t.Fatalf("turn %q routed to mixed sessions: %q vs %q", update.TurnID, existing, update.SessionID)
+			}
+			continue
+		}
+
+		switch messageID(msg) {
+		case "10":
+			var result struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, msg, &result)
+			if result.StopReason != "end_turn" {
+				t.Fatalf("prompt 10 expected stopReason=end_turn, got %q", result.StopReason)
+			}
+			gotDone10 = true
+		case "11":
+			var result struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, msg, &result)
+			if result.StopReason != "end_turn" {
+				t.Fatalf("prompt 11 expected stopReason=end_turn, got %q", result.StopReason)
+			}
+			gotDone11 = true
+		}
+	}
+
+	if len(turnToSession) < 2 {
+		t.Fatalf("expected updates for two independent turns, got %d turn(s)", len(turnToSession))
+	}
+}
+
+func TestRPCReaderDetectsInvalidStdoutLine(t *testing.T) {
+	reader := newRPCReader(t, strings.NewReader("not-json-rpc\n"))
+	time.Sleep(100 * time.Millisecond)
+	if err := reader.readErr(); err == nil {
+		t.Fatalf("expected rpcReader to detect invalid stdout line")
+	}
 }
 
 func repoRoot(t *testing.T) string {

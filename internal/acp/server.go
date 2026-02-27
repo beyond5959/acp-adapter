@@ -26,6 +26,23 @@ const (
 	rpcErrInternal       = -32000
 )
 
+type turnPhase string
+
+const (
+	turnPhaseStarted   turnPhase = "started"
+	turnPhaseStreaming turnPhase = "streaming"
+	turnPhaseCompleted turnPhase = "completed"
+	turnPhaseCancelled turnPhase = "cancelled"
+	turnPhaseError     turnPhase = "error"
+)
+
+type turnLifecycle struct {
+	sessionID       string
+	turnID          string
+	phase           turnPhase
+	cancelRequested bool
+}
+
 type appClient interface {
 	ThreadStart(ctx context.Context, cwd string) (string, error)
 	TurnStart(ctx context.Context, threadID, input string) (string, <-chan appserver.TurnEvent, error)
@@ -173,34 +190,25 @@ func (s *Server) handleSessionPrompt(ctx context.Context, id json.RawMessage, pa
 	}
 	defer s.sessions.EndTurn(params.SessionID, turnID)
 
-	stopReason := "end_turn"
+	lifecycle := newTurnLifecycle(params.SessionID, turnID)
+	s.emitUpdates(lifecycle.startedUpdate())
 
 	for {
 		select {
 		case <-turnCtx.Done():
+			lifecycle.markCancelRequested()
+			s.emitUpdates(lifecycle.cancelledUpdate())
 			s.writePromptResult(id, "cancelled")
 			return
 		case event, ok := <-events:
 			if !ok {
-				s.writePromptResult(id, stopReason)
+				s.writePromptResult(id, lifecycle.fallbackStopReason())
 				return
 			}
 
-			switch event.Type {
-			case appserver.TurnEventTypeUpdate:
-				update := SessionUpdateParams{
-					SessionID: params.SessionID,
-					TurnID:    event.TurnID,
-					Type:      "message",
-					Delta:     event.Delta,
-				}
-				if err := s.codec.WriteNotification(methodSessionUpdate, update); err != nil {
-					s.logger.Warn("failed to write session/update", slog.String("error", err.Error()))
-				}
-			case appserver.TurnEventTypeCompleted:
-				if event.StopReason != "" {
-					stopReason = event.StopReason
-				}
+			updates, done, stopReason := lifecycle.apply(event)
+			s.emitUpdates(updates)
+			if done {
 				s.writePromptResult(id, stopReason)
 				return
 			}
@@ -267,6 +275,15 @@ func (s *Server) writeError(id json.RawMessage, code int, message string, data m
 	_ = s.codec.WriteError(id, code, message, data)
 }
 
+func (s *Server) emitUpdates(updates []SessionUpdateParams) {
+	for _, update := range updates {
+		if err := s.codec.WriteNotification(methodSessionUpdate, update); err != nil {
+			s.logger.Warn("failed to write session/update", slog.String("error", err.Error()))
+			return
+		}
+	}
+}
+
 func decodeParams(raw json.RawMessage, out any) error {
 	if len(raw) == 0 {
 		return nil
@@ -303,5 +320,148 @@ func normalizeStopReason(reason string) string {
 		return "error"
 	default:
 		return "end_turn"
+	}
+}
+
+func newTurnLifecycle(sessionID, turnID string) *turnLifecycle {
+	return &turnLifecycle{
+		sessionID: sessionID,
+		turnID:    turnID,
+		phase:     turnPhaseStarted,
+	}
+}
+
+func (t *turnLifecycle) markCancelRequested() {
+	t.cancelRequested = true
+}
+
+func (t *turnLifecycle) startedUpdate() []SessionUpdateParams {
+	return []SessionUpdateParams{
+		{
+			SessionID: t.sessionID,
+			TurnID:    t.turnID,
+			Type:      "status",
+			Phase:     string(t.phase),
+			Status:    "turn_started",
+		},
+	}
+}
+
+func (t *turnLifecycle) cancelledUpdate() []SessionUpdateParams {
+	t.phase = turnPhaseCancelled
+	return []SessionUpdateParams{
+		{
+			SessionID: t.sessionID,
+			TurnID:    t.turnID,
+			Type:      "status",
+			Phase:     string(t.phase),
+			Status:    "turn_cancelled",
+		},
+	}
+}
+
+func (t *turnLifecycle) apply(event appserver.TurnEvent) ([]SessionUpdateParams, bool, string) {
+	switch event.Type {
+	case appserver.TurnEventTypeStarted:
+		t.phase = turnPhaseStarted
+		return []SessionUpdateParams{
+			{
+				SessionID: t.sessionID,
+				TurnID:    t.turnID,
+				Type:      "status",
+				Phase:     string(t.phase),
+				Status:    "turn_started",
+			},
+		}, false, ""
+	case appserver.TurnEventTypeUpdate, appserver.TurnEventTypeAgentMessageDelta:
+		t.phase = turnPhaseStreaming
+		return []SessionUpdateParams{
+			{
+				SessionID: t.sessionID,
+				TurnID:    event.TurnID,
+				Type:      "message",
+				Phase:     string(t.phase),
+				ItemID:    event.ItemID,
+				Delta:     event.Delta,
+			},
+		}, false, ""
+	case appserver.TurnEventTypeItemStarted:
+		t.phase = turnPhaseStreaming
+		return []SessionUpdateParams{
+			{
+				SessionID: t.sessionID,
+				TurnID:    event.TurnID,
+				Type:      "status",
+				Phase:     string(t.phase),
+				ItemID:    event.ItemID,
+				ItemType:  event.ItemType,
+				Status:    "item_started",
+			},
+		}, false, ""
+	case appserver.TurnEventTypeItemCompleted:
+		t.phase = turnPhaseStreaming
+		return []SessionUpdateParams{
+			{
+				SessionID: t.sessionID,
+				TurnID:    event.TurnID,
+				Type:      "status",
+				Phase:     string(t.phase),
+				ItemID:    event.ItemID,
+				ItemType:  event.ItemType,
+				Status:    "item_completed",
+			},
+		}, false, ""
+	case appserver.TurnEventTypeCompleted:
+		stopReason := normalizeStopReason(event.StopReason)
+		if t.cancelRequested {
+			stopReason = "cancelled"
+		}
+		switch stopReason {
+		case "cancelled":
+			t.phase = turnPhaseCancelled
+		case "error":
+			t.phase = turnPhaseError
+		default:
+			t.phase = turnPhaseCompleted
+		}
+		return []SessionUpdateParams{
+			{
+				SessionID: t.sessionID,
+				TurnID:    event.TurnID,
+				Type:      "status",
+				Phase:     string(t.phase),
+				Status:    "turn_completed",
+			},
+		}, true, stopReason
+	case appserver.TurnEventTypeError:
+		t.phase = turnPhaseError
+		return []SessionUpdateParams{
+			{
+				SessionID: t.sessionID,
+				TurnID:    t.turnID,
+				Type:      "status",
+				Phase:     string(t.phase),
+				Status:    "turn_error",
+				Message:   event.Message,
+			},
+		}, true, "error"
+	default:
+		return nil, false, ""
+	}
+}
+
+func (t *turnLifecycle) fallbackStopReason() string {
+	if t.cancelRequested {
+		return "cancelled"
+	}
+	switch t.phase {
+	case turnPhaseCompleted:
+		return "end_turn"
+	case turnPhaseCancelled:
+		return "cancelled"
+	case turnPhaseError:
+		return "error"
+	default:
+		return "error"
 	}
 }

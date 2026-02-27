@@ -133,7 +133,7 @@ func (c *Client) registerTurnStream(turnID string) <-chan TurnEvent {
 	c.mu.Unlock()
 
 	for _, event := range queued {
-		if event.Type == TurnEventTypeCompleted {
+		if isTerminalTurnEvent(event.Type) {
 			ch <- event
 			c.mu.Lock()
 			delete(c.turnStreams, turnID)
@@ -242,6 +242,17 @@ func (c *Client) handleResponse(msg RPCMessage) {
 
 func (c *Client) handleNotification(msg RPCMessage) {
 	switch msg.Method {
+	case notificationTurnStarted:
+		var note TurnStartedNotification
+		if err := json.Unmarshal(msg.Params, &note); err != nil {
+			c.logger.Warn("ignore malformed turn/started", slog.String("error", err.Error()))
+			return
+		}
+		c.pushTurnEvent(note.TurnID, TurnEvent{
+			Type:     TurnEventTypeStarted,
+			ThreadID: note.ThreadID,
+			TurnID:   note.TurnID,
+		}, false)
 	case notificationTurnUpdate:
 		var note TurnUpdateNotification
 		if err := json.Unmarshal(msg.Params, &note); err != nil {
@@ -253,6 +264,45 @@ func (c *Client) handleNotification(msg RPCMessage) {
 			ThreadID: note.ThreadID,
 			TurnID:   note.TurnID,
 			Delta:    note.Delta,
+		}, false)
+	case notificationItemAgentMessageDelta:
+		var note ItemAgentMessageDeltaNotification
+		if err := json.Unmarshal(msg.Params, &note); err != nil {
+			c.logger.Warn("ignore malformed item/agentMessage/delta", slog.String("error", err.Error()))
+			return
+		}
+		c.pushTurnEvent(note.TurnID, TurnEvent{
+			Type:     TurnEventTypeAgentMessageDelta,
+			ThreadID: note.ThreadID,
+			TurnID:   note.TurnID,
+			ItemID:   note.ItemID,
+			Delta:    note.Delta,
+		}, false)
+	case notificationItemStarted:
+		var note ItemStartedNotification
+		if err := json.Unmarshal(msg.Params, &note); err != nil {
+			c.logger.Warn("ignore malformed item/started", slog.String("error", err.Error()))
+			return
+		}
+		c.pushTurnEvent(note.TurnID, TurnEvent{
+			Type:     TurnEventTypeItemStarted,
+			ThreadID: note.ThreadID,
+			TurnID:   note.TurnID,
+			ItemID:   note.ItemID,
+			ItemType: note.ItemType,
+		}, false)
+	case notificationItemCompleted:
+		var note ItemCompletedNotification
+		if err := json.Unmarshal(msg.Params, &note); err != nil {
+			c.logger.Warn("ignore malformed item/completed", slog.String("error", err.Error()))
+			return
+		}
+		c.pushTurnEvent(note.TurnID, TurnEvent{
+			Type:     TurnEventTypeItemCompleted,
+			ThreadID: note.ThreadID,
+			TurnID:   note.TurnID,
+			ItemID:   note.ItemID,
+			ItemType: note.ItemType,
 		}, false)
 	case notificationTurnCompleted:
 		var note TurnCompletedNotification
@@ -315,7 +365,11 @@ func (c *Client) failAll(err error) {
 	}
 	for _, ch := range streams {
 		select {
-		case ch <- TurnEvent{Type: TurnEventTypeCompleted, StopReason: "error"}:
+		case ch <- TurnEvent{
+			Type:       TurnEventTypeError,
+			StopReason: "error",
+			Message:    err.Error(),
+		}:
 		default:
 		}
 		close(ch)
@@ -360,4 +414,13 @@ func normalizeID(raw json.RawMessage) string {
 func cloneRawMessage(raw json.RawMessage) *json.RawMessage {
 	cp := append(json.RawMessage(nil), raw...)
 	return &cp
+}
+
+func isTerminalTurnEvent(eventType TurnEventType) bool {
+	switch eventType {
+	case TurnEventTypeCompleted, TurnEventTypeError:
+		return true
+	default:
+		return false
+	}
 }

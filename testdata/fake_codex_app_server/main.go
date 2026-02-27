@@ -28,6 +28,7 @@ type fakeServer struct {
 	receivedInitialize  bool
 	receivedInitialized bool
 	crashOnThreadStart  bool
+	crashOnceFile       string
 }
 
 func main() {
@@ -35,6 +36,7 @@ func main() {
 		codec:              appserver.NewJSONLCodec(os.Stdin, os.Stdout),
 		turns:              make(map[string]*turnControl),
 		crashOnThreadStart: os.Getenv("FAKE_APP_SERVER_CRASH_ON_THREAD_START") == "1",
+		crashOnceFile:      os.Getenv("FAKE_APP_SERVER_CRASH_ON_THREAD_START_ONCE_FILE"),
 	}
 
 	if err := server.serve(); err != nil && err != io.EOF {
@@ -78,7 +80,7 @@ func (s *fakeServer) handle(msg appserver.RPCMessage) {
 			s.writeError(msg.ID, -32000, "initialize/initialized handshake required")
 			return
 		}
-		if s.crashOnThreadStart {
+		if s.shouldCrashOnThreadStart() {
 			os.Exit(42)
 		}
 		threadID := s.newThreadID()
@@ -152,12 +154,16 @@ func (s *fakeServer) removeTurn(turnID string) {
 func (s *fakeServer) runTurn(threadID, turnID, input string, control *turnControl) {
 	defer s.removeTurn(turnID)
 
+	itemID := fmt.Sprintf("item-%s", turnID)
+	s.writeTurnStarted(threadID, turnID)
+
 	select {
 	case <-control.cancel:
 		s.writeTurnCompleted(threadID, turnID, "cancelled")
 		return
 	case <-time.After(40 * time.Millisecond):
-		s.writeTurnUpdate(threadID, turnID, "working")
+		s.writeItemStarted(threadID, turnID, itemID, "agent_message")
+		s.writeAgentMessageDelta(threadID, turnID, itemID, "working")
 	}
 
 	duration := 120 * time.Millisecond
@@ -169,16 +175,43 @@ func (s *fakeServer) runTurn(threadID, turnID, input string, control *turnContro
 	case <-control.cancel:
 		s.writeTurnCompleted(threadID, turnID, "cancelled")
 	case <-time.After(duration):
-		s.writeTurnUpdate(threadID, turnID, "done")
+		s.writeAgentMessageDelta(threadID, turnID, itemID, "done")
+		s.writeItemCompleted(threadID, turnID, itemID, "agent_message")
 		s.writeTurnCompleted(threadID, turnID, "end_turn")
 	}
 }
 
-func (s *fakeServer) writeTurnUpdate(threadID, turnID, delta string) {
-	s.writeNotification("turn/update", appserver.TurnUpdateNotification{
+func (s *fakeServer) writeTurnStarted(threadID, turnID string) {
+	s.writeNotification("turn/started", appserver.TurnStartedNotification{
 		ThreadID: threadID,
 		TurnID:   turnID,
+	})
+}
+
+func (s *fakeServer) writeAgentMessageDelta(threadID, turnID, itemID, delta string) {
+	s.writeNotification("item/agentMessage/delta", appserver.ItemAgentMessageDeltaNotification{
+		ThreadID: threadID,
+		TurnID:   turnID,
+		ItemID:   itemID,
 		Delta:    delta,
+	})
+}
+
+func (s *fakeServer) writeItemStarted(threadID, turnID, itemID, itemType string) {
+	s.writeNotification("item/started", appserver.ItemStartedNotification{
+		ThreadID: threadID,
+		TurnID:   turnID,
+		ItemID:   itemID,
+		ItemType: itemType,
+	})
+}
+
+func (s *fakeServer) writeItemCompleted(threadID, turnID, itemID, itemType string) {
+	s.writeNotification("item/completed", appserver.ItemCompletedNotification{
+		ThreadID: threadID,
+		TurnID:   turnID,
+		ItemID:   itemID,
+		ItemType: itemType,
 	})
 }
 
@@ -237,4 +270,22 @@ func cloneID(id *json.RawMessage) *json.RawMessage {
 	}
 	cp := append(json.RawMessage(nil), (*id)...)
 	return &cp
+}
+
+func (s *fakeServer) shouldCrashOnThreadStart() bool {
+	if s.crashOnThreadStart {
+		return true
+	}
+	if s.crashOnceFile == "" {
+		return false
+	}
+
+	if _, err := os.Stat(s.crashOnceFile); err == nil {
+		return false
+	}
+
+	if err := os.WriteFile(s.crashOnceFile, []byte("crashed"), 0o644); err != nil {
+		return false
+	}
+	return true
 }

@@ -5,7 +5,7 @@
 
 ## 项目概览
 - 项目：codex-acp-go（基于 Codex App Server 的 ACP 适配器）
-- 当前阶段：PR1
+- 当前阶段：PR2
 - 最近更新：2026-02-27
 
 ## 关键链接/文档
@@ -16,12 +16,12 @@
 - docs/KNOWN_ISSUES.md：已知问题与规避
 
 ## 当前里程碑状态（按 PR）
-- [ ] PR1：工程骨架 + 双 codec + 最小 e2e harness（initialize/new/prompt/cancel）
+- [x] PR1：工程骨架 + 双 codec + 最小 e2e harness（initialize/new/prompt/cancel）
   - 状态：Done
   - 说明：已完成可运行骨架、ACP stdio codec、App Server 子进程 client、e2e harness（A1-A5 + B1 自动化覆盖）
-- [ ] PR2：流式映射与 turn 生命周期（notifications -> session/update; cancel 语义）
-  - 状态：Not started
-  - 说明：待实现完整 notifications 映射与更细粒度 turn state machine
+- [x] PR2：流式映射与 turn 生命周期（notifications -> session/update; cancel 语义）
+  - 状态：Done
+  - 说明：已实现 turn 状态机、notification 路由、cancel 语义强化、子进程异常退出恢复与错误可读化
 - [ ] PR3：Approvals -> ACP permission（command/file/network/mcp）
   - 状态：Not started
   - 说明：待实现 approval broker 与 permission 回传
@@ -80,34 +80,29 @@
 
 ### J. 可靠性
 - [ ] J1 压力回归（100 turns 含 approve/deny/cancel）
-- [ ] J2 stdout 纯净（trace 脱敏）
+- [x] J2 stdout 纯净（trace 脱敏）
 
 ## 本 PR 做了什么
-1. 初始化 Go 工程与执行入口：新增 `go.mod`、`cmd/codex-acp-go/main.go`。
-2. 实现 ACP stdio newline-delimited JSON-RPC codec 与方法路由：
-   - `initialize`
-   - `session/new`
-   - `session/prompt`
-   - `session/cancel`
-3. 实现 App Server 子进程与最小 client：
-   - 启动 `codex app-server`（支持通过环境变量覆写命令）
-   - 完成 `initialize`、`initialized`、`thread/start`、`turn/start`、`turn/interrupt`。
-4. 实现会话状态管理（session-thread-turn 绑定、单 session 单 active turn）。
-5. 增加 e2e 测试基建：
-   - fake app-server（可控 turn/update/completed/cancel）
-   - 启动真实 adapter 进程进行协议级测试。
-6. 补齐 PR1 自动化验收到 A1-A5 + B1：
-   - 验证 stdout 纯 JSON-RPC
-   - 验证 initialize/new/prompt/cancel
-   - 验证 app-server 初始化握手约束（initialize/initialized）
-   - 验证 app-server thread/start 崩溃时错误可见
-7. 增加 `make schema` 目标与 `internal/appserver/schema/` 目录占位。
+1. 建立 turn 生命周期状态机：`started -> streaming -> completed/cancelled/error`，并把状态统一映射到 ACP `session/update`。
+2. 扩展 App Server 通知路由：
+   - `turn/started`
+   - `item/started`
+   - `item/agentMessage/delta`
+   - `item/completed`
+   - `turn/completed`
+3. 完成 cancel 强化语义：`session/cancel -> turn/interrupt`，最终 `session/prompt` 收敛为 `stopReason=cancelled`。
+4. 新增 `appserver.Supervisor`：子进程异常退出时返回可读错误，并自动重建以支持后续请求恢复。
+5. 补齐 PR2 e2e：
+   - 生命周期流式映射与 stopReason 断言
+   - 通知按 session/turn 正确路由
+   - 子进程崩溃错误可见与恢复
+   - stdout 纯净可检测（J2）
 
 ## 影响范围是什么
-1. 运行行为：adapter 启动后会自动拉起下游 app-server 并完成初始化握手。
-2. 协议行为：上游 ACP client 可完成最小闭环（initialize/new/prompt/cancel）。
-3. 输出约束：stdout 仅输出 ACP JSON-RPC 消息；日志输出到 stderr。
-4. 测试基线：引入端到端 harness，后续 PR2+ 能在此基础上扩展回归。
+1. `internal/acp`：`session/prompt` 生命周期与 `session/update` 事件映射逻辑。
+2. `internal/appserver`：notification 解码/分发、异常退出恢复（supervisor）。
+3. `cmd/codex-acp-go`：启动路径改为 supervisor 管理 app-server 生命周期。
+4. `test/integration` 与 `testdata/fake_codex_app_server`：PR2 验收路径（A4/A5/B1/J2）自动化回归。
 
 ## 如何验证
 1. 执行：
@@ -116,25 +111,27 @@
    - `test/integration` 通过，包含：
      - `TestE2EAcceptanceA1ToA5AndB1`
      - `TestE2EAcceptanceB1AppServerCrashReturnsClearError`
-   - A1-A5 + B1 由 e2e 自动验证。
-   - 测试中会校验 adapter stdout 每行都是合法 JSON-RPC。
+     - `TestE2ENotificationRoutingBySessionAndTurn`
+     - `TestRPCReaderDetectsInvalidStdoutLine`
+   - PR2 相关验收由 e2e 自动覆盖：A4、A5（强化）、B1（稳定性）、J2。
+   - 测试中持续校验 adapter stdout 每行均为合法 JSON-RPC。
 3. 可选手工验证：
    - 启动 `cmd/codex-acp-go`。
-   - 通过 stdin 发送 `initialize`、`session/new`、`session/prompt`、`session/cancel`。
-   - 观察 stdout 仅协议消息，stderr 为日志。
+   - 通过 stdin 顺序发送 `initialize`、`session/new`、`session/prompt`、`session/cancel`。
+   - 观察 `session/update` 生命周期状态与最终 `stopReason`，并确认 stdout 仅协议消息。
 
 ## 遗留问题是什么
-1. B2 尚未完成：当前只有 `make schema` 命令与目录占位，未提交真实 schema 产物与版本锁定校验。
-2. PR2~PR5 尚未开始：完整 notifications 流映射、permission、review、slash commands、MCP、auth 仍待实现。
-3. 当前 e2e 依赖 fake app-server：真实 codex app-server 的全能力兼容性仍需后续补充验证。
+1. B2 尚未完成：schema 仍为目录占位，缺少真实产物与 hash 追踪校验。
+2. 当前崩溃恢复策略对“当次请求”返回可读失败，需要客户端重试一次（已在 KNOWN_ISSUES 记录）。
+3. e2e 仍主要依赖 fake app-server，真实 codex app-server 事件形态回归需在后续 PR 补齐。
 
 ## 当前阻塞（Blockers）
 - 无
 
 ## 下一步（Next）
-1. 进入 PR2：完善 App Server notifications -> ACP `session/update` 全量映射。
-2. 强化 cancel 语义：细化 turn state，覆盖竞态与超时场景。
-3. 补充更多 e2e case：多 update、错误路径、并发 session。
+1. 进入 PR3：实现 approvals -> ACP permission（command/file/network/mcp）。
+2. 增加 permission 相关 e2e（accept/decline/cancel 三路径）。
+3. 继续扩展真实 codex app-server 集成回归（非 fake server）。
 
 ## 变更摘要（每 PR 一条）
 ### 2026-02-26 — PR1 工程骨架 + 双 codec + 最小 e2e harness
@@ -148,3 +145,22 @@
   - `go test ./...` 通过
 - Notes/Follow-ups:
   - `make schema` 已提供，真实 schema 锁定与校验在后续 PR 补齐
+
+### 2026-02-27 — PR2 流式映射与 turn 生命周期状态机
+- A. 范围与目标:
+  - 覆盖 A4、A5（强化）、B1（稳定性）、J2（stdout 纯净可检测）
+  - 建立 `started -> streaming -> completed/cancelled/error` 生命周期
+- B. 实现:
+  - `appserver/client` 支持 `turn/started`、`item/started`、`item/agentMessage/delta`、`item/completed`、`turn/completed` 路由
+  - `acp/server` 引入 turn 生命周期状态机并映射为 ACP `session/update`
+  - `session/cancel -> turn/interrupt` 后保证 prompt 收敛为 `stopReason=cancelled`
+  - 新增 `appserver/supervisor`：子进程异常后重启，向上游返回可读错误并支持后续恢复
+- C. 验证:
+  - e2e 新增/强化：
+    - `TestE2EAcceptanceA1ToA5AndB1`
+    - `TestE2EAcceptanceB1AppServerCrashReturnsClearError`
+    - `TestE2ENotificationRoutingBySessionAndTurn`
+    - `TestRPCReaderDetectsInvalidStdoutLine`
+  - `go test ./...` 通过
+- D. 文档:
+  - 更新 `PROGRESS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`

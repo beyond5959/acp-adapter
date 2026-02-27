@@ -76,6 +76,10 @@ type SessionUpdateParams struct {
 	SessionID string `json:"sessionId"`
 	TurnID    string `json:"turnId"`
 	Type      string `json:"type"`
+	Phase     string `json:"phase,omitempty"`
+	ItemID    string `json:"itemId,omitempty"`
+	ItemType  string `json:"itemType,omitempty"`
 	Delta     string `json:"delta,omitempty"`
 	Status    string `json:"status,omitempty"`
+	Message   string `json:"message,omitempty"`
 }

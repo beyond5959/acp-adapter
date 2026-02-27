@@ -65,11 +65,41 @@ type TurnInterruptParams struct {
 	TurnID   string `json:"turnId"`
 }
 
+// TurnStartedNotification notifies that one turn has entered running state.
+type TurnStartedNotification struct {
+	ThreadID string `json:"threadId"`
+	TurnID   string `json:"turnId"`
+}
+
 // TurnUpdateNotification is streamed while the turn is running.
 type TurnUpdateNotification struct {
 	ThreadID string `json:"threadId"`
 	TurnID   string `json:"turnId"`
 	Delta    string `json:"delta,omitempty"`
+}
+
+// ItemAgentMessageDeltaNotification carries assistant message chunks.
+type ItemAgentMessageDeltaNotification struct {
+	ThreadID string `json:"threadId"`
+	TurnID   string `json:"turnId"`
+	ItemID   string `json:"itemId,omitempty"`
+	Delta    string `json:"delta,omitempty"`
+}
+
+// ItemStartedNotification marks one streamed item as started.
+type ItemStartedNotification struct {
+	ThreadID string `json:"threadId"`
+	TurnID   string `json:"turnId"`
+	ItemID   string `json:"itemId,omitempty"`
+	ItemType string `json:"itemType,omitempty"`
+}
+
+// ItemCompletedNotification marks one streamed item as completed.
+type ItemCompletedNotification struct {
+	ThreadID string `json:"threadId"`
+	TurnID   string `json:"turnId"`
+	ItemID   string `json:"itemId,omitempty"`
+	ItemType string `json:"itemType,omitempty"`
 }
 
 // TurnCompletedNotification finalizes a turn.
@@ -83,10 +113,20 @@ type TurnCompletedNotification struct {
 type TurnEventType string
 
 const (
+	// TurnEventTypeStarted indicates turn is running.
+	TurnEventTypeStarted TurnEventType = "started"
 	// TurnEventTypeUpdate carries model/tool delta text.
 	TurnEventTypeUpdate TurnEventType = "update"
+	// TurnEventTypeAgentMessageDelta carries assistant message chunk.
+	TurnEventTypeAgentMessageDelta TurnEventType = "agent_message_delta"
+	// TurnEventTypeItemStarted indicates one item started.
+	TurnEventTypeItemStarted TurnEventType = "item_started"
+	// TurnEventTypeItemCompleted indicates one item completed.
+	TurnEventTypeItemCompleted TurnEventType = "item_completed"
 	// TurnEventTypeCompleted indicates turn completion.
 	TurnEventTypeCompleted TurnEventType = "completed"
+	// TurnEventTypeError indicates stream-level or process-level failure.
+	TurnEventTypeError TurnEventType = "error"
 )
 
 // TurnEvent is emitted to ACP session/prompt handler.
@@ -94,8 +134,11 @@ type TurnEvent struct {
 	Type       TurnEventType
 	ThreadID   string
 	TurnID     string
+	ItemID     string
+	ItemType   string
 	Delta      string
 	StopReason string
+	Message    string
 }
 
 const (
@@ -104,6 +147,10 @@ const (
 	methodTurnStart     = "turn/start"
 	methodTurnInterrupt = "turn/interrupt"
 
-	notificationTurnUpdate    = "turn/update"
-	notificationTurnCompleted = "turn/completed"
+	notificationTurnStarted           = "turn/started"
+	notificationTurnUpdate            = "turn/update"
+	notificationItemStarted           = "item/started"
+	notificationItemCompleted         = "item/completed"
+	notificationItemAgentMessageDelta = "item/agentMessage/delta"
+	notificationTurnCompleted         = "turn/completed"
 )

@@ -30,3 +30,25 @@
 ## KI-0007：Schema 漂移
 - 现象：升级 codex 版本后 app-server 协议字段变化导致运行时失败
 - Workaround：固定 codex 版本；每次升级必须执行 `make schema` 并更新 types/校验；CI 检查 schema 变更
+
+## KI-0003：App Server 子进程崩溃/退出后的恢复策略
+- 现象：app-server 异常退出时，进行中的 turn 会以错误结束。
+- 影响：
+  - 当次请求会失败（返回可读错误）。
+  - 后续请求可在 supervisor 重建后恢复。
+- 复现：
+  - 设置 `FAKE_APP_SERVER_CRASH_ON_THREAD_START_ONCE_FILE` 并触发 `session/new`。
+- Workaround：
+  - 客户端在收到 `thread/start` 或 `turn/start` 失败后重试一次请求。
+- 后续计划：
+  - 在 PR3/PR4 评估“自动重放当次请求”的安全边界与幂等性要求。
+
+## KI-0009：真实 App Server 与 fake server 事件形态可能不完全一致
+- 现象：当前 e2e 主要依赖 fake app-server，事件字段形态由测试替身控制。
+- 影响：
+  - 在真实 codex app-server 新字段/兼容字段出现时，可能出现映射遗漏。
+- Workaround：
+  - 通过 `appserver/client` 对未知 notifications 保持忽略且不崩溃。
+  - 在真实环境补充集成回归并同步 schema。
+- 后续计划：
+  - PR3 开始增加真实 app-server 的回归脚本与录制样例（脱敏）。

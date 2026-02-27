@@ -24,6 +24,9 @@ type Process struct {
 	stdoutPipe io.ReadCloser
 
 	waitCh    chan error
+	waitMu    sync.Mutex
+	waitErr   error
+	exited    bool
 	closeOnce sync.Once
 }
 
@@ -62,7 +65,13 @@ func StartProcess(ctx context.Context, cfg ProcessConfig) (*Process, error) {
 	}
 
 	go func() {
-		process.waitCh <- cmd.Wait()
+		err := cmd.Wait()
+		process.waitMu.Lock()
+		process.waitErr = err
+		process.exited = true
+		process.waitMu.Unlock()
+
+		process.waitCh <- err
 		close(process.waitCh)
 	}()
 
@@ -84,6 +93,13 @@ func (p *Process) WaitChan() <-chan error {
 	return p.waitCh
 }
 
+// HasExited reports whether the process has exited and with which error.
+func (p *Process) HasExited() (bool, error) {
+	p.waitMu.Lock()
+	defer p.waitMu.Unlock()
+	return p.exited, p.waitErr
+}
+
 // Close terminates process and waits for exit.
 func (p *Process) Close() error {
 	var closeErr error
@@ -91,13 +107,19 @@ func (p *Process) Close() error {
 		if p.stdinPipe != nil {
 			_ = p.stdinPipe.Close()
 		}
-		if p.cmd != nil && p.cmd.Process != nil {
+
+		exited, _ := p.HasExited()
+		if !exited && p.cmd != nil && p.cmd.Process != nil {
 			_ = p.cmd.Process.Kill()
 		}
 		if p.waitCh != nil {
 			if err, ok := <-p.waitCh; ok {
 				closeErr = err
 			}
+		}
+
+		if closeErr == nil {
+			_, closeErr = p.HasExited()
 		}
 	})
 	return closeErr
