@@ -8,7 +8,7 @@
     "turnId"
   ],
   "properties": {
-    "turnId": {
+    "threadId": {
       "type": "string"
     },
     "approvalId": {
@@ -17,6 +17,9 @@
         "string",
         "null"
       ]
+    },
+    "turnId": {
+      "type": "string"
     },
     "command": {
       "description": "The command to be executed.",
@@ -82,9 +85,6 @@
         "string",
         "null"
       ]
-    },
-    "threadId": {
-      "type": "string"
     }
   },
   "definitions": {
@@ -286,6 +286,85 @@
             }
           },
           "title": "UnknownCommandAction"
+        }
+      ]
+    },
+    "CommandExecutionApprovalDecision": {
+      "oneOf": [
+        {
+          "description": "User approved the command.",
+          "type": "string",
+          "enum": [
+            "accept"
+          ]
+        },
+        {
+          "description": "User approved the command and future prompts in the same session-scoped approval cache should run without prompting.",
+          "type": "string",
+          "enum": [
+            "acceptForSession"
+          ]
+        },
+        {
+          "description": "User approved the command, and wants to apply the proposed execpolicy amendment so future matching commands can run without prompting.",
+          "type": "object",
+          "required": [
+            "acceptWithExecpolicyAmendment"
+          ],
+          "properties": {
+            "acceptWithExecpolicyAmendment": {
+              "type": "object",
+              "required": [
+                "execpolicy_amendment"
+              ],
+              "properties": {
+                "execpolicy_amendment": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "additionalProperties": false,
+          "title": "AcceptWithExecpolicyAmendmentCommandExecutionApprovalDecision"
+        },
+        {
+          "description": "User chose a persistent network policy rule (allow/deny) for this host.",
+          "type": "object",
+          "required": [
+            "applyNetworkPolicyAmendment"
+          ],
+          "properties": {
+            "applyNetworkPolicyAmendment": {
+              "type": "object",
+              "required": [
+                "network_policy_amendment"
+              ],
+              "properties": {
+                "network_policy_amendment": {
+                  "$ref": "#/definitions/NetworkPolicyAmendment"
+                }
+              }
+            }
+          },
+          "additionalProperties": false,
+          "title": "ApplyNetworkPolicyAmendmentCommandExecutionApprovalDecision"
+        },
+        {
+          "description": "User denied the command. The agent will continue the turn.",
+          "type": "string",
+          "enum": [
+            "decline"
+          ]
+        },
+        {
+          "description": "User denied the command. The turn will also be immediately interrupted.",
+          "type": "string",
+          "enum": [
+            "cancel"
+          ]
         }
       ]
     },

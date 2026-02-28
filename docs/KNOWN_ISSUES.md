@@ -168,11 +168,13 @@
   - 若本机未安装 `codex` 或认证不可用，真实 e2e 会跳过（带原因），不会覆盖真实链路。
   - `TestE2ERealCodexAppServer_AuthInjectedKeyRecovers` 需要可注入 key；未提供时会 skip。
   - `TestE2ERealCodexAppServer_MCPListAndOptionalCall` 在无 MCP server 配置时仅验证 list 路径，call 分支不会执行。
+  - 本机 `~/.codex/state_*.sqlite` 迁移漂移时，可能出现 `migration ... missing` 警告并伴随部分真实能力异常（联调日志可见）。
 - 复现：
   - 执行 `E2E_REAL_CODEX=1 go test ./... -run TestE2EReal -count=1`，且环境缺少 codex/auth。
   - 例如 `TestE2ERealCodexAppServer_BasicPromptAndCancel` / `TestE2ERealCodexPromptInteractions` 会因 `thread/start failed` skip。
 - Workaround：
   - 安装并确保 `codex app-server` 可运行；准备可用认证态（API key 或 subscription）以让 real e2e 实际执行。
+  - 若出现 `state_*.sqlite migration ... missing`，先修复/清理本机 codex state 后再重跑 real e2e。
   - 若要覆盖 auth 注入恢复路径，设置：
     - `E2E_REAL_CODEX_RECOVERY_CODEX_API_KEY=<key>` 或
     - `E2E_REAL_CODEX_RECOVERY_OPENAI_API_KEY=<key>`

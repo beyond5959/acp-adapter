@@ -194,85 +194,28 @@
         }
       }
     },
-    "ReviewDecision": {
-      "description": "User's decision in response to an ExecApprovalRequest.",
-      "oneOf": [
-        {
-          "description": "User has approved this command and the agent should execute it.",
-          "type": "string",
-          "enum": [
-            "approved"
-          ]
+    "ChatgptAuthTokensRefreshResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ChatgptAuthTokensRefreshResponse",
+      "type": "object",
+      "required": [
+        "accessToken",
+        "chatgptAccountId"
+      ],
+      "properties": {
+        "accessToken": {
+          "type": "string"
         },
-        {
-          "description": "User has approved this command and wants to apply the proposed execpolicy amendment so future matching commands are permitted.",
-          "type": "object",
-          "required": [
-            "approved_execpolicy_amendment"
-          ],
-          "properties": {
-            "approved_execpolicy_amendment": {
-              "type": "object",
-              "required": [
-                "proposed_execpolicy_amendment"
-              ],
-              "properties": {
-                "proposed_execpolicy_amendment": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          },
-          "additionalProperties": false,
-          "title": "ApprovedExecpolicyAmendmentReviewDecision"
+        "chatgptAccountId": {
+          "type": "string"
         },
-        {
-          "description": "User has approved this command and wants to automatically approve any future identical instances (`command` and `cwd` match exactly) for the remainder of the session.",
-          "type": "string",
-          "enum": [
-            "approved_for_session"
-          ]
-        },
-        {
-          "description": "User chose to persist a network policy rule (allow/deny) for future requests to the same host.",
-          "type": "object",
-          "required": [
-            "network_policy_amendment"
-          ],
-          "properties": {
-            "network_policy_amendment": {
-              "type": "object",
-              "required": [
-                "network_policy_amendment"
-              ],
-              "properties": {
-                "network_policy_amendment": {
-                  "$ref": "#/definitions/NetworkPolicyAmendment"
-                }
-              }
-            }
-          },
-          "additionalProperties": false,
-          "title": "NetworkPolicyAmendmentReviewDecision"
-        },
-        {
-          "description": "User has denied this command and the agent should not execute it, but it should continue the session and try something else.",
-          "type": "string",
-          "enum": [
-            "denied"
-          ]
-        },
-        {
-          "description": "User has denied this command and the agent should not do anything until the user's next command.",
-          "type": "string",
-          "enum": [
-            "abort"
+        "chatgptPlanType": {
+          "type": [
+            "string",
+            "null"
           ]
         }
-      ]
+      }
     },
     "InitializeCapabilities": {
       "description": "Client-declared capabilities negotiated during initialize.",
@@ -443,6 +386,30 @@
             }
           },
           "title": "Thread/archiveRequest"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "thread/unsubscribe"
+              ],
+              "title": "Thread/unsubscribeRequestMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadUnsubscribeParams"
+            }
+          },
+          "title": "Thread/unsubscribeRequest"
         },
         {
           "type": "object",
@@ -1468,6 +1435,85 @@
         }
       ]
     },
+    "CommandExecutionApprovalDecision": {
+      "oneOf": [
+        {
+          "description": "User approved the command.",
+          "type": "string",
+          "enum": [
+            "accept"
+          ]
+        },
+        {
+          "description": "User approved the command and future prompts in the same session-scoped approval cache should run without prompting.",
+          "type": "string",
+          "enum": [
+            "acceptForSession"
+          ]
+        },
+        {
+          "description": "User approved the command, and wants to apply the proposed execpolicy amendment so future matching commands can run without prompting.",
+          "type": "object",
+          "required": [
+            "acceptWithExecpolicyAmendment"
+          ],
+          "properties": {
+            "acceptWithExecpolicyAmendment": {
+              "type": "object",
+              "required": [
+                "execpolicy_amendment"
+              ],
+              "properties": {
+                "execpolicy_amendment": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "additionalProperties": false,
+          "title": "AcceptWithExecpolicyAmendmentCommandExecutionApprovalDecision"
+        },
+        {
+          "description": "User chose a persistent network policy rule (allow/deny) for this host.",
+          "type": "object",
+          "required": [
+            "applyNetworkPolicyAmendment"
+          ],
+          "properties": {
+            "applyNetworkPolicyAmendment": {
+              "type": "object",
+              "required": [
+                "network_policy_amendment"
+              ],
+              "properties": {
+                "network_policy_amendment": {
+                  "$ref": "#/definitions/NetworkPolicyAmendment"
+                }
+              }
+            }
+          },
+          "additionalProperties": false,
+          "title": "ApplyNetworkPolicyAmendmentCommandExecutionApprovalDecision"
+        },
+        {
+          "description": "User denied the command. The agent will continue the turn.",
+          "type": "string",
+          "enum": [
+            "decline"
+          ]
+        },
+        {
+          "description": "User denied the command. The turn will also be immediately interrupted.",
+          "type": "string",
+          "enum": [
+            "cancel"
+          ]
+        }
+      ]
+    },
     "CommandExecutionRequestApprovalParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "CommandExecutionRequestApprovalParams",
@@ -1478,7 +1524,7 @@
         "turnId"
       ],
       "properties": {
-        "turnId": {
+        "threadId": {
           "type": "string"
         },
         "approvalId": {
@@ -1487,6 +1533,9 @@
             "string",
             "null"
           ]
+        },
+        "turnId": {
+          "type": "string"
         },
         "command": {
           "description": "The command to be executed.",
@@ -1552,9 +1601,6 @@
             "string",
             "null"
           ]
-        },
-        "threadId": {
-          "type": "string"
         }
       }
     },
@@ -1919,23 +1965,6 @@
         }
       ]
     },
-    "SkillRequestApprovalParams": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "SkillRequestApprovalParams",
-      "type": "object",
-      "required": [
-        "itemId",
-        "skillName"
-      ],
-      "properties": {
-        "itemId": {
-          "type": "string"
-        },
-        "skillName": {
-          "type": "string"
-        }
-      }
-    },
     "ToolRequestUserInputOption": {
       "description": "EXPERIMENTAL. Defines a single selectable option for request_user_input.",
       "type": "object",
@@ -2097,30 +2126,6 @@
             }
           },
           "title": "Item/tool/requestUserInputRequest"
-        },
-        {
-          "type": "object",
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "method": {
-              "type": "string",
-              "enum": [
-                "skill/requestApproval"
-              ],
-              "title": "Skill/requestApprovalRequestMethod"
-            },
-            "params": {
-              "$ref": "#/definitions/SkillRequestApprovalParams"
-            }
-          },
-          "title": "Skill/requestApprovalRequest"
         },
         {
           "description": "Execute a dynamic tool call on the client.",
@@ -2424,6 +2429,26 @@
             }
           },
           "title": "Thread/unarchivedNotification"
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "thread/closed"
+              ],
+              "title": "Thread/closedNotificationMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadClosedNotification"
+            }
+          },
+          "title": "Thread/closedNotification"
         },
         {
           "type": "object",
@@ -2966,6 +2991,106 @@
             }
           },
           "title": "FuzzyFileSearch/sessionCompletedNotification"
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "thread/realtime/started"
+              ],
+              "title": "Thread/realtime/startedNotificationMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadRealtimeStartedNotification"
+            }
+          },
+          "title": "Thread/realtime/startedNotification"
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "thread/realtime/itemAdded"
+              ],
+              "title": "Thread/realtime/itemAddedNotificationMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadRealtimeItemAddedNotification"
+            }
+          },
+          "title": "Thread/realtime/itemAddedNotification"
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "thread/realtime/outputAudio/delta"
+              ],
+              "title": "Thread/realtime/outputAudio/deltaNotificationMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadRealtimeOutputAudioDeltaNotification"
+            }
+          },
+          "title": "Thread/realtime/outputAudio/deltaNotification"
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "thread/realtime/error"
+              ],
+              "title": "Thread/realtime/errorNotificationMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadRealtimeErrorNotification"
+            }
+          },
+          "title": "Thread/realtime/errorNotification"
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "thread/realtime/closed"
+              ],
+              "title": "Thread/realtime/closedNotificationMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadRealtimeClosedNotification"
+            }
+          },
+          "title": "Thread/realtime/closedNotification"
         },
         {
           "description": "Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.",
@@ -3742,6 +3867,86 @@
           "$ref": "#/definitions/ReviewLineRange"
         }
       }
+    },
+    "ReviewDecision": {
+      "description": "User's decision in response to an ExecApprovalRequest.",
+      "oneOf": [
+        {
+          "description": "User has approved this command and the agent should execute it.",
+          "type": "string",
+          "enum": [
+            "approved"
+          ]
+        },
+        {
+          "description": "User has approved this command and wants to apply the proposed execpolicy amendment so future matching commands are permitted.",
+          "type": "object",
+          "required": [
+            "approved_execpolicy_amendment"
+          ],
+          "properties": {
+            "approved_execpolicy_amendment": {
+              "type": "object",
+              "required": [
+                "proposed_execpolicy_amendment"
+              ],
+              "properties": {
+                "proposed_execpolicy_amendment": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "additionalProperties": false,
+          "title": "ApprovedExecpolicyAmendmentReviewDecision"
+        },
+        {
+          "description": "User has approved this request and wants future prompts in the same session-scoped approval cache to be automatically approved for the remainder of the session.",
+          "type": "string",
+          "enum": [
+            "approved_for_session"
+          ]
+        },
+        {
+          "description": "User chose to persist a network policy rule (allow/deny) for future requests to the same host.",
+          "type": "object",
+          "required": [
+            "network_policy_amendment"
+          ],
+          "properties": {
+            "network_policy_amendment": {
+              "type": "object",
+              "required": [
+                "network_policy_amendment"
+              ],
+              "properties": {
+                "network_policy_amendment": {
+                  "$ref": "#/definitions/NetworkPolicyAmendment"
+                }
+              }
+            }
+          },
+          "additionalProperties": false,
+          "title": "NetworkPolicyAmendmentReviewDecision"
+        },
+        {
+          "description": "User has denied this command and the agent should not execute it, but it should continue the session and try something else.",
+          "type": "string",
+          "enum": [
+            "denied"
+          ]
+        },
+        {
+          "description": "User has denied this command and the agent should not do anything until the user's next command.",
+          "type": "string",
+          "enum": [
+            "abort"
+          ]
+        }
+      ]
     },
     "ReviewFinding": {
       "description": "A single review finding describing an observed issue or recommendation.",
@@ -5227,6 +5432,16 @@
                 "null"
               ]
             },
+            "available_decisions": {
+              "description": "Ordered list of decisions the client may present for this prompt.\n\nWhen absent, clients should derive the legacy default set from the other fields on this request.",
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/ReviewDecision"
+              }
+            },
             "call_id": {
               "description": "Identifier for the associated command execution item.",
               "type": "string"
@@ -5367,26 +5582,66 @@
         {
           "type": "object",
           "required": [
-            "item_id",
-            "skill_name",
+            "arguments",
+            "call_id",
+            "content_items",
+            "duration",
+            "success",
+            "tool",
+            "turn_id",
             "type"
           ],
           "properties": {
-            "item_id": {
+            "arguments": {
+              "description": "Dynamic tool call arguments."
+            },
+            "call_id": {
+              "description": "Identifier for the corresponding DynamicToolCallRequest.",
               "type": "string"
             },
-            "skill_name": {
+            "content_items": {
+              "description": "Dynamic tool response content items.",
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/v2/DynamicToolCallOutputContentItem"
+              }
+            },
+            "duration": {
+              "description": "The duration of the dynamic tool call.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Duration"
+                }
+              ]
+            },
+            "error": {
+              "description": "Optional error text when the tool call failed before producing a response.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "success": {
+              "description": "Whether the tool call succeeded.",
+              "type": "boolean"
+            },
+            "tool": {
+              "description": "Dynamic tool name.",
+              "type": "string"
+            },
+            "turn_id": {
+              "description": "Turn ID that this dynamic tool call belongs to.",
               "type": "string"
             },
             "type": {
               "type": "string",
               "enum": [
-                "skill_request_approval"
+                "dynamic_tool_call_response"
               ],
-              "title": "SkillRequestApprovalEventMsgType"
+              "title": "DynamicToolCallResponseEventMsgType"
             }
           },
-          "title": "SkillRequestApprovalEventMsg"
+          "title": "DynamicToolCallResponseEventMsg"
         },
         {
           "type": "object",
@@ -6935,20 +7190,20 @@
               "null"
             ]
           },
-          "sandbox": {
+          "personality": {
             "anyOf": [
               {
-                "$ref": "#/definitions/v2/SandboxMode"
+                "$ref": "#/definitions/v2/Personality"
               },
               {
                 "type": "null"
               }
             ]
           },
-          "personality": {
+          "sandbox": {
             "anyOf": [
               {
-                "$ref": "#/definitions/v2/Personality"
+                "$ref": "#/definitions/v2/SandboxMode"
               },
               {
                 "type": "null"
@@ -7793,8 +8048,15 @@
               "null"
             ]
           },
-          "threadId": {
-            "type": "string"
+          "sandbox": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SandboxMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "model": {
             "description": "Configuration overrides for the resumed thread, if any.",
@@ -7809,15 +8071,8 @@
               "null"
             ]
           },
-          "sandbox": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/SandboxMode"
-              },
-              {
-                "type": "null"
-              }
-            ]
+          "threadId": {
+            "type": "string"
           },
           "personality": {
             "anyOf": [
@@ -7906,6 +8161,19 @@
       "ThreadArchiveParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "ThreadArchiveParams",
+        "type": "object",
+        "required": [
+          "threadId"
+        ],
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        }
+      },
+      "ThreadUnsubscribeParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadUnsubscribeParams",
         "type": "object",
         "required": [
           "threadId"
@@ -8852,6 +9120,125 @@
           }
         }
       },
+      "WindowsSandboxSetupCompletedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "WindowsSandboxSetupCompletedNotification",
+        "type": "object",
+        "required": [
+          "mode",
+          "success"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "$ref": "#/definitions/v2/WindowsSandboxSetupMode"
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ThreadRealtimeAudioChunk": {
+        "description": "EXPERIMENTAL - thread realtime audio chunk.",
+        "type": "object",
+        "required": [
+          "data",
+          "numChannels",
+          "sampleRate"
+        ],
+        "properties": {
+          "data": {
+            "type": "string"
+          },
+          "numChannels": {
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0.0
+          },
+          "sampleRate": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          },
+          "samplesPerChannel": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0.0
+          }
+        }
+      },
+      "WindowsWorldWritableWarningNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "WindowsWorldWritableWarningNotification",
+        "type": "object",
+        "required": [
+          "extraCount",
+          "failedScan",
+          "samplePaths"
+        ],
+        "properties": {
+          "extraCount": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0.0
+          },
+          "failedScan": {
+            "type": "boolean"
+          },
+          "samplePaths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ThreadRealtimeClosedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadRealtimeClosedNotification",
+        "description": "EXPERIMENTAL - emitted when thread realtime transport closes.",
+        "type": "object",
+        "required": [
+          "threadId"
+        ],
+        "properties": {
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "threadId": {
+            "type": "string"
+          }
+        }
+      },
+      "ThreadRealtimeErrorNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadRealtimeErrorNotification",
+        "description": "EXPERIMENTAL - emitted when thread realtime encounters an error.",
+        "type": "object",
+        "required": [
+          "message",
+          "threadId"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        }
+      },
       "ReviewDelivery": {
         "type": "string",
         "enum": [
@@ -9032,52 +9419,37 @@
           }
         }
       },
-      "WindowsSandboxSetupCompletedNotification": {
+      "ThreadRealtimeOutputAudioDeltaNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "WindowsSandboxSetupCompletedNotification",
+        "title": "ThreadRealtimeOutputAudioDeltaNotification",
+        "description": "EXPERIMENTAL - streamed output audio emitted by thread realtime.",
         "type": "object",
         "required": [
-          "mode",
-          "success"
+          "audio",
+          "threadId"
         ],
         "properties": {
-          "error": {
-            "type": [
-              "string",
-              "null"
-            ]
+          "audio": {
+            "$ref": "#/definitions/v2/ThreadRealtimeAudioChunk"
           },
-          "mode": {
-            "$ref": "#/definitions/v2/WindowsSandboxSetupMode"
-          },
-          "success": {
-            "type": "boolean"
+          "threadId": {
+            "type": "string"
           }
         }
       },
-      "WindowsWorldWritableWarningNotification": {
+      "ThreadRealtimeItemAddedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "WindowsWorldWritableWarningNotification",
+        "title": "ThreadRealtimeItemAddedNotification",
+        "description": "EXPERIMENTAL - raw non-audio thread realtime item emitted by the backend.",
         "type": "object",
         "required": [
-          "extraCount",
-          "failedScan",
-          "samplePaths"
+          "item",
+          "threadId"
         ],
         "properties": {
-          "extraCount": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0.0
-          },
-          "failedScan": {
-            "type": "boolean"
-          },
-          "samplePaths": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
+          "item": true,
+          "threadId": {
+            "type": "string"
           }
         }
       },
@@ -9781,6 +10153,58 @@
           "declined"
         ]
       },
+      "DynamicToolCallOutputContentItem": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "text",
+              "type"
+            ],
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "inputText"
+                ],
+                "title": "InputTextDynamicToolCallOutputContentItemType"
+              }
+            },
+            "title": "InputTextDynamicToolCallOutputContentItem"
+          },
+          {
+            "type": "object",
+            "required": [
+              "imageUrl",
+              "type"
+            ],
+            "properties": {
+              "imageUrl": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "inputImage"
+                ],
+                "title": "InputImageDynamicToolCallOutputContentItemType"
+              }
+            },
+            "title": "InputImageDynamicToolCallOutputContentItem"
+          }
+        ]
+      },
+      "DynamicToolCallStatus": {
+        "type": "string",
+        "enum": [
+          "inProgress",
+          "completed",
+          "failed"
+        ]
+      },
       "FileUpdateChange": {
         "type": "object",
         "required": [
@@ -10423,6 +10847,59 @@
           {
             "type": "object",
             "required": [
+              "arguments",
+              "id",
+              "status",
+              "tool",
+              "type"
+            ],
+            "properties": {
+              "arguments": true,
+              "contentItems": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "$ref": "#/definitions/v2/DynamicToolCallOutputContentItem"
+                }
+              },
+              "durationMs": {
+                "description": "The duration of the dynamic tool call in milliseconds.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "id": {
+                "type": "string"
+              },
+              "status": {
+                "$ref": "#/definitions/v2/DynamicToolCallStatus"
+              },
+              "success": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "tool": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "dynamicToolCall"
+                ],
+                "title": "DynamicToolCallThreadItemType"
+              }
+            },
+            "title": "DynamicToolCallThreadItem"
+          },
+          {
+            "type": "object",
+            "required": [
               "agentsStates",
               "id",
               "receiverThreadIds",
@@ -10895,6 +11372,27 @@
         "title": "ThreadArchiveResponse",
         "type": "object"
       },
+      "ThreadUnsubscribeStatus": {
+        "type": "string",
+        "enum": [
+          "notLoaded",
+          "notSubscribed",
+          "unsubscribed"
+        ]
+      },
+      "ThreadUnsubscribeResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadUnsubscribeResponse",
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/definitions/v2/ThreadUnsubscribeStatus"
+          }
+        }
+      },
       "ThreadSetNameResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "ThreadSetNameResponse",
@@ -10918,41 +11416,22 @@
         "title": "ThreadCompactStartResponse",
         "type": "object"
       },
-      "ConfigWarningNotification": {
+      "ThreadRealtimeStartedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "ConfigWarningNotification",
+        "title": "ThreadRealtimeStartedNotification",
+        "description": "EXPERIMENTAL - emitted when thread realtime startup is accepted.",
         "type": "object",
         "required": [
-          "summary"
+          "threadId"
         ],
         "properties": {
-          "details": {
-            "description": "Optional extra guidance or error details.",
+          "sessionId": {
             "type": [
               "string",
               "null"
             ]
           },
-          "path": {
-            "description": "Optional path to the config file that triggered the warning.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "range": {
-            "description": "Optional range for the error location inside the config file.",
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/TextRange"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "summary": {
-            "description": "Concise summary of the warning.",
+          "threadId": {
             "type": "string"
           }
         }
@@ -11618,6 +12097,102 @@
         "title": "TurnInterruptResponse",
         "type": "object"
       },
+      "ConfigWarningNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ConfigWarningNotification",
+        "type": "object",
+        "required": [
+          "summary"
+        ],
+        "properties": {
+          "details": {
+            "description": "Optional extra guidance or error details.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "Optional path to the config file that triggered the warning.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "range": {
+            "description": "Optional range for the error location inside the config file.",
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/TextRange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "description": "Concise summary of the warning.",
+            "type": "string"
+          }
+        }
+      },
+      "TextRange": {
+        "type": "object",
+        "required": [
+          "end",
+          "start"
+        ],
+        "properties": {
+          "end": {
+            "$ref": "#/definitions/v2/TextPosition"
+          },
+          "start": {
+            "$ref": "#/definitions/v2/TextPosition"
+          }
+        }
+      },
+      "TextPosition": {
+        "type": "object",
+        "required": [
+          "column",
+          "line"
+        ],
+        "properties": {
+          "column": {
+            "description": "1-based column number (in Unicode scalar values).",
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0.0
+          },
+          "line": {
+            "description": "1-based line number.",
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0.0
+          }
+        }
+      },
+      "DeprecationNoticeNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "DeprecationNoticeNotification",
+        "type": "object",
+        "required": [
+          "summary"
+        ],
+        "properties": {
+          "details": {
+            "description": "Optional extra guidance, such as migration steps or rationale.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summary": {
+            "description": "Concise summary of what is deprecated.",
+            "type": "string"
+          }
+        }
+      },
       "ReviewStartResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "ReviewStartResponse",
@@ -11870,18 +12445,12 @@
         }
       },
       "CollaborationModeMask": {
-        "description": "A mask for collaboration mode settings, allowing partial updates. All fields except `name` are optional, enabling selective updates.",
+        "description": "EXPERIMENTAL - collaboration mode preset metadata for clients.",
         "type": "object",
         "required": [
           "name"
         ],
         "properties": {
-          "developer_instructions": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "mode": {
             "anyOf": [
               {
@@ -11920,41 +12489,40 @@
           }
         }
       },
-      "TextRange": {
+      "ModelReroutedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ModelReroutedNotification",
         "type": "object",
         "required": [
-          "end",
-          "start"
+          "fromModel",
+          "reason",
+          "threadId",
+          "toModel",
+          "turnId"
         ],
         "properties": {
-          "end": {
-            "$ref": "#/definitions/v2/TextPosition"
+          "fromModel": {
+            "type": "string"
           },
-          "start": {
-            "$ref": "#/definitions/v2/TextPosition"
+          "reason": {
+            "$ref": "#/definitions/v2/ModelRerouteReason"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "toModel": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
           }
         }
       },
-      "TextPosition": {
-        "type": "object",
-        "required": [
-          "column",
-          "line"
-        ],
-        "properties": {
-          "column": {
-            "description": "1-based column number (in Unicode scalar values).",
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0.0
-          },
-          "line": {
-            "description": "1-based line number.",
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0.0
-          }
-        }
+      "ModelRerouteReason": {
+        "type": "string",
+        "enum": [
+          "highRiskCyberActivity"
+        ]
       },
       "McpServerOauthLoginResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -13485,6 +14053,19 @@
           }
         }
       },
+      "ThreadClosedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadClosedNotification",
+        "type": "object",
+        "required": [
+          "threadId"
+        ],
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        }
+      },
       "ThreadNameUpdatedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "ThreadNameUpdatedNotification",
@@ -14105,62 +14686,6 @@
             "type": "string"
           }
         }
-      },
-      "ModelRerouteReason": {
-        "type": "string",
-        "enum": [
-          "highRiskCyberActivity"
-        ]
-      },
-      "ModelReroutedNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "ModelReroutedNotification",
-        "type": "object",
-        "required": [
-          "fromModel",
-          "reason",
-          "threadId",
-          "toModel",
-          "turnId"
-        ],
-        "properties": {
-          "fromModel": {
-            "type": "string"
-          },
-          "reason": {
-            "$ref": "#/definitions/v2/ModelRerouteReason"
-          },
-          "threadId": {
-            "type": "string"
-          },
-          "toModel": {
-            "type": "string"
-          },
-          "turnId": {
-            "type": "string"
-          }
-        }
-      },
-      "DeprecationNoticeNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "DeprecationNoticeNotification",
-        "type": "object",
-        "required": [
-          "summary"
-        ],
-        "properties": {
-          "details": {
-            "description": "Optional extra guidance, such as migration steps or rationale.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "summary": {
-            "description": "Concise summary of what is deprecated.",
-            "type": "string"
-          }
-        }
       }
     },
     "InitializeResponse": {
@@ -14192,29 +14717,6 @@
         }
       }
     },
-    "ChatgptAuthTokensRefreshResponse": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "ChatgptAuthTokensRefreshResponse",
-      "type": "object",
-      "required": [
-        "accessToken",
-        "chatgptAccountId"
-      ],
-      "properties": {
-        "accessToken": {
-          "type": "string"
-        },
-        "chatgptAccountId": {
-          "type": "string"
-        },
-        "chatgptPlanType": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      }
-    },
     "DynamicToolCallResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "DynamicToolCallResponse",
@@ -14227,7 +14729,7 @@
         "contentItems": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/DynamicToolCallOutputContentItem"
+            "$ref": "#/definitions/v2/DynamicToolCallOutputContentItem"
           }
         },
         "success": {
@@ -14235,128 +14737,37 @@
         }
       }
     },
-    "DynamicToolCallOutputContentItem": {
-      "oneOf": [
-        {
+    "ToolRequestUserInputResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ToolRequestUserInputResponse",
+      "description": "EXPERIMENTAL. Response payload mapping question ids to answers.",
+      "type": "object",
+      "required": [
+        "answers"
+      ],
+      "properties": {
+        "answers": {
           "type": "object",
-          "required": [
-            "text",
-            "type"
-          ],
-          "properties": {
-            "text": {
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "enum": [
-                "inputText"
-              ],
-              "title": "InputTextDynamicToolCallOutputContentItemType"
-            }
-          },
-          "title": "InputTextDynamicToolCallOutputContentItem"
-        },
-        {
-          "type": "object",
-          "required": [
-            "imageUrl",
-            "type"
-          ],
-          "properties": {
-            "imageUrl": {
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "enum": [
-                "inputImage"
-              ],
-              "title": "InputImageDynamicToolCallOutputContentItemType"
-            }
-          },
-          "title": "InputImageDynamicToolCallOutputContentItem"
+          "additionalProperties": {
+            "$ref": "#/definitions/ToolRequestUserInputAnswer"
+          }
         }
-      ]
+      }
     },
-    "CommandExecutionApprovalDecision": {
-      "oneOf": [
-        {
-          "description": "User approved the command.",
-          "type": "string",
-          "enum": [
-            "accept"
-          ]
-        },
-        {
-          "description": "User approved the command and future identical commands should run without prompting.",
-          "type": "string",
-          "enum": [
-            "acceptForSession"
-          ]
-        },
-        {
-          "description": "User approved the command, and wants to apply the proposed execpolicy amendment so future matching commands can run without prompting.",
-          "type": "object",
-          "required": [
-            "acceptWithExecpolicyAmendment"
-          ],
-          "properties": {
-            "acceptWithExecpolicyAmendment": {
-              "type": "object",
-              "required": [
-                "execpolicy_amendment"
-              ],
-              "properties": {
-                "execpolicy_amendment": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          },
-          "additionalProperties": false,
-          "title": "AcceptWithExecpolicyAmendmentCommandExecutionApprovalDecision"
-        },
-        {
-          "description": "User chose a persistent network policy rule (allow/deny) for this host.",
-          "type": "object",
-          "required": [
-            "applyNetworkPolicyAmendment"
-          ],
-          "properties": {
-            "applyNetworkPolicyAmendment": {
-              "type": "object",
-              "required": [
-                "network_policy_amendment"
-              ],
-              "properties": {
-                "network_policy_amendment": {
-                  "$ref": "#/definitions/NetworkPolicyAmendment"
-                }
-              }
-            }
-          },
-          "additionalProperties": false,
-          "title": "ApplyNetworkPolicyAmendmentCommandExecutionApprovalDecision"
-        },
-        {
-          "description": "User denied the command. The agent will continue the turn.",
-          "type": "string",
-          "enum": [
-            "decline"
-          ]
-        },
-        {
-          "description": "User denied the command. The turn will also be immediately interrupted.",
-          "type": "string",
-          "enum": [
-            "cancel"
-          ]
+    "ToolRequestUserInputAnswer": {
+      "description": "EXPERIMENTAL. Captures a user's answer to a request_user_input question.",
+      "type": "object",
+      "required": [
+        "answers"
+      ],
+      "properties": {
+        "answers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
-      ]
+      }
     },
     "CommandExecutionRequestApprovalResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -14413,58 +14824,6 @@
       "properties": {
         "decision": {
           "$ref": "#/definitions/FileChangeApprovalDecision"
-        }
-      }
-    },
-    "ToolRequestUserInputAnswer": {
-      "description": "EXPERIMENTAL. Captures a user's answer to a request_user_input question.",
-      "type": "object",
-      "required": [
-        "answers"
-      ],
-      "properties": {
-        "answers": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    "ToolRequestUserInputResponse": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "ToolRequestUserInputResponse",
-      "description": "EXPERIMENTAL. Response payload mapping question ids to answers.",
-      "type": "object",
-      "required": [
-        "answers"
-      ],
-      "properties": {
-        "answers": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/definitions/ToolRequestUserInputAnswer"
-          }
-        }
-      }
-    },
-    "SkillApprovalDecision": {
-      "type": "string",
-      "enum": [
-        "approve",
-        "decline"
-      ]
-    },
-    "SkillRequestApprovalResponse": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "SkillRequestApprovalResponse",
-      "type": "object",
-      "required": [
-        "decision"
-      ],
-      "properties": {
-        "decision": {
-          "$ref": "#/definitions/SkillApprovalDecision"
         }
       }
     }

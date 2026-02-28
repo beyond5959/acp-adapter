@@ -5,7 +5,7 @@
 
 ## 项目概览
 - 项目：codex-acp-go（基于 Codex App Server 的 ACP 适配器）
-- 当前阶段：R4 完成（Library Embedding Program；Next=R5）
+- 当前阶段：R5 进行中（Library Embedding Program）
 - 最近更新：2026-02-28
 
 ## 关键链接/文档
@@ -33,8 +33,8 @@
   - 说明：已补齐 G1-G6、H1、I1-I3、J1（脚本化压力回归）与 MCP list/call/oauth 主流程
 
 ## Library Embedding Program（R0-R6）
-- Current：R4 契约对照测试（Done）
-- Next：R5 server 集成
+- Current：R5 server 集成（In Progress）
+- Next：R6 收尾验收
 - [x] R0 文档立项
   - 状态：Done
   - 说明：完成库化目标建档（里程碑、ADR、风险、初版验收项），未改动运行时行为。
@@ -51,8 +51,8 @@
   - 状态：Done
   - 说明：同一输入脚本双跑 standalone(stdio)/embedded(inproc)，对照 initialize、streaming prompt、cancel、permission approve/decline 的关键行为与终态。
 - [ ] R5 server 集成
-  - 状态：Todo
-  - 说明：让现有 `cmd/codex-acp-go` 基于库入口装配运行。
+  - 状态：In Progress
+  - 说明：已在 `go-acp-server` 完成本地 `go mod replace` 联调并跑通真实 prompt/SSE/cancel/permission 回路；库侧仍需继续收敛真实 app-server 版本兼容差异（见 KI-0015/KI-0016）。
 - [ ] R6 收尾验收
   - 状态：Todo
   - 说明：完成 Library Mode 验收闭环与文档收敛。
