@@ -166,9 +166,9 @@ type ServerOptions struct {
 	InitialAuthMode  string
 }
 
-// Server handles ACP JSON-RPC requests over stdio.
+// Server handles ACP JSON-RPC requests over one Transport.
 type Server struct {
-	codec    *StdioCodec
+	codec    Transport
 	app      appClient
 	sessions *bridge.Store
 	logger   *slog.Logger
@@ -196,7 +196,7 @@ type Server struct {
 
 // NewServer creates an ACP request router.
 func NewServer(
-	codec *StdioCodec,
+	codec Transport,
 	app appClient,
 	sessions *bridge.Store,
 	logger *slog.Logger,

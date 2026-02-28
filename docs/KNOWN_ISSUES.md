@@ -27,6 +27,10 @@
 - KI-0021：`session/update` 的标准 `update.sessionUpdate` 在低频事件上仍是回退语义
 - KI-0022：并发请求下 `authenticate` 与后续请求存在时序依赖
 - KI-0023：旧二进制缺少 `initialize.protocolVersion`，严格 ACP 客户端会在连接阶段失败
+- KI-0024：库化改造的行为回归风险（独立模式与库模式偏差）
+- KI-0025：嵌入模式并发/阻塞风险（宿主线程模型差异）
+- KI-0026：permission 回写超时风险（嵌入链路）
+- KI-0027：inproc transport 背压风险（宿主未及时消费导致写阻塞）
 
 ---
 
@@ -267,3 +271,51 @@
   - 重启 ACP 客户端后重连。
 - 后续计划：
   - 保持 `TestE2EInitializeIncludesACPStandardFields` 回归，防止该字段再次回退。
+
+## KI-0024：库化改造的行为回归风险（独立模式与库模式偏差）
+- 现象：
+  - 引入库入口后，若 `cmd` 与 `pkg` 装配参数不一致，可能出现独立模式可用但嵌入模式行为漂移（或反之）。
+- 影响：
+  - 直接影响协议兼容性（A1-A5）与现网客户端稳定性，属于高风险回归点。
+- 复现：
+  - 在同一输入下分别运行独立模式与库模式，对比 `initialize/session/update` 输出，出现字段/时序差异。
+- Workaround：
+  - 已新增 R4 契约对照回归：同一脚本双跑 standalone/embedded，并对照 initialize/new/prompt/cancel/permission 关键行为。
+- 后续计划：
+  - R4 已完成；R5/R6 持续扩展对照覆盖面（review/compact/mcp/auth 等）并维护差异白名单。
+
+## KI-0025：嵌入模式并发/阻塞风险（宿主线程模型差异）
+- 现象：
+  - 作为库被宿主调用时，宿主可能使用与 CLI 不同的 goroutine/锁模型，导致 turn 处理阻塞或 cancel 延迟。
+- 影响：
+  - 可能破坏“每 session 单 active turn”约束与 `session/cancel` 及时性，严重时触发 goroutine 泄漏。
+- 复现：
+  - 在嵌入 API 中并发触发 prompt + cancel + permission 回调，观察是否出现死锁或超时。
+- Workaround：
+  - 嵌入 API 明确 async/阻塞语义，要求回调不可重入阻塞主读写循环。
+- 后续计划：
+  - R4 已补充并发双 session 不变量测试（无阻塞/无串扰）；R5 继续增加高并发 cancel 与 permission 回调竞争压测。
+
+## KI-0026：permission 回写超时风险（嵌入链路）
+- 现象：
+  - 嵌入模式下 permission 由宿主 UI 或业务层回传；若宿主未及时回写，turn 会长时间等待并最终超时取消。
+- 影响：
+  - 用户侧表现为“工具调用卡住后失败”，且副作用工具按 fail-closed 被拒绝，影响任务完成率。
+- 复现：
+  - 触发 `session/request_permission` 后不回写或延迟回写超过超时阈值。
+- Workaround：
+  - 宿主必须实现超时前显式 approve/decline/cancel，并在 UI 提示倒计时。
+- 后续计划：
+  - R3 增加可配置 timeout 与回调观测字段；R4 补超时与迟到回写回归测试。
+
+## KI-0027：inproc transport 背压风险（宿主未及时消费导致写阻塞）
+- 现象：
+  - R2 新增的 inproc channel transport 在宿主不及时读取 outbound 消息时，会触发写端背压并阻塞后续事件发送。
+- 影响：
+  - 在高频 `session/update` 场景下，可能放大延迟并影响 cancel/permission 等控制消息的处理时效。
+- 复现：
+  - 使用小 buffer inproc transport，持续写入通知且宿主不消费（或消费速度显著低于生产速度）。
+- Workaround：
+  - 嵌入宿主必须持续消费 transport 输出；必要时提高 channel buffer，避免长时间无消费。
+- 后续计划：
+  - R3 评估引入可观测指标（队列深度/阻塞时长）与可配置背压策略，R4 增加压力回归。

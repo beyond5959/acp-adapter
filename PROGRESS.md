@@ -5,8 +5,8 @@
 
 ## 项目概览
 - 项目：codex-acp-go（基于 Codex App Server 的 ACP 适配器）
-- 当前阶段：PR5
-- 最近更新：2026-02-27
+- 当前阶段：R4 完成（Library Embedding Program；Next=R5）
+- 最近更新：2026-02-28
 
 ## 关键链接/文档
 - docs/SPEC.md：技术方案（权威）
@@ -31,6 +31,31 @@
 - [x] PR5：Slash commands + Custom prompts + MCP + Auth 收尾
   - 状态：Done
   - 说明：已补齐 G1-G6、H1、I1-I3、J1（脚本化压力回归）与 MCP list/call/oauth 主流程
+
+## Library Embedding Program（R0-R6）
+- Current：R4 契约对照测试（Done）
+- Next：R5 server 集成
+- [x] R0 文档立项
+  - 状态：Done
+  - 说明：完成库化目标建档（里程碑、ADR、风险、初版验收项），未改动运行时行为。
+- [x] R1 外观库化（零行为变化）
+  - 状态：Done
+  - 说明：新增 `pkg/codexacp` 外观 API（`RunStdio`）并将 `cmd` 启动委托到库入口，协议行为保持不变。
+- [x] R2 传输层抽象
+  - 状态：Done
+  - 说明：引入 ACP 传输接口并新增 inproc channel transport，Server 改为依赖接口，stdio 行为保持兼容。
+- [x] R3 嵌入 API
+  - 状态：Done
+  - 说明：新增 `EmbeddedRuntime`（Start/ClientRequest/SubscribeUpdates/RespondPermission/Close），复用同一套 ACP server 逻辑并跑通核心流程。
+- [x] R4 契约对照测试
+  - 状态：Done
+  - 说明：同一输入脚本双跑 standalone(stdio)/embedded(inproc)，对照 initialize、streaming prompt、cancel、permission approve/decline 的关键行为与终态。
+- [ ] R5 server 集成
+  - 状态：Todo
+  - 说明：让现有 `cmd/codex-acp-go` 基于库入口装配运行。
+- [ ] R6 收尾验收
+  - 状态：Todo
+  - 说明：完成 Library Mode 验收闭环与文档收敛。
 
 ## 验收进度（从 docs/ACCEPTANCE.md 勾选）
 ### A. 协议合规（ACP）
@@ -81,6 +106,15 @@
 ### J. 可靠性
 - [x] J1 压力回归（100 turns 含 approve/deny/cancel）
 - [x] J2 stdout 纯净（trace 脱敏）
+
+### K. Library Mode（初版）
+- [x] K1 双入口可启动（cmd + pkg）
+- [x] K2 R1 零行为变化
+- [x] K3 传输层抽象可替换（R2）
+- [x] K4 嵌入 API 生命周期（R3）
+- [x] K5 独立模式与库模式契约对照（R4）
+- [ ] K6 server 集成（R5）
+- [ ] K7 收尾验收（R6）
 
 ## 本 PR 做了什么
 1. 补齐 slash commands：
@@ -202,14 +236,98 @@
 ## 当前阻塞（Blockers）
 - 无
 
-## 下一步（Next）
-1. 扩展真实 codex app-server 联调：从“存在性回归”扩展到结果语义回归（MCP 输出断言、compact 上下文收敛质量、auth re-login 体验）。
-2. 在 CI 增加可选 `e2e-real` 作业（含 `make schema`）并固化环境前置检查。
-3. 评估 `/logout` 的进程内 re-auth RPC，消除重启恢复依赖。
-4. 评估“已发出部分输出后的安全重放”策略（例如可选缓冲提交），进一步缩小人工重试窗口。
-5. 细化 `session/update` 的标准 `update.sessionUpdate` 语义映射（plan/thought/tool 生命周期），减少当前回退 `agent_thought_chunk` 带来的信息折损。
+## Done / In Progress / Next（Library Embedding Program）
+### Done
+1. R0 文档立项：补充里程碑、ADR、风险与 Library Mode 初版验收项。
+2. R1 外观库化：新增 `pkg/codexacp`，`cmd` 入口委托库启动，新增最小参数映射测试。
+3. R2 传输层抽象：新增 ACP 传输接口与 inproc transport，Server 改为基于接口，补充传输/stdio 基线测试。
+4. R3 嵌入 API：新增进程内调用 API 与 permission 回写能力，并补充嵌入模式 integration tests。
+5. R4 契约对照测试：新增同脚本双驱动对照框架，覆盖 initialize/new/prompt/cancel/permission（approve+decline）并补充嵌入模式并发不变量测试。
+
+### In Progress
+- 无
+
+### Next
+1. R5 server 集成。
 
 ## 变更摘要（每 PR 一条）
+### 2026-02-28 — R4 契约对照测试（standalone vs embedded）
+- Done:
+  - 新增对照测试 `test/integration/r4_contract_test.go`，同一输入脚本分别驱动：
+    - standalone：`cmd/codex-acp-go` + stdio JSON-RPC
+    - embedded：`pkg/codexacp.EmbeddedRuntime` + inproc transport
+  - 对照范围覆盖：
+    - initialize 字段完整性（`protocolVersion` + capabilities）
+    - `session/new` + `session/prompt`（流式 chunk）
+    - `session/cancel`（`stopReason=cancelled`）
+    - permission approve/decline 双路径
+  - 明确并验证不变量：
+    - standalone：stdout 持续满足纯 JSON-RPC 约束
+    - embedded：并发双 session 无阻塞/死锁、无跨 session 串扰（turn 不跨 session）
+- Tests:
+  - `go test ./test/integration -run 'TestR4ContractStandaloneEqualsEmbedded|TestR4EmbeddedInvariants_NoDeadlock_NoCrossSessionCrosstalk' -count=1` 通过
+  - `go test ./...` 通过
+- Notes/Follow-ups:
+  - R4 完成，下一阶段进入 R5（server 集成）
+
+### 2026-02-28 — R3 嵌入 API（进程内调用）
+- Done:
+  - 在 `pkg/codexacp` 新增嵌入模式 API：
+    - `NewEmbeddedRuntime(...)`
+    - `Start(ctx)`
+    - `ClientRequest(ctx, msg)`
+    - `SubscribeUpdates(...)`
+    - `RespondPermission(...)`
+    - `Close()`
+  - 嵌入模式复用同一套 `internal/acp` server 逻辑与 R2 传输抽象（inproc transport），未复制业务分支。
+  - 跑通嵌入模式关键链路：`initialize`、`session/new`、`session/prompt` 流式 `session/update`、`session/cancel`、permission 往返。
+  - 新增 integration tests：
+    - `TestEmbeddedInitializeNewPromptCancel`
+    - `TestEmbeddedPermissionRoundTrip`
+- Tests:
+  - `go test ./test/integration -run 'TestEmbeddedInitializeNewPromptCancel|TestEmbeddedPermissionRoundTrip' -count=1` 通过
+  - `go test ./...` 通过
+- Notes/Follow-ups:
+  - R3 完成，下一阶段进入 R4（契约对照测试）
+
+### 2026-02-28 — R2 传输层抽象（stdio 兼容保持不变）
+- Done:
+  - 在 `internal/acp` 引入最小传输接口：`ReadMessage/WriteMessage/WriteResult/WriteError/WriteNotification`。
+  - 保留 `StdioCodec` 作为 stdio 传输实现（协议行为不变）。
+  - 新增 inproc transport（内存通道双端，支持 request/response/notification 双向、并发写、关闭语义）。
+  - `Server` 从依赖具体 `StdioCodec` 改为依赖传输接口，默认路径仍走 stdio。
+  - 新增测试：
+    - `internal/acp/transport_inproc_test.go`（基本收发、并发写、关闭语义）
+    - `internal/acp/server_stdio_test.go`（initialize/new/prompt stdio 基线）
+- Tests:
+  - `go test ./internal/acp -count=1` 通过
+  - `go test ./...` 通过
+- Notes/Follow-ups:
+  - R2 完成，下一阶段进入 R3（嵌入 API）
+
+### 2026-02-28 — R1 外观库化（零行为变化）
+- Done:
+  - 新增 `pkg/codexacp`，导出运行时配置与 `RunStdio(ctx, cfg, stdin, stdout, stderr)`。
+  - `cmd/codex-acp-go/main.go` 仅保留参数解析与信号处理，核心启动逻辑委托 `pkg/codexacp`。
+  - 保持协议约束：stdout 仅 ACP JSON-RPC；stderr 仅日志。
+  - 新增最小单测：`TestRunStdio_ProfileMappingWithFakeAppServer`，验证库入口参数映射（profile/run options）路径。
+- Tests:
+  - `go test ./pkg/codexacp -run TestRunStdio_ProfileMappingWithFakeAppServer -count=1` 通过
+  - `go test ./...` 通过（含 `test/integration`）
+- Notes/Follow-ups:
+  - R1 完成，下一阶段进入 R2（传输层抽象）
+
+### 2026-02-28 — R0 文档立项（Library Embedding Program）
+- Done:
+  - 新增 `Library Embedding Program（R0-R6）` 里程碑，并设置 `Current=R1`、`Next=R2`
+  - 在 `docs/DECISIONS.md` 增加 ADR：双入口单内核（独立模式 + 库模式）
+  - 在 `docs/KNOWN_ISSUES.md` 增加库化风险：行为回归、嵌入并发/阻塞、permission 回写超时
+  - 在 `docs/ACCEPTANCE.md` 增加 `Library Mode` 初版验收条目
+- Tests:
+  - `go test ./...` 通过（含 `test/integration`，本次约 42s）
+- Notes/Follow-ups:
+  - R0 仅文档与计划，不包含行为改造
+
 ### 2026-02-26 — PR1 工程骨架 + 双 codec + 最小 e2e harness
 - Done:
   - 完成 ACP/app-server 双 codec

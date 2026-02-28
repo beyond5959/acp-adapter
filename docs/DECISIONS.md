@@ -32,6 +32,10 @@
 - ADR-0026：go module 使用 GitHub canonical 路径
 - ADR-0027：协议形态兼容策略（prompt 多形态 + session/update 标准 envelope + app-server v2 嵌套返回）
 - ADR-0028：`initialize` 标准字段对齐（protocolVersion + 标准能力树）并保留 legacy 兼容
+- ADR-0029：双入口单内核（保留 cmd 独立模式 + 新增 pkg 库模式）
+- ADR-0030：先外观后抽象（R1 先库化入口，R2 再做传输层解耦）
+- ADR-0031：嵌入 API 设计（ClientRequest + SubscribeUpdates + RespondPermission）
+- ADR-0032：R4 契约对照测试策略（同脚本双驱动 + 关键序列比对）
 
 ---
 
@@ -567,3 +571,119 @@
   - `TestE2EInitializeIncludesACPStandardFields`
   - `TestE2EAcceptanceA1ToA5AndB1`
   - `go test ./...`
+
+### ADR-0029：双入口单内核（保留 cmd 独立模式 + 新增 pkg 库模式）
+- 日期：2026-02-28
+- 状态：Accepted
+- 背景：
+  - 现有工程以 `cmd/codex-acp-go` 独立进程模式为主，便于 ACP client 直接拉起。
+  - 新目标要求在不影响现有能力前提下，同时支持“可独立运行 + 可复用库”。
+- 决策：
+  - 采用“双入口单内核”演进路径：保留现有 `cmd` 入口不变，同时新增 `pkg` 级嵌入入口。
+  - 核心协议桥接与状态机逻辑只保留一套实现，由 `cmd` 和 `pkg` 共同装配调用。
+  - R1 明确要求零行为变化：先做结构外观与依赖反转，再逐步抽象传输层与嵌入 API。
+- 备选方案：
+  - 方案A：直接把现有 `cmd` 逻辑拆散重写成新库，再回填 CLI。
+  - 方案B：并行维护两套实现（独立模式一套、库模式一套）。
+  - 方案C：双入口共享单内核，按里程碑增量迁移。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：最大化复用既有测试与行为，降低协议回归风险，便于渐进发布。
+  - Cons：短期需要处理装配层与核心层边界，初期目录与依赖关系会更复杂。
+- 影响范围（文件/模块）：
+  - `cmd/codex-acp-go/*`
+  - `internal/*`（核心逻辑）
+  - `pkg/*`（新增嵌入入口，R1-R3 分步引入）
+  - `test/integration/*`（契约对照，R4）
+- 验证方式（测试/验收项）：
+  - `go test ./...`
+  - `docs/ACCEPTANCE.md` 新增 `Library Mode` 条目逐项通过（R1-R6）
+
+### ADR-0030：先外观后抽象（R1 先库化入口，R2 再做传输层解耦）
+- 日期：2026-02-28
+- 状态：Accepted
+- 背景：
+  - 库化目标要求“可独立运行 + 可复用库”，同时必须保证现有 ACP 行为不回退。
+  - 若在同一阶段同时做入口库化与传输抽象，回归面会扩大，定位成本高。
+- 决策：
+  - R1 只做外观库化：新增 `pkg/codexacp.RunStdio`，并让 `cmd/codex-acp-go` 委托该入口。
+  - R1 不改动 `internal/acp`、`internal/appserver`、`internal/bridge` 的协议处理语义。
+  - R2 再进行传输层抽象（stdio/app-server 连接解耦），并通过契约测试锁定行为。
+- 备选方案：
+  - 方案A：R1 同步完成库入口与传输抽象。
+  - 方案B：先做 API 外观，再分阶段抽象底层传输。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：把风险集中在装配层，便于验证“零行为变化”；故障定位更直接。
+  - Cons：短期会保留一些跨层依赖，R2 仍需继续清理边界。
+- 影响范围（文件/模块）：
+  - `pkg/codexacp/*`
+  - `cmd/codex-acp-go/main.go`
+  - `internal/observability/logger.go`
+  - `test/*`（新增库入口最小映射测试）
+- 验证方式（测试/验收项）：
+  - `go test ./...`
+  - `TestRunStdio_ProfileMappingWithFakeAppServer`
+  - `docs/ACCEPTANCE.md`：K1、K2
+
+### ADR-0031：嵌入 API 设计（ClientRequest + SubscribeUpdates + RespondPermission）
+- 日期：2026-02-28
+- 状态：Accepted
+- 背景：
+  - R3 需要支持外部 server 进程内调用，不再依赖 ACP 客户端子进程 stdio 连接。
+  - 同时必须复用同一套 ACP server 业务逻辑，避免复制分支导致行为漂移。
+- 决策：
+  - 基于 R2 的 `internal/acp.Transport` 抽象，新增 `pkg/codexacp.EmbeddedRuntime`。
+  - 嵌入 API 采用“请求-响应 + 事件订阅”模型：
+    - `ClientRequest(ctx, msg)`：发送 ACP request 并等待 response。
+    - `SubscribeUpdates(...)`：接收 `session/update` 和 server-initiated requests（含 permission）。
+    - `RespondPermission(...)`：回写 `session/request_permission` 决策。
+  - 适配器核心仍由同一个 `acp.Server` 驱动，仅替换 ACP 侧传输为 inproc。
+- 备选方案：
+  - 方案A：在 `pkg` 内复制一套“简化 ACP handler”。
+  - 方案B：把 ACP server 暴露大量内部对象给宿主直接操控。
+  - 方案C：保持 `acp.Server` 单实现，通过嵌入 runtime 封装调用面。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：最大化行为一致性，便于后续做 standalone vs embedded 契约对照（R4）。
+  - Cons：嵌入宿主需正确处理订阅消费与 permission 回写时序，集成复杂度上升。
+- 影响范围（文件/模块）：
+  - `pkg/codexacp/embedded.go`
+  - `pkg/codexacp/runtime_runner.go`
+  - `test/integration/embedded_test.go`
+  - `internal/acp/transport_inproc.go`（R2 复用）
+- 验证方式（测试/验收项）：
+  - `TestEmbeddedInitializeNewPromptCancel`
+  - `TestEmbeddedPermissionRoundTrip`
+  - `go test ./...`
+  - `docs/ACCEPTANCE.md`：K4
+
+### ADR-0032：R4 契约对照测试策略（同脚本双驱动 + 关键序列比对）
+- 日期：2026-02-28
+- 状态：Accepted
+- 背景：
+  - R4 要求证明“独立模式 == 库模式（关键行为）”，并覆盖 initialize/new/prompt/cancel/permission 的一致性。
+  - 两种模式在尾部通知到达时序上可能存在细微差异，需要定义“关键行为对照”而非全字段逐字节对齐。
+- 决策：
+  - 新增同一输入脚本双驱动框架：standalone 走 stdio，embedded 走 inproc。
+  - 对照维度聚焦关键契约：
+    - initialize 关键字段完整性（`protocolVersion` + capabilities）
+    - `session/new`
+    - `session/prompt` 流式与 `stopReason`
+    - `session/cancel`（`stopReason=cancelled`）
+    - permission approve/decline 双路径
+  - 对生命周期比对采用“关键序列 + 终态”策略，允许非关键字段/尾部时序差异。
+  - 补充 embedded 不变量测试：并发双 session 下无阻塞/死锁、无跨 session 串扰。
+- 备选方案：
+  - 方案A：只保留 standalone 或 embedded 单侧回归。
+  - 方案B：双模式全量原始消息逐条严格相等。
+  - 方案C：同脚本双跑，比较关键序列与终态，非关键差异白名单化。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：直接验证 R4 目标，回归信号稳定，避免被非关键时序差异干扰。
+  - Cons：未做“全字段逐条一致”断言，需要持续维护关键序列定义。
+- 影响范围（文件/模块）：
+  - `test/integration/r4_contract_test.go`
+  - `docs/ACCEPTANCE.md`
+  - `PROGRESS.md`
+- 验证方式（测试/验收项）：
+  - `TestR4ContractStandaloneEqualsEmbedded`
+  - `TestR4EmbeddedInvariants_NoDeadlock_NoCrossSessionCrosstalk`
+  - `go test ./...`
+  - `docs/ACCEPTANCE.md`：K5

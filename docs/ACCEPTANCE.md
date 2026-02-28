@@ -108,3 +108,40 @@ J1. **压力回归**
 J2. **stdout 纯净**
 - 操作：打开协议抓取（trace）并运行。  
 - 预期：stdout 仅协议 JSON；trace 文件脱敏。
+
+## K. Library Mode（初版）
+K1. **双入口可启动（cmd + pkg）**
+- 操作：分别通过 `cmd/codex-acp-go` 与库入口创建服务实例并完成 initialize/new/prompt 基线流程。  
+- 预期：两种入口都可独立跑通，且不要求修改 ACP client 侧协议调用方式。
+
+K2. **R1 零行为变化**
+- 操作：对同一组请求回放，比较 R1 前后输出（`initialize` 字段、`session/update` 事件序、`stopReason`）。  
+- 预期：协议可观察行为一致；若有差异必须在变更说明中声明并给出迁移理由。
+
+K3. **传输层抽象可替换（R2）**
+- 操作：在测试中注入 mock 传输实现（替代 stdio）并运行核心 turn 流程。  
+- 预期：核心状态机不依赖具体 IO 实现，mock 与 stdio 通过同一契约测试。
+
+K4. **嵌入 API 生命周期（R3）**
+- 操作：以库模式执行 start/prompt/cancel/shutdown，并模拟宿主 permission 回调。  
+- 预期：生命周期清晰、可回收、无 goroutine 泄漏；cancel 语义与独立模式一致。
+
+K5. **独立模式与库模式契约对照（R4）**
+- 操作：同一 e2e 用例双跑（standalone vs embedded），比对关键协议输出。  
+- 预期：A1-A5、D1-D5、E1-E2 的关键行为一致；差异项需有白名单与说明。
+- 对照最小覆盖（必须）：
+  - initialize：`protocolVersion` 与关键 capabilities 字段完整且两模式一致。
+  - session/new + session/prompt：同脚本下两模式都产出流式 chunk，关键事件序列与 `stopReason` 一致（允许非关键字段差异）。
+  - session/cancel：两模式都收敛到 `stopReason=cancelled`。
+  - permission：approve / decline 两路径都双跑并保持关键行为一致。
+- 不变量（必须）：
+  - standalone：stdout 持续满足“仅协议 JSON-RPC”约束。
+  - embedded：无阻塞/无死锁，且并发多 session 不发生跨 session 串扰。
+
+K6. **server 集成（R5）**
+- 操作：`cmd/codex-acp-go` 改为调用库入口后执行 `go test ./...` 与现有集成测试。  
+- 预期：既有 PR1-PR5 能力不回退，CLI 对用户的参数与运行方式保持兼容。
+
+K7. **收尾验收（R6）**
+- 操作：按 K1-K6 全量回归并更新文档（PROGRESS/DECISIONS/KNOWN_ISSUES）。  
+- 预期：库化改造完成闭环，阻塞项清零或附可执行 workaround。

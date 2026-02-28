@@ -18,6 +18,8 @@ type StdioCodec struct {
 	mu     sync.Mutex
 }
 
+var _ Transport = (*StdioCodec)(nil)
+
 // TraceFunc records one json-rpc line for debug tracing.
 type TraceFunc func(direction string, payload []byte)
 
