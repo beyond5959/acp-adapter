@@ -36,6 +36,7 @@
 - ADR-0030：先外观后抽象（R1 先库化入口，R2 再做传输层解耦）
 - ADR-0031：嵌入 API 设计（ClientRequest + SubscribeUpdates + RespondPermission）
 - ADR-0032：R4 契约对照测试策略（同脚本双驱动 + 关键序列比对）
+- ADR-0033：Claude 适配器架构（appClient 接口替换 + anthropic-sdk-go 直接集成）
 
 ---
 
@@ -687,3 +688,34 @@
   - `TestR4EmbeddedInvariants_NoDeadlock_NoCrossSessionCrosstalk`
   - `go test ./...`
   - `docs/ACCEPTANCE.md`：K5
+
+### ADR-0033：Claude 适配器架构（appClient 接口替换 + anthropic-sdk-go 直接集成）
+- 日期：2026-03-02
+- 状态：Accepted
+- 背景：
+  - 现有项目以 Codex App Server 子进程为后端，ACP server 通过 `appClient` 接口与之解耦。
+  - 需要在不破坏 Codex 适配器任何能力的前提下，新增以 Anthropic API 为后端的 Claude 适配器。
+- 决策：
+  - 在 `internal/claude/` 实现 `appClient` 接口，以 `anthropic-sdk-go` 直接调用 Anthropic Messages API。
+  - 复用 `acp.Server`、`acp.Transport`、`bridge.Store`、`pkg/codexacp.EmbeddedRuntime` 框架，不修改任何现有 Codex 代码路径。
+  - 在 `pkg/claudeacp/` 提供与 `pkg/codexacp` 对等的公共 API（`RunStdio` + `NewEmbeddedRuntime`）。
+  - 新增 `cmd/acp` 统一入口，`--adapter codex|claude` 参数选择后端；`cmd/codex-acp-go` 更新为 thin wrapper 保持向后兼容。
+  - Claude 侧无子进程；会话历史在内存中维护（per-thread）；tool_use 通过暂停流 + `ApprovalRespond` 实现与 Codex approval 对等的语义。
+  - `/review` 类命令通过特殊 system prompt 模拟 entered/exited review mode；`/compact` 通过摘要 prompt + 历史替换实现。
+- 备选方案：
+  - 方案A：新增独立 ACP server 实现（不复用现有 acp.Server）。
+  - 方案B：复用 appClient 接口替换后端，最大化代码复用。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：Codex 测试零回退，ACP 协议层只需维护一套；Claude 侧无子进程启动开销；嵌入模式天然支持。
+  - Cons：Claude 流式语义与 Codex app-server 通知语义有差异，转换层需要额外维护；会话历史在进程内存中，重启后丢失。
+- 影响范围（文件/模块）：
+  - `internal/claude/`（新增）
+  - `pkg/claudeacp/`（新增）
+  - `cmd/acp/`（新增）
+  - `cmd/codex-acp-go/main.go`（thin wrapper 改造）
+  - `go.mod`（新增 anthropic-sdk-go 依赖）
+- 验证方式（测试/验收项）：
+  - `go test ./...`（Codex 零回退）
+  - `go test ./internal/claude/...`
+  - `go test ./test/integration -run TestClaude -count=1`
+  - `docs/ACCEPTANCE.md`：L1-L9

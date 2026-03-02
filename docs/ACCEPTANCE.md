@@ -143,5 +143,43 @@ K6. **server 集成（R5）**
 - 预期：既有 PR1-PR5 能力不回退，CLI 对用户的参数与运行方式保持兼容。
 
 K7. **收尾验收（R6）**
-- 操作：按 K1-K6 全量回归并更新文档（PROGRESS/DECISIONS/KNOWN_ISSUES）。  
+- 操作：按 K1-K6 全量回归并更新文档（PROGRESS/DECISIONS/KNOWN_ISSUES）。
 - 预期：库化改造完成闭环，阻塞项清零或附可执行 workaround。
+
+## L. Claude Mode（Anthropic API 适配器）
+
+L1. **协议合规（等同 A1-A5）**
+- 操作：以 `--adapter claude` 启动适配器，执行 initialize/session/new/session/prompt/session/cancel 全流程。
+- 预期：stdout 仅 ACP JSON-RPC；流式输出 >=1 条 `session/update`；最终 `stopReason=end_turn`；cancel 收敛为 `stopReason=cancelled`。
+
+L2. **Anthropic API 后端对接**
+- 操作：设置 `ANTHROPIC_AUTH_TOKEN` 并启动适配器。
+- 预期：无需启动 `codex app-server` 子进程；可成功创建 session 并完成 turn；API token 缺失时返回明确错误。
+
+L3. **内容能力（等同 C1-C2）**
+- 操作：在 prompt 中包含 @-mention 文件引用；发送含图片（base64）的 prompt。
+- 预期：mentions 正确映射为 Claude API text block；images 正确作为 `image` block 传递；过程稳定无错误。
+
+L4. **工具审批（等同 D1-D5）**
+- 操作：触发会导致 tool_use 的任务，分别 approve / decline / cancel。
+- 预期：三路径均正确；默认安全策略：未获 permission 前不执行副作用；declined/cancelled 时 tool 不执行。
+
+L5. **Slash commands（等同 G1-G6）**
+- 操作：依次执行 `/review`、`/review-branch`、`/review-commit`、`/init`、`/compact`、`/logout`。
+- 预期：每条命令按 SPEC 行为执行；`/review` 类输出 entered/exited review mode（或等价状态）；`/logout` 清空 auth 并需重新认证。
+
+L6. **Auth 方法（等同 I1-I3）**
+- 操作：使用 `ANTHROPIC_AUTH_TOKEN` 启动；缺失时观察错误；执行 `/logout` 后再发 prompt。
+- 预期：有 token 可完成 turn；缺失 token 提示明确；`/logout` 后后续请求被 auth gate 拒绝。
+
+L7. **可靠性（等同 J1-J2）**
+- 操作：运行多轮 turn（含 cancel）；抓取 stdout。
+- 预期：stdout 仅协议 JSON；cancel 在 2s 内生效；无 goroutine 泄漏。
+
+L8. **库模式（等同 K1-K5）**
+- 操作：分别通过 `cmd/acp --adapter claude` 与 `claudeacp.NewEmbeddedRuntime` 运行 initialize/new/prompt/cancel 基线流程。
+- 预期：两种入口均可独立跑通；standalone vs embedded 契约对照通过（关键协议行为一致）。
+
+L9. **Codex 零回退**
+- 操作：在新增 Claude 适配器代码后执行 `go test ./...`。
+- 预期：全部 Codex 相关测试通过；`cmd/codex-acp-go` 行为与改动前完全一致。

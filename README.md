@@ -1,47 +1,64 @@
 # codex-acp-go
 
 ## 1) What is this?
-`codex-acp-go` is a Go ACP adapter that lets ACP clients (such as Zed External Agents) use Codex.
+`codex-acp-go` is a Go ACP adapter that lets ACP clients (such as Zed External Agents) drive AI assistants over the [ACP protocol](docs/SPEC.md).
 
-Upstream transport is ACP over stdio, using newline-delimited JSON-RPC (one JSON message per line). ACP transport rules are strict: `stdout` must contain protocol messages only, and logs must go to `stderr`.
+Two backends are supported:
 
-Downstream, this adapter drives Codex through **Codex App Server** (`codex app-server`) over stdio JSONL/JSON-RPC. It does not parse CLI text output. This preserves App Server capabilities such as authentication, conversation history, approvals, and streamed turn events.
+| Backend | Flag | Description |
+|---|---|---|
+| **Codex** (default) | `--adapter codex` | Drives Codex via `codex app-server` subprocess |
+| **Claude** | `--adapter claude` | Calls Anthropic API directly via `anthropic-sdk-go` |
 
-By default, the adapter launches `codex app-server` (configurable via `CODEX_APP_SERVER_CMD` and `CODEX_APP_SERVER_ARGS`).
+ACP transport rules are strict: `stdout` must contain protocol messages only, and logs must go to `stderr`.
 
 ## 2) Features
-- Context `@`-mentions
-- Images in prompts
+- Context `@`-mentions and images in prompts
 - Tool calls with permission requests (command/file/network/MCP side-effects)
-- Edit review flow
+- Edit review flow (`/review`, `/review-branch`, `/review-commit`)
 - Structured TODO updates
-- Slash commands: `/review`, `/review-branch`, `/review-commit`, `/init`, `/compact`, `/logout` (`/compact` behavior may vary by Codex App Server version)
-- Client MCP servers via `/mcp list`, `/mcp call`, `/mcp oauth` (limited cross-version real-backend coverage)
-- Auth methods: ChatGPT subscription, `CODEX_API_KEY`, `OPENAI_API_KEY`
+- Slash commands: `/review`, `/review-branch`, `/review-commit`, `/init`, `/compact`, `/logout`
+- Client MCP servers via `/mcp list`, `/mcp call`, `/mcp oauth`
+- Embedded library mode (`pkg/codexacp` / `pkg/claudeacp`) for in-process use
 
 ## 3) Quickstart
-Prerequisite: you already have Codex CLI installed and logged in.
 
-### Step 1: Build and run the adapter
-From repo root:
+### Option A: Codex backend
+Prerequisite: Codex CLI installed and logged in.
 
 ```bash
 go build -o ./bin/codex-acp-go ./cmd/codex-acp-go
 ./bin/codex-acp-go
 ```
 
-Optional process overrides:
-
-- `CODEX_APP_SERVER_CMD` (default `codex`)
-- `CODEX_APP_SERVER_ARGS` (default `app-server`)
-
-If you use API key auth instead of existing CLI login, set one of:
-
+Auth (one of):
+- Existing `codex login` session
 - `CODEX_API_KEY`
 - `OPENAI_API_KEY`
 
+### Option B: Claude backend
+Prerequisite: an Anthropic API auth token.
+
+```bash
+go build -o ./bin/acp ./cmd/acp
+export ANTHROPIC_AUTH_TOKEN=sk-ant-...
+./bin/acp --adapter claude
+```
+
+Optional overrides:
+- `ANTHROPIC_BASE_URL` — custom base URL (default: `https://api.anthropic.com`)
+- `--model` — model name (default: `claude-opus-4-6`)
+- `--max-tokens` — max tokens per turn (default: `8192`)
+
+### Option C: Unified binary (both backends)
+```bash
+go build -o ./bin/acp ./cmd/acp
+./bin/acp --adapter codex   # same as codex-acp-go
+./bin/acp --adapter claude  # Claude direct API
+```
+
 ### Step 2: Point Zed External Agent config to this binary
-Minimal template (adjust path/env for your machine):
+Minimal template for Codex backend:
 
 ```json
 {
@@ -58,15 +75,32 @@ Minimal template (adjust path/env for your machine):
 }
 ```
 
+Minimal template for Claude backend:
+
+```json
+{
+  "agent_servers": {
+    "claude-acp": {
+      "command": "/absolute/path/to/bin/acp",
+      "args": ["--adapter", "claude"],
+      "env": {
+        "ANTHROPIC_AUTH_TOKEN": "sk-ant-..."
+      }
+    }
+  }
+}
+```
+
 ### Step 3: Start using it in Zed
-Open Zed's Agent panel, choose the `codex-acp-go` agent server, and start a new Codex thread.
+Open Zed's Agent panel, choose the agent server, and start a new thread.
 
 ## 4) Usage tips
 - Use your client's mention UX (for example `@file`) to pass file context.
 - Common slash commands: `/review`, `/review-branch`, `/review-commit`, `/init`, `/compact`, `/logout`.
-- MCP helpers: `/mcp list`, `/mcp call <server> <tool> [args]`, `/mcp oauth <server>`.
+- MCP helpers (Codex backend): `/mcp list`, `/mcp call <server> <tool> [args]`, `/mcp oauth <server>`.
 - For side-effect actions, handle the permission prompt: approve to proceed, decline to block safely.
 - Default policy is fail-closed: without permission, write/command/network/MCP side-effects are not executed.
 - If you wrap this binary, never write logs to `stdout`; use `stderr` only, or ACP parsing will fail.
+- Claude backend: conversation history is in-process memory; restarting the adapter resets context.
 
 For protocol details and development/testing docs, see [`docs/SPEC.md`](docs/SPEC.md), [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md), and [`PROGRESS.md`](PROGRESS.md).

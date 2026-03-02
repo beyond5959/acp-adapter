@@ -4,9 +4,9 @@
 > 更新频率：每合并一个 PR 必须更新一次；每次发现阻塞也要更新。
 
 ## 项目概览
-- 项目：codex-acp-go（基于 Codex App Server 的 ACP 适配器）
-- 当前阶段：R5 进行中（Library Embedding Program）
-- 最近更新：2026-02-28
+- 项目：codex-acp-go（基于 Codex App Server 的 ACP 适配器，同时支持 Claude 直接 API 适配）
+- 当前阶段：Claude Adapter C-R5 已完成（验收通过）
+- 最近更新：2026-03-02
 
 ## 关键链接/文档
 - docs/SPEC.md：技术方案（权威）
@@ -56,6 +56,26 @@
 - [ ] R6 收尾验收
   - 状态：Todo
   - 说明：完成 Library Mode 验收闭环与文档收敛。
+
+## Claude Adapter Program（C-R0 ~ C-R5）
+- [x] C-R0 文档立项 + 引入 anthropic-sdk-go 依赖
+  - 状态：Done
+  - 说明：引入 anthropic-sdk-go v1.26.0，更新 DECISIONS/KNOWN_ISSUES，在 ACCEPTANCE.md 新增 L. Claude Mode 验收条目（L1-L9），新增 ADR-0033。
+- [x] C-R1 internal/claude/ 核心客户端
+  - 状态：Done
+  - 说明：新增 config.go/session.go/stream.go/client.go，实现 appClient 接口，以 Anthropic Messages API 驱动完整会话、流式输出、tool_use 审批、review/compact/logout 语义。
+- [x] C-R2 pkg/claudeacp/ 库入口
+  - 状态：Done
+  - 说明：新增 runtime.go/runtime_runner.go/embedded.go，提供 RunStdio 和 NewEmbeddedRuntime 公共 API，复用 acp.Server 与 inproc transport，不依赖子进程。
+- [x] C-R3 统一 cmd/acp 入口
+  - 状态：Done
+  - 说明：新增 cmd/acp/main.go（--adapter codex|claude），cmd/codex-acp-go 保持向后兼容，导出 config.DetectAuthMode。
+- [x] C-R4 测试基础设施
+  - 状态：Done
+  - 说明：新增 testdata/fake_claude_server（Anthropic SSE fake），test/integration/claude_e2e_test.go（5 个测试），go test ./... 全通过。
+- [x] C-R5 验收运行 + 文档收尾
+  - 状态：Done
+  - 说明：go test ./... 全通过；L9 Codex 零回退；文档已更新。
 
 ## 验收进度（从 docs/ACCEPTANCE.md 勾选）
 ### A. 协议合规（ACP）
@@ -115,6 +135,17 @@
 - [x] K5 独立模式与库模式契约对照（R4）
 - [ ] K6 server 集成（R5）
 - [ ] K7 收尾验收（R6）
+
+### L. Claude Mode（Anthropic API 适配器）
+- [x] L1 协议合规（initialize/session/new/session/prompt/session/cancel）
+- [x] L2 Anthropic API 后端对接（无需 codex app-server 子进程）
+- [x] L3 内容能力（@mentions + images base64）
+- [x] L4 工具审批（tool_use → permission → approve/decline/cancel）
+- [x] L5 Slash commands（/review/compact/logout 等）
+- [x] L6 Auth 方法（ANTHROPIC_AUTH_TOKEN；缺失明确错误；/logout 清空）
+- [x] L7 可靠性（stdout 纯净；cancel 生效）
+- [x] L8 库模式（RunStdio + EmbeddedRuntime；契约对照通过）
+- [x] L9 Codex 零回退（go test ./... 全通过）
 
 ## 本 PR 做了什么
 1. 补齐 slash commands：

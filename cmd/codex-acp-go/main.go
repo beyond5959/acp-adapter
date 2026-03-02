@@ -1,12 +1,15 @@
+// Command codex-acp-go is the Codex ACP adapter binary.
+// It is a thin wrapper that runs the Codex backend.
 package main
 
 import (
 	"context"
-	"github.com/beyond5959/codex-acp/internal/config"
-	"github.com/beyond5959/codex-acp/pkg/codexacp"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/beyond5959/codex-acp/internal/config"
+	"github.com/beyond5959/codex-acp/pkg/codexacp"
 )
 
 func main() {

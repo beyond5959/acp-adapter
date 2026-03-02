@@ -31,6 +31,9 @@
 - KI-0025：嵌入模式并发/阻塞风险（宿主线程模型差异）
 - KI-0026：permission 回写超时风险（嵌入链路）
 - KI-0027：inproc transport 背压风险（宿主未及时消费导致写阻塞）
+- KI-0028：Claude 适配器会话历史进程内存储（重启丢失）
+- KI-0029：Claude /review 命令通过 system prompt 模拟，非原生 review/start 语义
+- KI-0030：Claude /compact 仅做内存历史压缩，不持久化
 
 ---
 
@@ -321,3 +324,37 @@
   - 嵌入宿主必须持续消费 transport 输出；必要时提高 channel buffer，避免长时间无消费。
 - 后续计划：
   - R3 评估引入可观测指标（队列深度/阻塞时长）与可配置背压策略，R4 增加压力回归。
+
+## KI-0028：Claude 适配器会话历史进程内存储（重启丢失）
+- 现象：
+  - Claude 适配器将 per-thread 对话历史维护在进程内存中，进程重启后所有历史丢失。
+- 影响：
+  - 长会话场景下重启 adapter 会导致上下文丢失，用户需重新建立 session。
+- 复现：
+  - 正常对话若干轮后重启 `cmd/acp --adapter claude`，发现历史不可恢复。
+- Workaround：
+  - 对需要持久化上下文的场景，客户端侧保存对话摘要并在新 session 重新注入。
+- 后续计划：
+  - 评估将历史序列化到本地文件或数据库，支持 session resume。
+
+## KI-0029：Claude /review 命令通过 system prompt 模拟，非原生 review/start 语义
+- 现象：
+  - Claude 适配器的 `/review`、`/review-branch`、`/review-commit` 通过特殊 system prompt 触发 Claude 做代码审阅，无法产生与 Codex `review/start` 完全相同的 entered/exited review mode 通知序列。
+- 影响：
+  - 严格依赖 `review_mode_entered`/`review_mode_exited` 事件的 ACP 客户端在 Claude 模式下展示可能不完整。
+- 复现：
+  - 用 Claude 适配器执行 `/review` 并断言 review mode 事件序列。
+- Workaround：
+  - 适配器会在 turn 开始/结束时发送等价 status 事件（`review_started`/`review_completed`），客户端可消费扁平 status 字段。
+- 后续计划：
+  - 若 Anthropic API 未来支持原生 review 能力，替换为原生实现。
+
+## KI-0030：Claude /compact 仅做内存历史压缩，不持久化
+- 现象：
+  - `/compact` 通过向 Claude 发送摘要 prompt 并替换内存中的历史，无法持久化。重启后原始历史不可恢复。
+- 影响：
+  - 与 KI-0028 叠加：compact + 重启会同时丢失压缩前后的历史。
+- Workaround：
+  - compact 后导出摘要文本作为新 session 的初始上下文。
+- 后续计划：
+  - 与 KI-0028 一同评估持久化方案。
