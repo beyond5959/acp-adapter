@@ -1,4 +1,4 @@
-package main
+package acpadapter
 
 import (
 	"context"
@@ -6,30 +6,25 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"os/signal"
-	"syscall"
-	"time"
 
-	"github.com/beyond5959/codex-acp/internal/acp"
-	"github.com/beyond5959/codex-acp/internal/appserver"
-	"github.com/beyond5959/codex-acp/internal/bridge"
-	"github.com/beyond5959/codex-acp/internal/config"
-	"github.com/beyond5959/codex-acp/internal/observability"
+	"github.com/beyond5959/acp-adapter/internal/acp"
+	"github.com/beyond5959/acp-adapter/internal/appserver"
+	"github.com/beyond5959/acp-adapter/internal/bridge"
+	"github.com/beyond5959/acp-adapter/internal/observability"
 )
 
-func main() {
-	cfg := config.Parse()
-	logger := observability.NewJSONLogger(cfg.LogLevel)
-	profiles := make(map[string]acp.ProfileConfig, len(cfg.Profiles))
-	for name, profile := range cfg.Profiles {
-		profiles[name] = acp.ProfileConfig{
-			Model:              profile.Model,
-			ApprovalPolicy:     profile.ApprovalPolicy,
-			Sandbox:            profile.Sandbox,
-			Personality:        profile.Personality,
-			SystemInstructions: profile.SystemInstructions,
-		}
+func runRuntime(
+	ctx context.Context,
+	cfg RuntimeConfig,
+	stderr io.Writer,
+	buildTransport func(acp.TraceFunc) acp.Transport,
+) error {
+	cfg = normalizeRuntimeConfig(cfg)
+	if stderr == nil {
+		stderr = os.Stderr
 	}
+
+	logger := observability.NewJSONLoggerWithWriter(cfg.LogLevel, stderr)
 
 	var traceFile *observability.JSONTraceFile
 	if cfg.TraceJSON {
@@ -37,7 +32,7 @@ func main() {
 		traceFile, err = observability.NewJSONTraceFile(cfg.TraceJSONFile)
 		if err != nil {
 			logger.Error("failed to open trace-json file", slog.String("error", err.Error()))
-			os.Exit(1)
+			return err
 		}
 		logger.Info("trace-json enabled", slog.String("path", traceFile.Path()))
 		defer func() {
@@ -45,14 +40,20 @@ func main() {
 		}()
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	transport := buildTransport(func(direction string, payload []byte) {
+		if traceFile != nil {
+			traceFile.TraceACP(direction, payload)
+		}
+	})
+	if transport == nil {
+		return errors.New("acp transport is nil")
+	}
 
 	supervisor, err := appserver.NewSupervisor(ctx, appserver.SupervisorConfig{
 		Process: appserver.ProcessConfig{
 			Command: cfg.AppServerCommand,
-			Args:    cfg.AppServerArgs,
-			Stderr:  os.Stderr,
+			Args:    append([]string(nil), cfg.AppServerArgs...),
+			Stderr:  stderr,
 			Trace: func(direction string, payload []byte) {
 				if traceFile != nil {
 					traceFile.TraceAppServer(direction, payload)
@@ -60,29 +61,25 @@ func main() {
 			},
 		},
 		Logger:            logger,
-		InitializeTimeout: 5 * time.Second,
+		InitializeTimeout: defaultInitializeTimeout,
 	})
 	if err != nil {
 		logger.Error("failed to start app server", slog.String("error", err.Error()))
-		os.Exit(1)
+		return err
 	}
 	defer func() {
 		_ = supervisor.Close()
 	}()
 
 	server := acp.NewServer(
-		acp.NewStdioCodecWithTrace(os.Stdin, os.Stdout, func(direction string, payload []byte) {
-			if traceFile != nil {
-				traceFile.TraceACP(direction, payload)
-			}
-		}),
+		transport,
 		supervisor,
 		bridge.NewStore(),
 		logger,
 		acp.ServerOptions{
 			PatchApplyMode:   cfg.PatchApplyMode,
 			RetryTurnOnCrash: cfg.RetryTurnOnCrash,
-			Profiles:         profiles,
+			Profiles:         toACPProfiles(cfg.Profiles),
 			DefaultProfile:   cfg.DefaultProfile,
 			InitialAuthMode:  cfg.InitialAuthMode,
 		},
@@ -90,6 +87,7 @@ func main() {
 
 	if err := server.Serve(ctx); err != nil && !errors.Is(err, io.EOF) {
 		logger.Error("acp server stopped with error", slog.String("error", err.Error()))
-		os.Exit(1)
+		return err
 	}
+	return nil
 }

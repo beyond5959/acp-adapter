@@ -27,6 +27,16 @@
 - KI-0021：`session/update` 的标准 `update.sessionUpdate` 在低频事件上仍是回退语义
 - KI-0022：并发请求下 `authenticate` 与后续请求存在时序依赖
 - KI-0023：旧二进制缺少 `initialize.protocolVersion`，严格 ACP 客户端会在连接阶段失败
+- KI-0024：库化改造的行为回归风险（独立模式与库模式偏差）
+- KI-0025：嵌入模式并发/阻塞风险（宿主线程模型差异）
+- KI-0026：permission 回写超时风险（嵌入链路）
+- KI-0027：inproc transport 背压风险（宿主未及时消费导致写阻塞）
+- KI-0028：Claude 适配器依赖本机 Claude Code CLI（claude 命令）
+- KI-0029：Claude /review 命令通过 system prompt 模拟，非原生 review/start 语义
+- KI-0030：Claude /compact 仅做摘要 prompt 压缩，不跨 CLI session 持久化
+- KI-0031：Claude 子进程 CLAUDECODE 环境变量需过滤，否则触发嵌套 session 保护
+- KI-0032：Claude 适配器 --dangerously-skip-permissions 默认开启
+- KI-0033：项目重命名后的兼容路径变更（module/import/cmd/npm）
 
 ---
 
@@ -164,11 +174,13 @@
   - 若本机未安装 `codex` 或认证不可用，真实 e2e 会跳过（带原因），不会覆盖真实链路。
   - `TestE2ERealCodexAppServer_AuthInjectedKeyRecovers` 需要可注入 key；未提供时会 skip。
   - `TestE2ERealCodexAppServer_MCPListAndOptionalCall` 在无 MCP server 配置时仅验证 list 路径，call 分支不会执行。
+  - 本机 `~/.codex/state_*.sqlite` 迁移漂移时，可能出现 `migration ... missing` 警告并伴随部分真实能力异常（联调日志可见）。
 - 复现：
   - 执行 `E2E_REAL_CODEX=1 go test ./... -run TestE2EReal -count=1`，且环境缺少 codex/auth。
   - 例如 `TestE2ERealCodexAppServer_BasicPromptAndCancel` / `TestE2ERealCodexPromptInteractions` 会因 `thread/start failed` skip。
 - Workaround：
   - 安装并确保 `codex app-server` 可运行；准备可用认证态（API key 或 subscription）以让 real e2e 实际执行。
+  - 若出现 `state_*.sqlite migration ... missing`，先修复/清理本机 codex state 后再重跑 real e2e。
   - 若要覆盖 auth 注入恢复路径，设置：
     - `E2E_REAL_CODEX_RECOVERY_CODEX_API_KEY=<key>` 或
     - `E2E_REAL_CODEX_RECOVERY_OPENAI_API_KEY=<key>`
@@ -215,16 +227,32 @@
 
 ## KI-0020：go module 路径与仓库地址不一致会导致外部安装失败
 - 现象：
-  - `go.mod` 若使用短 module（如 `codex-acp`）而仓库地址为 `github.com/beyond5959/codex-acp`，外部使用仓库地址安装会报模块路径不匹配。
+  - `go.mod` 若使用短 module（如 `acp-adapter`）而仓库地址为 `github.com/beyond5959/acp-adapter`，外部使用仓库地址安装会报模块路径不匹配。
 - 影响：
   - `go get` / `go install` 失败，第三方集成与 CI 拉取依赖不稳定。
 - 复现：
-  - 保持短 module 路径后执行：`go install github.com/beyond5959/codex-acp/cmd/codex-acp-go@latest`。
+  - 保持短 module 路径后执行：`go install github.com/beyond5959/acp-adapter/cmd/acp-adapter@latest`。
 - Workaround：
-  - 使用 canonical module：`module github.com/beyond5959/codex-acp`。
-  - 变更后同步替换仓库内 `codex-acp/...` 导入路径。
+  - 使用 canonical module：`module github.com/beyond5959/acp-adapter`。
+  - 变更后同步替换仓库内 `acp-adapter/...` 导入路径。
 - 后续计划：
   - 仓库地址若变更（迁移/重命名），同一 PR 内同步更新 `go.mod` 和全部内部导入。
+
+## KI-0033：项目重命名后的兼容路径变更（module/import/cmd/npm）
+- 现象：
+  - 项目从 `codex-acp-go` 重命名为 `acp-adapter` 后，旧路径（如 `cmd/codex-acp-go`、`pkg/codexacp`、`github.com/beyond5959/codex-acp`、`@beyond5959/codex-acp-go`）已不可用。
+- 影响：
+  - 外部脚本、CI 配置、第三方导入若仍依赖旧命名，会出现构建失败或命令找不到。
+- 复现：
+  - 继续执行旧命令：`go build ./cmd/codex-acp-go` 或 `go test` 时导入 `github.com/beyond5959/codex-acp/...`。
+- Workaround：
+  - 统一切换到新路径：
+    - Go module/import：`github.com/beyond5959/acp-adapter`
+    - cmd 入口：`cmd/acp-adapter`
+    - 包路径：`pkg/acpadapter`
+    - npm 包：`@beyond5959/acp-adapter` 及其平台子包
+- 后续计划：
+  - 当前仓库内已完成替换并通过 `go test ./...`；对外使用方需同步升级配置。
 
 ## KI-0021：`session/update` 的标准 `update.sessionUpdate` 在低频事件上仍是回退语义
 - 现象：
@@ -256,14 +284,126 @@
 
 ## KI-0023：旧二进制缺少 `initialize.protocolVersion`，严格 ACP 客户端会在连接阶段失败
 - 现象：
-  - 使用旧版 `codex-acp-go` 二进制连接严格 ACP 客户端（如 Zed）时，可能在连接阶段报错：`failed to deserialize response`。
+  - 使用旧版 `acp-adapter` 二进制连接严格 ACP 客户端（如 Zed）时，可能在连接阶段报错：`failed to deserialize response`。
 - 影响：
   - 初始化握手失败，无法进入认证和会话创建流程。
 - 复现：
   - 使用未包含本次修复的旧二进制启动 agent，并让客户端发 `initialize(protocolVersion=1)`。
 - Workaround：
   - 重新构建并替换二进制：
-    - `go build -o ./bin/codex-acp-go ./cmd/codex-acp-go`
+    - `go build -o ./bin/acp-adapter ./cmd/acp-adapter`
   - 重启 ACP 客户端后重连。
 - 后续计划：
   - 保持 `TestE2EInitializeIncludesACPStandardFields` 回归，防止该字段再次回退。
+
+## KI-0024：库化改造的行为回归风险（独立模式与库模式偏差）
+- 现象：
+  - 引入库入口后，若 `cmd` 与 `pkg` 装配参数不一致，可能出现独立模式可用但嵌入模式行为漂移（或反之）。
+- 影响：
+  - 直接影响协议兼容性（A1-A5）与现网客户端稳定性，属于高风险回归点。
+- 复现：
+  - 在同一输入下分别运行独立模式与库模式，对比 `initialize/session/update` 输出，出现字段/时序差异。
+- Workaround：
+  - 已新增 R4 契约对照回归：同一脚本双跑 standalone/embedded，并对照 initialize/new/prompt/cancel/permission 关键行为。
+- 后续计划：
+  - R4 已完成；R5/R6 持续扩展对照覆盖面（review/compact/mcp/auth 等）并维护差异白名单。
+
+## KI-0025：嵌入模式并发/阻塞风险（宿主线程模型差异）
+- 现象：
+  - 作为库被宿主调用时，宿主可能使用与 CLI 不同的 goroutine/锁模型，导致 turn 处理阻塞或 cancel 延迟。
+- 影响：
+  - 可能破坏“每 session 单 active turn”约束与 `session/cancel` 及时性，严重时触发 goroutine 泄漏。
+- 复现：
+  - 在嵌入 API 中并发触发 prompt + cancel + permission 回调，观察是否出现死锁或超时。
+- Workaround：
+  - 嵌入 API 明确 async/阻塞语义，要求回调不可重入阻塞主读写循环。
+- 后续计划：
+  - R4 已补充并发双 session 不变量测试（无阻塞/无串扰）；R5 继续增加高并发 cancel 与 permission 回调竞争压测。
+
+## KI-0026：permission 回写超时风险（嵌入链路）
+- 现象：
+  - 嵌入模式下 permission 由宿主 UI 或业务层回传；若宿主未及时回写，turn 会长时间等待并最终超时取消。
+- 影响：
+  - 用户侧表现为“工具调用卡住后失败”，且副作用工具按 fail-closed 被拒绝，影响任务完成率。
+- 复现：
+  - 触发 `session/request_permission` 后不回写或延迟回写超过超时阈值。
+- Workaround：
+  - 宿主必须实现超时前显式 approve/decline/cancel，并在 UI 提示倒计时。
+- 后续计划：
+  - R3 增加可配置 timeout 与回调观测字段；R4 补超时与迟到回写回归测试。
+
+## KI-0027：inproc transport 背压风险（宿主未及时消费导致写阻塞）
+- 现象：
+  - R2 新增的 inproc channel transport 在宿主不及时读取 outbound 消息时，会触发写端背压并阻塞后续事件发送。
+- 影响：
+  - 在高频 `session/update` 场景下，可能放大延迟并影响 cancel/permission 等控制消息的处理时效。
+- 复现：
+  - 使用小 buffer inproc transport，持续写入通知且宿主不消费（或消费速度显著低于生产速度）。
+- Workaround：
+  - 嵌入宿主必须持续消费 transport 输出；必要时提高 channel buffer，避免长时间无消费。
+- 后续计划：
+  - R3 评估引入可观测指标（队列深度/阻塞时长）与可配置背压策略，R4 增加压力回归。
+
+## KI-0028：Claude 适配器依赖本机 Claude Code CLI（claude 命令）
+- 现象：
+  - `cmd/acp --adapter claude` 依赖 `$CLAUDE_BIN`（默认 `claude`）可执行文件存在并已登录认证。
+  - 若 `claude` 未安装或未登录，`TurnStart` 时子进程启动失败，`session/prompt` 返回错误。
+- 影响：
+  - 在未安装 Claude Code 的 CI / Docker 环境中，Claude 适配器完全不可用。
+- 复现：
+  - 不安装 claude 直接运行 `cmd/acp --adapter claude` 并发 `session/prompt`。
+- Workaround：
+  - 确保运行环境已安装 Claude Code 并完成 `claude auth login`。
+  - 在测试环境设置 `CLAUDE_BIN=<path/to/fake_claude_cli>` 使用 fake 替身。
+- 后续计划：
+  - 评估内嵌 claude API 调用作为无 CLI 降级路径。
+
+## KI-0029：Claude /review 命令通过 system prompt 模拟，非原生 review/start 语义
+- 现象：
+  - Claude 适配器的 `/review`、`/review-branch`、`/review-commit` 通过特殊 system prompt 触发 Claude 做代码审阅，无法产生与 Codex `review/start` 完全相同的 entered/exited review mode 通知序列。
+- 影响：
+  - 严格依赖 `review_mode_entered`/`review_mode_exited` 事件的 ACP 客户端在 Claude 模式下展示可能不完整。
+- 复现：
+  - 用 Claude 适配器执行 `/review` 并断言 review mode 事件序列。
+- Workaround：
+  - 适配器会在 turn 开始/结束时发送等价 status 事件（`review_started`/`review_completed`），客户端可消费扁平 status 字段。
+- 后续计划：
+  - 若 Anthropic API 未来支持原生 review 能力，替换为原生实现。
+
+## KI-0030：Claude /compact 仅做摘要 prompt 压缩，不跨 CLI session 持久化
+- 现象：
+  - `/compact` 向 claude CLI 发送压缩 prompt；由于 `--resume <uuid>` 机制，CLI 本身已持久化历史，但 compact 后的新摘要仍依赖 Claude Code 磁盘上的 session 文件。
+  - 若 CLI session 文件被清理，历史不可恢复。
+- 影响：
+  - compact 后若 claude 清理旧 session，后续 `--resume` 会失败并触发错误。
+- Workaround：
+  - 避免在 compact 后清理 claude 的 session 存储（`~/.claude/projects/`）。
+- 后续计划：
+  - 检测 `--resume` 失败时自动回退到新 `--session-id` 重新建立会话。
+
+## KI-0031：Claude 子进程 CLAUDECODE 环境变量需过滤，否则触发嵌套 session 保护
+- 现象：
+  - 在 Claude Code 交互会话内运行 `cmd/acp --adapter claude` 时，`claude` 子进程检测到 `CLAUDECODE` 环境变量并拒绝启动（报 `Claude Code cannot be launched inside another Claude Code session`）。
+- 影响：
+  - 在 Claude Code 内部调试/测试 Claude 适配器时，所有 `session/prompt` 均失败。
+- 复现：
+  - 在 Claude Code 终端中执行 `cmd/acp --adapter claude` 并发 `session/prompt`。
+- Workaround：
+  - 适配器已在 `buildCmd` 中自动过滤 `CLAUDECODE` 变量（`filterEnv`），正常使用无需手动处理。
+  - 若手动测试需要在 Claude Code 内运行 `claude -p`，可先执行 `unset CLAUDECODE`。
+- 后续计划：
+  - 当前已在 `client.go:buildCmd` 中修复，保持回归测试覆盖。
+
+## KI-0032：Claude 适配器 --dangerously-skip-permissions 默认开启
+- 现象：
+  - `SkipPerms: true` 为默认配置，`claude -p` 子进程以 `--dangerously-skip-permissions` 启动，工具调用不经过用户审批自动执行。
+- 影响：
+  - 模型若调用文件写入、命令执行等副作用工具，会在无用户介入的情况下执行。
+  - ACP `session/request_permission` 不会被触发（`ApprovalRespond` 为 no-op）。
+- 复现：
+  - 默认配置下发送含工具调用触发词的 prompt，观察无 permission 请求。
+- Workaround：
+  - 若需要审批，通过 `--skip-perms=false` 关闭，并配置 `--allowed-tools` 显式白名单。
+  - 或在受信任的 CI/自动化环境中维持默认（skip）以减少交互。
+- 后续计划：
+  - 评估将 tool approval 事件从 `claude -p` 的 stream-json 输出中解析并桥接到 ACP `session/request_permission`，恢复 approval 往返语义。

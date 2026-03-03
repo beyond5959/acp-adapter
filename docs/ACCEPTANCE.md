@@ -108,3 +108,78 @@ J1. **压力回归**
 J2. **stdout 纯净**
 - 操作：打开协议抓取（trace）并运行。  
 - 预期：stdout 仅协议 JSON；trace 文件脱敏。
+
+## K. Library Mode（初版）
+K1. **双入口可启动（cmd + pkg）**
+- 操作：分别通过 `cmd/acp-adapter` 与库入口创建服务实例并完成 initialize/new/prompt 基线流程。  
+- 预期：两种入口都可独立跑通，且不要求修改 ACP client 侧协议调用方式。
+
+K2. **R1 零行为变化**
+- 操作：对同一组请求回放，比较 R1 前后输出（`initialize` 字段、`session/update` 事件序、`stopReason`）。  
+- 预期：协议可观察行为一致；若有差异必须在变更说明中声明并给出迁移理由。
+
+K3. **传输层抽象可替换（R2）**
+- 操作：在测试中注入 mock 传输实现（替代 stdio）并运行核心 turn 流程。  
+- 预期：核心状态机不依赖具体 IO 实现，mock 与 stdio 通过同一契约测试。
+
+K4. **嵌入 API 生命周期（R3）**
+- 操作：以库模式执行 start/prompt/cancel/shutdown，并模拟宿主 permission 回调。  
+- 预期：生命周期清晰、可回收、无 goroutine 泄漏；cancel 语义与独立模式一致。
+
+K5. **独立模式与库模式契约对照（R4）**
+- 操作：同一 e2e 用例双跑（standalone vs embedded），比对关键协议输出。  
+- 预期：A1-A5、D1-D5、E1-E2 的关键行为一致；差异项需有白名单与说明。
+- 对照最小覆盖（必须）：
+  - initialize：`protocolVersion` 与关键 capabilities 字段完整且两模式一致。
+  - session/new + session/prompt：同脚本下两模式都产出流式 chunk，关键事件序列与 `stopReason` 一致（允许非关键字段差异）。
+  - session/cancel：两模式都收敛到 `stopReason=cancelled`。
+  - permission：approve / decline 两路径都双跑并保持关键行为一致。
+- 不变量（必须）：
+  - standalone：stdout 持续满足“仅协议 JSON-RPC”约束。
+  - embedded：无阻塞/无死锁，且并发多 session 不发生跨 session 串扰。
+
+K6. **server 集成（R5）**
+- 操作：`cmd/acp-adapter` 改为调用库入口后执行 `go test ./...` 与现有集成测试。  
+- 预期：既有 PR1-PR5 能力不回退，CLI 对用户的参数与运行方式保持兼容。
+
+K7. **收尾验收（R6）**
+- 操作：按 K1-K6 全量回归并更新文档（PROGRESS/DECISIONS/KNOWN_ISSUES）。
+- 预期：库化改造完成闭环，阻塞项清零或附可执行 workaround。
+
+## L. Claude Mode（Anthropic API 适配器）
+
+L1. **协议合规（等同 A1-A5）**
+- 操作：以 `--adapter claude` 启动适配器，执行 initialize/session/new/session/prompt/session/cancel 全流程。
+- 预期：stdout 仅 ACP JSON-RPC；流式输出 >=1 条 `session/update`；最终 `stopReason=end_turn`；cancel 收敛为 `stopReason=cancelled`。
+
+L2. **Anthropic API 后端对接**
+- 操作：设置 `ANTHROPIC_AUTH_TOKEN` 并启动适配器。
+- 预期：无需启动 `codex app-server` 子进程；可成功创建 session 并完成 turn；API token 缺失时返回明确错误。
+
+L3. **内容能力（等同 C1-C2）**
+- 操作：在 prompt 中包含 @-mention 文件引用；发送含图片（base64）的 prompt。
+- 预期：mentions 正确映射为 Claude API text block；images 正确作为 `image` block 传递；过程稳定无错误。
+
+L4. **工具审批（等同 D1-D5）**
+- 操作：触发会导致 tool_use 的任务，分别 approve / decline / cancel。
+- 预期：三路径均正确；默认安全策略：未获 permission 前不执行副作用；declined/cancelled 时 tool 不执行。
+
+L5. **Slash commands（等同 G1-G6）**
+- 操作：依次执行 `/review`、`/review-branch`、`/review-commit`、`/init`、`/compact`、`/logout`。
+- 预期：每条命令按 SPEC 行为执行；`/review` 类输出 entered/exited review mode（或等价状态）；`/logout` 清空 auth 并需重新认证。
+
+L6. **Auth 方法（等同 I1-I3）**
+- 操作：使用 `ANTHROPIC_AUTH_TOKEN` 启动；缺失时观察错误；执行 `/logout` 后再发 prompt。
+- 预期：有 token 可完成 turn；缺失 token 提示明确；`/logout` 后后续请求被 auth gate 拒绝。
+
+L7. **可靠性（等同 J1-J2）**
+- 操作：运行多轮 turn（含 cancel）；抓取 stdout。
+- 预期：stdout 仅协议 JSON；cancel 在 2s 内生效；无 goroutine 泄漏。
+
+L8. **库模式（等同 K1-K5）**
+- 操作：分别通过 `cmd/acp --adapter claude` 与 `claudeacp.NewEmbeddedRuntime` 运行 initialize/new/prompt/cancel 基线流程。
+- 预期：两种入口均可独立跑通；standalone vs embedded 契约对照通过（关键协议行为一致）。
+
+L9. **Codex 零回退**
+- 操作：在新增 Claude 适配器代码后执行 `go test ./...`。
+- 预期：全部 Codex 相关测试通过；`cmd/acp-adapter` 行为与改动前完全一致。

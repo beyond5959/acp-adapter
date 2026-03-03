@@ -17,8 +17,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/beyond5959/codex-acp/internal/appserver"
-	"github.com/beyond5959/codex-acp/internal/bridge"
+	"github.com/beyond5959/acp-adapter/internal/appserver"
+	"github.com/beyond5959/acp-adapter/internal/bridge"
 )
 
 const (
@@ -166,9 +166,9 @@ type ServerOptions struct {
 	InitialAuthMode  string
 }
 
-// Server handles ACP JSON-RPC requests over stdio.
+// Server handles ACP JSON-RPC requests over one Transport.
 type Server struct {
-	codec    *StdioCodec
+	codec    Transport
 	app      appClient
 	sessions *bridge.Store
 	logger   *slog.Logger
@@ -196,7 +196,7 @@ type Server struct {
 
 // NewServer creates an ACP request router.
 func NewServer(
-	codec *StdioCodec,
+	codec Transport,
 	app appClient,
 	sessions *bridge.Store,
 	logger *slog.Logger,
@@ -337,9 +337,9 @@ func (s *Server) handleInitialize(id json.RawMessage, paramsRaw json.RawMessage)
 			Permissions:   true,
 		},
 		AgentInfo: &ImplementationInfo{
-			Name:    "codex-acp-go",
+			Name:    "acp-adapter",
 			Version: "dev",
-			Title:   "Codex ACP Go",
+			Title:   "ACP Adapter",
 		},
 		AuthMethods:      authMethods,
 		ActiveAuthMethod: s.currentAuthMode(),

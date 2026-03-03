@@ -6,7 +6,7 @@
 **目标**：可运行、可测试地完成 initialize/new/prompt/cancel 的“空心链路”。
 
 - 新增文件
-  - `cmd/codex-acp-go/main.go`
+  - `cmd/acp-adapter/main.go`
   - `internal/acp/codec_stdio.go`（newline JSON-RPC）
   - `internal/acp/server.go`（handlers：initialize/session/new/session/prompt/session/cancel）
   - `internal/appserver/process.go`（spawn `codex app-server`）

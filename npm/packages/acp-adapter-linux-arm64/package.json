@@ -1,7 +1,7 @@
 {
-  "name": "@beyond5959/codex-acp-go-linux-arm64",
+  "name": "@beyond5959/acp-adapter-linux-arm64",
   "version": "0.1.0",
-  "description": "linux arm64 binary for @beyond5959/codex-acp-go",
+  "description": "linux arm64 binary for @beyond5959/acp-adapter",
   "os": [
     "linux"
   ],
@@ -9,7 +9,7 @@
     "arm64"
   ],
   "files": [
-    "bin/codex-acp-go"
+    "bin/acp-adapter"
   ],
   "publishConfig": {
     "access": "public"

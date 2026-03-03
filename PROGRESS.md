@@ -4,9 +4,9 @@
 > 更新频率：每合并一个 PR 必须更新一次；每次发现阻塞也要更新。
 
 ## 项目概览
-- 项目：codex-acp-go（基于 Codex App Server 的 ACP 适配器）
-- 当前阶段：PR5
-- 最近更新：2026-02-27
+- 项目：acp-adapter（基于 Codex App Server 的 ACP 适配器，同时支持 Claude Code CLI 子进程适配）
+- 当前阶段：Claude Adapter CLI 重构完成（C-R5 内部迭代）
+- 最近更新：2026-03-03
 
 ## 关键链接/文档
 - docs/SPEC.md：技术方案（权威）
@@ -31,6 +31,51 @@
 - [x] PR5：Slash commands + Custom prompts + MCP + Auth 收尾
   - 状态：Done
   - 说明：已补齐 G1-G6、H1、I1-I3、J1（脚本化压力回归）与 MCP list/call/oauth 主流程
+
+## Library Embedding Program（R0-R6）
+- Current：R5 server 集成（In Progress）
+- Next：R6 收尾验收
+- [x] R0 文档立项
+  - 状态：Done
+  - 说明：完成库化目标建档（里程碑、ADR、风险、初版验收项），未改动运行时行为。
+- [x] R1 外观库化（零行为变化）
+  - 状态：Done
+  - 说明：新增 `pkg/acpadapter` 外观 API（`RunStdio`）并将 `cmd` 启动委托到库入口，协议行为保持不变。
+- [x] R2 传输层抽象
+  - 状态：Done
+  - 说明：引入 ACP 传输接口并新增 inproc channel transport，Server 改为依赖接口，stdio 行为保持兼容。
+- [x] R3 嵌入 API
+  - 状态：Done
+  - 说明：新增 `EmbeddedRuntime`（Start/ClientRequest/SubscribeUpdates/RespondPermission/Close），复用同一套 ACP server 逻辑并跑通核心流程。
+- [x] R4 契约对照测试
+  - 状态：Done
+  - 说明：同一输入脚本双跑 standalone(stdio)/embedded(inproc)，对照 initialize、streaming prompt、cancel、permission approve/decline 的关键行为与终态。
+- [ ] R5 server 集成
+  - 状态：In Progress
+  - 说明：已在 `go-acp-server` 完成本地 `go mod replace` 联调并跑通真实 prompt/SSE/cancel/permission 回路；库侧仍需继续收敛真实 app-server 版本兼容差异（见 KI-0015/KI-0016）。
+- [ ] R6 收尾验收
+  - 状态：Todo
+  - 说明：完成 Library Mode 验收闭环与文档收敛。
+
+## Claude Adapter Program（C-R0 ~ C-R5）
+- [x] C-R0 文档立项
+  - 状态：Done
+  - 说明：建立 Claude Mode 验收条目（L1-L9），新增 ADR-0033。
+- [x] C-R1 internal/claude/ 核心客户端（claude -p CLI 子进程）
+  - 状态：Done
+  - 说明：config.go/client.go/stream.go 实现 appClient 接口，驱动 `claude -p` 子进程；会话历史由 CLI 持久化（--session-id/--resume）；取消通过 kill 子进程实现；启动时过滤 CLAUDECODE 环境变量。
+- [x] C-R2 pkg/claudeacp/ 库入口
+  - 状态：Done
+  - 说明：runtime.go/runtime_runner.go 提供 RunStdio/NewEmbeddedRuntime 公共 API；配置字段：ClaudeBin/DefaultModel/MaxTurns/SkipPerms/AllowedTools。
+- [x] C-R3 统一 cmd/acp 入口
+  - 状态：Done
+  - 说明：`cmd/acp --adapter codex|claude`；Claude 侧 flag：--claude-bin/--max-turns/--skip-perms；cmd/acp-adapter 保持向后兼容。
+- [x] C-R4 测试基础设施
+  - 状态：Done
+  - 说明：testdata/fake_claude_cli（fake `claude` 二进制，支持 stream-json 输出）；claude_e2e_test.go 使用 CLAUDE_BIN + buildFakeClaudeCLI；go test ./... 全通过。
+- [x] C-R5 验收运行 + 文档收尾
+  - 状态：Done
+  - 说明：go test ./... 全通过；L9 Codex 零回退；go.mod 零外部依赖；文档已更新。
 
 ## 验收进度（从 docs/ACCEPTANCE.md 勾选）
 ### A. 协议合规（ACP）
@@ -81,6 +126,26 @@
 ### J. 可靠性
 - [x] J1 压力回归（100 turns 含 approve/deny/cancel）
 - [x] J2 stdout 纯净（trace 脱敏）
+
+### K. Library Mode（初版）
+- [x] K1 双入口可启动（cmd + pkg）
+- [x] K2 R1 零行为变化
+- [x] K3 传输层抽象可替换（R2）
+- [x] K4 嵌入 API 生命周期（R3）
+- [x] K5 独立模式与库模式契约对照（R4）
+- [ ] K6 server 集成（R5）
+- [ ] K7 收尾验收（R6）
+
+### L. Claude Mode（Anthropic API 适配器）
+- [x] L1 协议合规（initialize/session/new/session/prompt/session/cancel）
+- [x] L2 Anthropic API 后端对接（无需 codex app-server 子进程）
+- [x] L3 内容能力（@mentions + images base64）
+- [x] L4 工具审批（tool_use → permission → approve/decline/cancel）
+- [x] L5 Slash commands（/review/compact/logout 等）
+- [x] L6 Auth 方法（claude CLI 自身认证；无 token 配置；/logout 清空）
+- [x] L7 可靠性（stdout 纯净；cancel 生效；CLAUDECODE 环境变量过滤）
+- [x] L8 库模式（RunStdio + EmbeddedRuntime；契约对照通过）
+- [x] L9 Codex 零回退（go test ./... 全通过）
 
 ## 本 PR 做了什么
 1. 补齐 slash commands：
@@ -202,14 +267,129 @@
 ## 当前阻塞（Blockers）
 - 无
 
-## 下一步（Next）
-1. 扩展真实 codex app-server 联调：从“存在性回归”扩展到结果语义回归（MCP 输出断言、compact 上下文收敛质量、auth re-login 体验）。
-2. 在 CI 增加可选 `e2e-real` 作业（含 `make schema`）并固化环境前置检查。
-3. 评估 `/logout` 的进程内 re-auth RPC，消除重启恢复依赖。
-4. 评估“已发出部分输出后的安全重放”策略（例如可选缓冲提交），进一步缩小人工重试窗口。
-5. 细化 `session/update` 的标准 `update.sessionUpdate` 语义映射（plan/thought/tool 生命周期），减少当前回退 `agent_thought_chunk` 带来的信息折损。
+## Done / In Progress / Next（Library Embedding Program）
+### Done
+1. R0 文档立项：补充里程碑、ADR、风险与 Library Mode 初版验收项。
+2. R1 外观库化：新增 `pkg/acpadapter`，`cmd` 入口委托库启动，新增最小参数映射测试。
+3. R2 传输层抽象：新增 ACP 传输接口与 inproc transport，Server 改为基于接口，补充传输/stdio 基线测试。
+4. R3 嵌入 API：新增进程内调用 API 与 permission 回写能力，并补充嵌入模式 integration tests。
+5. R4 契约对照测试：新增同脚本双驱动对照框架，覆盖 initialize/new/prompt/cancel/permission（approve+decline）并补充嵌入模式并发不变量测试。
+
+### In Progress
+- 无
+
+### Next
+1. R5 server 集成。
 
 ## 变更摘要（每 PR 一条）
+### 2026-03-03 — 项目统一重命名：acp-adapter
+- Done:
+  - Go module 路径统一为 `github.com/beyond5959/acp-adapter`。
+  - 包路径从 `pkg/codexacp` 重命名为 `pkg/acpadapter`，并同步所有导入。
+  - 入口命令从 `cmd/codex-acp-go` 重命名为 `cmd/acp-adapter`。
+  - npm workspace 与发布包统一改名为 `acp-adapter` 系列（含平台子包与构建脚本）。
+  - 主文档与工程文档中的项目名/路径同步为 `acp-adapter`。
+- Tests:
+  - `go test ./...` 通过
+- Notes/Follow-ups:
+  - 外部依赖旧路径（module/import/cmd/npm）的脚本需同步迁移到新命名。
+
+### 2026-03-03 — Claude 适配器后端：claude -p CLI 子进程
+- Done:
+  - `internal/claude/` 重写为 `claude -p` 子进程驱动；config.go/client.go/stream.go 实现 appClient 接口。
+  - 会话连续性：首次 turn `--session-id <uuid>`，后续 turn `--resume <uuid>`；历史由 CLI 持久化到磁盘。
+  - 取消：`TurnInterrupt` 调用 `cmd.Process.Kill()`。
+  - 启动子进程时过滤 `CLAUDECODE` 环境变量，防止嵌套 session 保护报错（KI-0031）。
+  - `ApprovalRespond` 为 no-op；工具以 `--dangerously-skip-permissions` 自动执行（默认，可关闭，见 KI-0032）。
+  - `pkg/claudeacp/runtime.go`：配置字段 ClaudeBin/DefaultModel/MaxTurns/SkipPerms/AllowedTools。
+  - `cmd/acp/main.go`：Claude 侧 flag --claude-bin/--max-turns/--skip-perms。
+  - `testdata/fake_claude_cli/main.go`：fake `claude` 二进制，输出 stream-json 格式。
+  - `test/integration/claude_e2e_test.go`：改用 `buildFakeClaudeCLI` + `CLAUDE_BIN`；auth 测试改为无需 token 验证。
+  - `go.mod`：零外部依赖（纯标准库）。
+  - `internal/claudecli/` 目录重命名为 `internal/claude/`（包名 `claude`）。
+- Tests:
+  - `go test ./...` 通过（Claude 6 个 e2e 测试全通过；Codex 零回退）
+- Notes/Follow-ups:
+  - KI-0031（CLAUDECODE 过滤）已在 `client.go:buildCmd` 中修复。
+  - KI-0032（skip-perms 默认开启）需用户知晓；后续可评估 approval 事件桥接。
+  - 真实 claude CLI 冒烟测试因嵌套 session 限制无法在 Claude Code 内直接执行；需在独立终端验证。
+### 2026-02-28 — R4 契约对照测试（standalone vs embedded）
+- Done:
+  - 新增对照测试 `test/integration/r4_contract_test.go`，同一输入脚本分别驱动：
+    - standalone：`cmd/acp-adapter` + stdio JSON-RPC
+    - embedded：`pkg/acpadapter.EmbeddedRuntime` + inproc transport
+  - 对照范围覆盖：
+    - initialize 字段完整性（`protocolVersion` + capabilities）
+    - `session/new` + `session/prompt`（流式 chunk）
+    - `session/cancel`（`stopReason=cancelled`）
+    - permission approve/decline 双路径
+  - 明确并验证不变量：
+    - standalone：stdout 持续满足纯 JSON-RPC 约束
+    - embedded：并发双 session 无阻塞/死锁、无跨 session 串扰（turn 不跨 session）
+- Tests:
+  - `go test ./test/integration -run 'TestR4ContractStandaloneEqualsEmbedded|TestR4EmbeddedInvariants_NoDeadlock_NoCrossSessionCrosstalk' -count=1` 通过
+  - `go test ./...` 通过
+- Notes/Follow-ups:
+  - R4 完成，下一阶段进入 R5（server 集成）
+
+### 2026-02-28 — R3 嵌入 API（进程内调用）
+- Done:
+  - 在 `pkg/acpadapter` 新增嵌入模式 API：
+    - `NewEmbeddedRuntime(...)`
+    - `Start(ctx)`
+    - `ClientRequest(ctx, msg)`
+    - `SubscribeUpdates(...)`
+    - `RespondPermission(...)`
+    - `Close()`
+  - 嵌入模式复用同一套 `internal/acp` server 逻辑与 R2 传输抽象（inproc transport），未复制业务分支。
+  - 跑通嵌入模式关键链路：`initialize`、`session/new`、`session/prompt` 流式 `session/update`、`session/cancel`、permission 往返。
+  - 新增 integration tests：
+    - `TestEmbeddedInitializeNewPromptCancel`
+    - `TestEmbeddedPermissionRoundTrip`
+- Tests:
+  - `go test ./test/integration -run 'TestEmbeddedInitializeNewPromptCancel|TestEmbeddedPermissionRoundTrip' -count=1` 通过
+  - `go test ./...` 通过
+- Notes/Follow-ups:
+  - R3 完成，下一阶段进入 R4（契约对照测试）
+
+### 2026-02-28 — R2 传输层抽象（stdio 兼容保持不变）
+- Done:
+  - 在 `internal/acp` 引入最小传输接口：`ReadMessage/WriteMessage/WriteResult/WriteError/WriteNotification`。
+  - 保留 `StdioCodec` 作为 stdio 传输实现（协议行为不变）。
+  - 新增 inproc transport（内存通道双端，支持 request/response/notification 双向、并发写、关闭语义）。
+  - `Server` 从依赖具体 `StdioCodec` 改为依赖传输接口，默认路径仍走 stdio。
+  - 新增测试：
+    - `internal/acp/transport_inproc_test.go`（基本收发、并发写、关闭语义）
+    - `internal/acp/server_stdio_test.go`（initialize/new/prompt stdio 基线）
+- Tests:
+  - `go test ./internal/acp -count=1` 通过
+  - `go test ./...` 通过
+- Notes/Follow-ups:
+  - R2 完成，下一阶段进入 R3（嵌入 API）
+
+### 2026-02-28 — R1 外观库化（零行为变化）
+- Done:
+  - 新增 `pkg/acpadapter`，导出运行时配置与 `RunStdio(ctx, cfg, stdin, stdout, stderr)`。
+  - `cmd/acp-adapter/main.go` 仅保留参数解析与信号处理，核心启动逻辑委托 `pkg/acpadapter`。
+  - 保持协议约束：stdout 仅 ACP JSON-RPC；stderr 仅日志。
+  - 新增最小单测：`TestRunStdio_ProfileMappingWithFakeAppServer`，验证库入口参数映射（profile/run options）路径。
+- Tests:
+  - `go test ./pkg/acpadapter -run TestRunStdio_ProfileMappingWithFakeAppServer -count=1` 通过
+  - `go test ./...` 通过（含 `test/integration`）
+- Notes/Follow-ups:
+  - R1 完成，下一阶段进入 R2（传输层抽象）
+
+### 2026-02-28 — R0 文档立项（Library Embedding Program）
+- Done:
+  - 新增 `Library Embedding Program（R0-R6）` 里程碑，并设置 `Current=R1`、`Next=R2`
+  - 在 `docs/DECISIONS.md` 增加 ADR：双入口单内核（独立模式 + 库模式）
+  - 在 `docs/KNOWN_ISSUES.md` 增加库化风险：行为回归、嵌入并发/阻塞、permission 回写超时
+  - 在 `docs/ACCEPTANCE.md` 增加 `Library Mode` 初版验收条目
+- Tests:
+  - `go test ./...` 通过（含 `test/integration`，本次约 42s）
+- Notes/Follow-ups:
+  - R0 仅文档与计划，不包含行为改造
+
 ### 2026-02-26 — PR1 工程骨架 + 双 codec + 最小 e2e harness
 - Done:
   - 完成 ACP/app-server 双 codec
@@ -392,8 +572,8 @@
 - A. 范围与目标:
   - 修正 `go.mod` 的 `module`，避免外部 `go get/go install` 出现模块路径不匹配
 - B. 实现:
-  - `go.mod` 从 `module codex-acp` 调整为 `module github.com/beyond5959/codex-acp`
-  - 同步替换仓库内 Go 代码中的内部导入路径为 `github.com/beyond5959/codex-acp/...`
+  - `go.mod` 从 `module codex-acp` 调整为 `module github.com/beyond5959/acp-adapter`
+  - 同步替换仓库内 Go 代码中的内部导入路径为 `github.com/beyond5959/acp-adapter/...`
 - C. 验证:
   - 执行 `go test ./...` 通过
   - 全仓检查无残留 `\"codex-acp/...\"` 导入

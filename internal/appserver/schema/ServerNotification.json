@@ -114,6 +114,26 @@
         "method": {
           "type": "string",
           "enum": [
+            "thread/closed"
+          ],
+          "title": "Thread/closedNotificationMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadClosedNotification"
+        }
+      },
+      "title": "Thread/closedNotification"
+    },
+    {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
             "thread/name/updated"
           ],
           "title": "Thread/name/updatedNotificationMethod"
@@ -645,6 +665,106 @@
         }
       },
       "title": "FuzzyFileSearch/sessionCompletedNotification"
+    },
+    {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "thread/realtime/started"
+          ],
+          "title": "Thread/realtime/startedNotificationMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadRealtimeStartedNotification"
+        }
+      },
+      "title": "Thread/realtime/startedNotification"
+    },
+    {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "thread/realtime/itemAdded"
+          ],
+          "title": "Thread/realtime/itemAddedNotificationMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadRealtimeItemAddedNotification"
+        }
+      },
+      "title": "Thread/realtime/itemAddedNotification"
+    },
+    {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "thread/realtime/outputAudio/delta"
+          ],
+          "title": "Thread/realtime/outputAudio/deltaNotificationMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadRealtimeOutputAudioDeltaNotification"
+        }
+      },
+      "title": "Thread/realtime/outputAudio/deltaNotification"
+    },
+    {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "thread/realtime/error"
+          ],
+          "title": "Thread/realtime/errorNotificationMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadRealtimeErrorNotification"
+        }
+      },
+      "title": "Thread/realtime/errorNotification"
+    },
+    {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "thread/realtime/closed"
+          ],
+          "title": "Thread/realtime/closedNotificationMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadRealtimeClosedNotification"
+        }
+      },
+      "title": "Thread/realtime/closedNotification"
     },
     {
       "description": "Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.",
@@ -1485,6 +1605,58 @@
           "type": "string"
         }
       }
+    },
+    "DynamicToolCallOutputContentItem": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "text",
+            "type"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "inputText"
+              ],
+              "title": "InputTextDynamicToolCallOutputContentItemType"
+            }
+          },
+          "title": "InputTextDynamicToolCallOutputContentItem"
+        },
+        {
+          "type": "object",
+          "required": [
+            "imageUrl",
+            "type"
+          ],
+          "properties": {
+            "imageUrl": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "inputImage"
+              ],
+              "title": "InputImageDynamicToolCallOutputContentItemType"
+            }
+          },
+          "title": "InputImageDynamicToolCallOutputContentItem"
+        }
+      ]
+    },
+    "DynamicToolCallStatus": {
+      "type": "string",
+      "enum": [
+        "inProgress",
+        "completed",
+        "failed"
+      ]
     },
     "ErrorNotification": {
       "type": "object",
@@ -2382,6 +2554,17 @@
         }
       }
     },
+    "ThreadClosedNotification": {
+      "type": "object",
+      "required": [
+        "threadId"
+      ],
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      }
+    },
     "ThreadId": {
       "type": "string"
     },
@@ -2676,6 +2859,59 @@
         {
           "type": "object",
           "required": [
+            "arguments",
+            "id",
+            "status",
+            "tool",
+            "type"
+          ],
+          "properties": {
+            "arguments": true,
+            "contentItems": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/DynamicToolCallOutputContentItem"
+              }
+            },
+            "durationMs": {
+              "description": "The duration of the dynamic tool call in milliseconds.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            },
+            "id": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/definitions/DynamicToolCallStatus"
+            },
+            "success": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "tool": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "dynamicToolCall"
+              ],
+              "title": "DynamicToolCallThreadItemType"
+            }
+          },
+          "title": "DynamicToolCallThreadItem"
+        },
+        {
+          "type": "object",
+          "required": [
             "agentsStates",
             "id",
             "receiverThreadIds",
@@ -2882,6 +3118,120 @@
             "string",
             "null"
           ]
+        }
+      }
+    },
+    "ThreadRealtimeAudioChunk": {
+      "description": "EXPERIMENTAL - thread realtime audio chunk.",
+      "type": "object",
+      "required": [
+        "data",
+        "numChannels",
+        "sampleRate"
+      ],
+      "properties": {
+        "data": {
+          "type": "string"
+        },
+        "numChannels": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "sampleRate": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "samplesPerChannel": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    },
+    "ThreadRealtimeClosedNotification": {
+      "description": "EXPERIMENTAL - emitted when thread realtime transport closes.",
+      "type": "object",
+      "required": [
+        "threadId"
+      ],
+      "properties": {
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        }
+      }
+    },
+    "ThreadRealtimeErrorNotification": {
+      "description": "EXPERIMENTAL - emitted when thread realtime encounters an error.",
+      "type": "object",
+      "required": [
+        "message",
+        "threadId"
+      ],
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      }
+    },
+    "ThreadRealtimeItemAddedNotification": {
+      "description": "EXPERIMENTAL - raw non-audio thread realtime item emitted by the backend.",
+      "type": "object",
+      "required": [
+        "item",
+        "threadId"
+      ],
+      "properties": {
+        "item": true,
+        "threadId": {
+          "type": "string"
+        }
+      }
+    },
+    "ThreadRealtimeOutputAudioDeltaNotification": {
+      "description": "EXPERIMENTAL - streamed output audio emitted by thread realtime.",
+      "type": "object",
+      "required": [
+        "audio",
+        "threadId"
+      ],
+      "properties": {
+        "audio": {
+          "$ref": "#/definitions/ThreadRealtimeAudioChunk"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      }
+    },
+    "ThreadRealtimeStartedNotification": {
+      "description": "EXPERIMENTAL - emitted when thread realtime startup is accepted.",
+      "type": "object",
+      "required": [
+        "threadId"
+      ],
+      "properties": {
+        "sessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
         }
       }
     },

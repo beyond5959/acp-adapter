@@ -84,7 +84,7 @@ func Parse() Config {
 
 	cfg.AppServerArgs = splitArgs(argsRaw)
 	cfg.Profiles = loadProfiles(profilesFile, profilesJSON)
-	cfg.InitialAuthMode = detectAuthMode(
+	cfg.InitialAuthMode = DetectAuthMode(
 		os.Getenv("CODEX_API_KEY"),
 		os.Getenv("OPENAI_API_KEY"),
 		os.Getenv("CHATGPT_SUBSCRIPTION_ACTIVE"),
@@ -171,7 +171,7 @@ func parseProfilesJSON(data []byte) (map[string]ProfileConfig, error) {
 	return out, nil
 }
 
-func detectAuthMode(codexAPIKey string, openAIAPIKey string, subscriptionRaw string) string {
+func DetectAuthMode(codexAPIKey string, openAIAPIKey string, subscriptionRaw string) string {
 	if strings.TrimSpace(codexAPIKey) != "" {
 		return "codex_api_key"
 	}

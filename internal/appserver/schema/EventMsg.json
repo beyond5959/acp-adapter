@@ -1139,6 +1139,16 @@
             "null"
           ]
         },
+        "available_decisions": {
+          "description": "Ordered list of decisions the client may present for this prompt.\n\nWhen absent, clients should derive the legacy default set from the other fields on this request.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/ReviewDecision"
+          }
+        },
         "call_id": {
           "description": "Identifier for the associated command execution item.",
           "type": "string"
@@ -1279,26 +1289,66 @@
     {
       "type": "object",
       "required": [
-        "item_id",
-        "skill_name",
+        "arguments",
+        "call_id",
+        "content_items",
+        "duration",
+        "success",
+        "tool",
+        "turn_id",
         "type"
       ],
       "properties": {
-        "item_id": {
+        "arguments": {
+          "description": "Dynamic tool call arguments."
+        },
+        "call_id": {
+          "description": "Identifier for the corresponding DynamicToolCallRequest.",
           "type": "string"
         },
-        "skill_name": {
+        "content_items": {
+          "description": "Dynamic tool response content items.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DynamicToolCallOutputContentItem"
+          }
+        },
+        "duration": {
+          "description": "The duration of the dynamic tool call.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Duration"
+            }
+          ]
+        },
+        "error": {
+          "description": "Optional error text when the tool call failed before producing a response.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "success": {
+          "description": "Whether the tool call succeeded.",
+          "type": "boolean"
+        },
+        "tool": {
+          "description": "Dynamic tool name.",
+          "type": "string"
+        },
+        "turn_id": {
+          "description": "Turn ID that this dynamic tool call belongs to.",
           "type": "string"
         },
         "type": {
           "type": "string",
           "enum": [
-            "skill_request_approval"
+            "dynamic_tool_call_response"
           ],
-          "title": "SkillRequestApprovalEventMsgType"
+          "title": "DynamicToolCallResponseEventMsgType"
         }
       },
-      "title": "SkillRequestApprovalEventMsg"
+      "title": "DynamicToolCallResponseEventMsg"
     },
     {
       "type": "object",
@@ -3218,6 +3268,50 @@
         }
       }
     },
+    "DynamicToolCallOutputContentItem": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "text",
+            "type"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "inputText"
+              ],
+              "title": "InputTextDynamicToolCallOutputContentItemType"
+            }
+          },
+          "title": "InputTextDynamicToolCallOutputContentItem"
+        },
+        {
+          "type": "object",
+          "required": [
+            "imageUrl",
+            "type"
+          ],
+          "properties": {
+            "imageUrl": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "inputImage"
+              ],
+              "title": "InputImageDynamicToolCallOutputContentItemType"
+            }
+          },
+          "title": "InputImageDynamicToolCallOutputContentItem"
+        }
+      ]
+    },
     "EventMsg": {
       "description": "Response event from the agent NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.",
       "oneOf": [
@@ -4357,6 +4451,16 @@
                 "null"
               ]
             },
+            "available_decisions": {
+              "description": "Ordered list of decisions the client may present for this prompt.\n\nWhen absent, clients should derive the legacy default set from the other fields on this request.",
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/ReviewDecision"
+              }
+            },
             "call_id": {
               "description": "Identifier for the associated command execution item.",
               "type": "string"
@@ -4497,26 +4601,66 @@
         {
           "type": "object",
           "required": [
-            "item_id",
-            "skill_name",
+            "arguments",
+            "call_id",
+            "content_items",
+            "duration",
+            "success",
+            "tool",
+            "turn_id",
             "type"
           ],
           "properties": {
-            "item_id": {
+            "arguments": {
+              "description": "Dynamic tool call arguments."
+            },
+            "call_id": {
+              "description": "Identifier for the corresponding DynamicToolCallRequest.",
               "type": "string"
             },
-            "skill_name": {
+            "content_items": {
+              "description": "Dynamic tool response content items.",
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/DynamicToolCallOutputContentItem"
+              }
+            },
+            "duration": {
+              "description": "The duration of the dynamic tool call.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Duration"
+                }
+              ]
+            },
+            "error": {
+              "description": "Optional error text when the tool call failed before producing a response.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "success": {
+              "description": "Whether the tool call succeeded.",
+              "type": "boolean"
+            },
+            "tool": {
+              "description": "Dynamic tool name.",
+              "type": "string"
+            },
+            "turn_id": {
+              "description": "Turn ID that this dynamic tool call belongs to.",
               "type": "string"
             },
             "type": {
               "type": "string",
               "enum": [
-                "skill_request_approval"
+                "dynamic_tool_call_response"
               ],
-              "title": "SkillRequestApprovalEventMsgType"
+              "title": "DynamicToolCallResponseEventMsgType"
             }
           },
-          "title": "SkillRequestApprovalEventMsg"
+          "title": "DynamicToolCallResponseEventMsg"
         },
         {
           "type": "object",
@@ -7604,6 +7748,86 @@
           "$ref": "#/definitions/ReviewLineRange"
         }
       }
+    },
+    "ReviewDecision": {
+      "description": "User's decision in response to an ExecApprovalRequest.",
+      "oneOf": [
+        {
+          "description": "User has approved this command and the agent should execute it.",
+          "type": "string",
+          "enum": [
+            "approved"
+          ]
+        },
+        {
+          "description": "User has approved this command and wants to apply the proposed execpolicy amendment so future matching commands are permitted.",
+          "type": "object",
+          "required": [
+            "approved_execpolicy_amendment"
+          ],
+          "properties": {
+            "approved_execpolicy_amendment": {
+              "type": "object",
+              "required": [
+                "proposed_execpolicy_amendment"
+              ],
+              "properties": {
+                "proposed_execpolicy_amendment": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "additionalProperties": false,
+          "title": "ApprovedExecpolicyAmendmentReviewDecision"
+        },
+        {
+          "description": "User has approved this request and wants future prompts in the same session-scoped approval cache to be automatically approved for the remainder of the session.",
+          "type": "string",
+          "enum": [
+            "approved_for_session"
+          ]
+        },
+        {
+          "description": "User chose to persist a network policy rule (allow/deny) for future requests to the same host.",
+          "type": "object",
+          "required": [
+            "network_policy_amendment"
+          ],
+          "properties": {
+            "network_policy_amendment": {
+              "type": "object",
+              "required": [
+                "network_policy_amendment"
+              ],
+              "properties": {
+                "network_policy_amendment": {
+                  "$ref": "#/definitions/NetworkPolicyAmendment"
+                }
+              }
+            }
+          },
+          "additionalProperties": false,
+          "title": "NetworkPolicyAmendmentReviewDecision"
+        },
+        {
+          "description": "User has denied this command and the agent should not execute it, but it should continue the session and try something else.",
+          "type": "string",
+          "enum": [
+            "denied"
+          ]
+        },
+        {
+          "description": "User has denied this command and the agent should not do anything until the user's next command.",
+          "type": "string",
+          "enum": [
+            "abort"
+          ]
+        }
+      ]
     },
     "ReviewFinding": {
       "description": "A single review finding describing an observed issue or recommendation.",

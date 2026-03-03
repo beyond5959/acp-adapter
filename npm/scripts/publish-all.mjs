@@ -9,13 +9,13 @@ const npmCache = resolve(npmRoot, ".npm-cache");
 mkdirSync(npmCache, { recursive: true });
 
 const packages = [
-  "@beyond5959/codex-acp-go-darwin-arm64",
-  "@beyond5959/codex-acp-go-darwin-x64",
-  "@beyond5959/codex-acp-go-linux-arm64",
-  "@beyond5959/codex-acp-go-linux-x64",
-  "@beyond5959/codex-acp-go-win32-arm64",
-  "@beyond5959/codex-acp-go-win32-x64",
-  "@beyond5959/codex-acp-go",
+  "@beyond5959/acp-adapter-darwin-arm64",
+  "@beyond5959/acp-adapter-darwin-x64",
+  "@beyond5959/acp-adapter-linux-arm64",
+  "@beyond5959/acp-adapter-linux-x64",
+  "@beyond5959/acp-adapter-win32-arm64",
+  "@beyond5959/acp-adapter-win32-x64",
+  "@beyond5959/acp-adapter",
 ];
 
 for (const pkg of packages) {

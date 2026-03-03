@@ -1,15 +1,15 @@
 {
-  "name": "@beyond5959/codex-acp-go-win32-x64",
+  "name": "@beyond5959/acp-adapter-darwin-x64",
   "version": "0.1.0",
-  "description": "win32 x64 binary for @beyond5959/codex-acp-go",
+  "description": "darwin x64 binary for @beyond5959/acp-adapter",
   "os": [
-    "win32"
+    "darwin"
   ],
   "cpu": [
     "x64"
   ],
   "files": [
-    "bin/codex-acp-go.exe"
+    "bin/acp-adapter"
   ],
   "publishConfig": {
     "access": "public"

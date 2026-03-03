@@ -1,5 +1,5 @@
 {
-  "name": "codex-acp-go-npm-workspace",
+  "name": "acp-adapter-npm-workspace",
   "private": true,
   "version": "0.1.0",
   "workspaces": [
