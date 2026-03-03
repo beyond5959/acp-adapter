@@ -13,13 +13,13 @@ if (!version || !/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) {
 
 const packageFiles = [
   "package.json",
-  "packages/codex-acp-go/package.json",
-  "packages/codex-acp-go-darwin-arm64/package.json",
-  "packages/codex-acp-go-darwin-x64/package.json",
-  "packages/codex-acp-go-linux-arm64/package.json",
-  "packages/codex-acp-go-linux-x64/package.json",
-  "packages/codex-acp-go-win32-arm64/package.json",
-  "packages/codex-acp-go-win32-x64/package.json",
+  "packages/acp-adapter/package.json",
+  "packages/acp-adapter-darwin-arm64/package.json",
+  "packages/acp-adapter-darwin-x64/package.json",
+  "packages/acp-adapter-linux-arm64/package.json",
+  "packages/acp-adapter-linux-x64/package.json",
+  "packages/acp-adapter-win32-arm64/package.json",
+  "packages/acp-adapter-win32-x64/package.json",
 ];
 
 for (const rel of packageFiles) {
@@ -27,9 +27,9 @@ for (const rel of packageFiles) {
   const doc = JSON.parse(readFileSync(abs, "utf8"));
   doc.version = version;
 
-  if (doc.name === "@beyond5959/codex-acp-go" && doc.optionalDependencies) {
+  if (doc.name === "@beyond5959/acp-adapter" && doc.optionalDependencies) {
     for (const depName of Object.keys(doc.optionalDependencies)) {
-      if (depName.startsWith("@beyond5959/codex-acp-go-")) {
+      if (depName.startsWith("@beyond5959/acp-adapter-")) {
         doc.optionalDependencies[depName] = version;
       }
     }

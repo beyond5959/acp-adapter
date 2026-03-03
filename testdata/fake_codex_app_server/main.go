@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/beyond5959/codex-acp/internal/appserver"
+	"github.com/beyond5959/acp-adapter/internal/appserver"
 )
 
 type turnControl struct {

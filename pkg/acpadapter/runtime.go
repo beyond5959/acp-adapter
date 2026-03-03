@@ -1,4 +1,4 @@
-package codexacp
+package acpadapter
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/beyond5959/codex-acp/internal/acp"
+	"github.com/beyond5959/acp-adapter/internal/acp"
 )
 
 const (

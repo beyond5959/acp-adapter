@@ -6,12 +6,12 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
 
 const expected = [
-  "npm/packages/codex-acp-go-darwin-arm64/bin/codex-acp-go",
-  "npm/packages/codex-acp-go-darwin-x64/bin/codex-acp-go",
-  "npm/packages/codex-acp-go-linux-arm64/bin/codex-acp-go",
-  "npm/packages/codex-acp-go-linux-x64/bin/codex-acp-go",
-  "npm/packages/codex-acp-go-win32-arm64/bin/codex-acp-go.exe",
-  "npm/packages/codex-acp-go-win32-x64/bin/codex-acp-go.exe",
+  "npm/packages/acp-adapter-darwin-arm64/bin/acp-adapter",
+  "npm/packages/acp-adapter-darwin-x64/bin/acp-adapter",
+  "npm/packages/acp-adapter-linux-arm64/bin/acp-adapter",
+  "npm/packages/acp-adapter-linux-x64/bin/acp-adapter",
+  "npm/packages/acp-adapter-win32-arm64/bin/acp-adapter.exe",
+  "npm/packages/acp-adapter-win32-x64/bin/acp-adapter.exe",
 ];
 
 for (const rel of expected) {

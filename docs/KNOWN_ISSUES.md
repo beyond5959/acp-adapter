@@ -36,6 +36,7 @@
 - KI-0030：Claude /compact 仅做摘要 prompt 压缩，不跨 CLI session 持久化
 - KI-0031：Claude 子进程 CLAUDECODE 环境变量需过滤，否则触发嵌套 session 保护
 - KI-0032：Claude 适配器 --dangerously-skip-permissions 默认开启
+- KI-0033：项目重命名后的兼容路径变更（module/import/cmd/npm）
 
 ---
 
@@ -226,16 +227,32 @@
 
 ## KI-0020：go module 路径与仓库地址不一致会导致外部安装失败
 - 现象：
-  - `go.mod` 若使用短 module（如 `codex-acp`）而仓库地址为 `github.com/beyond5959/codex-acp`，外部使用仓库地址安装会报模块路径不匹配。
+  - `go.mod` 若使用短 module（如 `acp-adapter`）而仓库地址为 `github.com/beyond5959/acp-adapter`，外部使用仓库地址安装会报模块路径不匹配。
 - 影响：
   - `go get` / `go install` 失败，第三方集成与 CI 拉取依赖不稳定。
 - 复现：
-  - 保持短 module 路径后执行：`go install github.com/beyond5959/codex-acp/cmd/codex-acp-go@latest`。
+  - 保持短 module 路径后执行：`go install github.com/beyond5959/acp-adapter/cmd/acp-adapter@latest`。
 - Workaround：
-  - 使用 canonical module：`module github.com/beyond5959/codex-acp`。
-  - 变更后同步替换仓库内 `codex-acp/...` 导入路径。
+  - 使用 canonical module：`module github.com/beyond5959/acp-adapter`。
+  - 变更后同步替换仓库内 `acp-adapter/...` 导入路径。
 - 后续计划：
   - 仓库地址若变更（迁移/重命名），同一 PR 内同步更新 `go.mod` 和全部内部导入。
+
+## KI-0033：项目重命名后的兼容路径变更（module/import/cmd/npm）
+- 现象：
+  - 项目从 `codex-acp-go` 重命名为 `acp-adapter` 后，旧路径（如 `cmd/codex-acp-go`、`pkg/codexacp`、`github.com/beyond5959/codex-acp`、`@beyond5959/codex-acp-go`）已不可用。
+- 影响：
+  - 外部脚本、CI 配置、第三方导入若仍依赖旧命名，会出现构建失败或命令找不到。
+- 复现：
+  - 继续执行旧命令：`go build ./cmd/codex-acp-go` 或 `go test` 时导入 `github.com/beyond5959/codex-acp/...`。
+- Workaround：
+  - 统一切换到新路径：
+    - Go module/import：`github.com/beyond5959/acp-adapter`
+    - cmd 入口：`cmd/acp-adapter`
+    - 包路径：`pkg/acpadapter`
+    - npm 包：`@beyond5959/acp-adapter` 及其平台子包
+- 后续计划：
+  - 当前仓库内已完成替换并通过 `go test ./...`；对外使用方需同步升级配置。
 
 ## KI-0021：`session/update` 的标准 `update.sessionUpdate` 在低频事件上仍是回退语义
 - 现象：
@@ -267,14 +284,14 @@
 
 ## KI-0023：旧二进制缺少 `initialize.protocolVersion`，严格 ACP 客户端会在连接阶段失败
 - 现象：
-  - 使用旧版 `codex-acp-go` 二进制连接严格 ACP 客户端（如 Zed）时，可能在连接阶段报错：`failed to deserialize response`。
+  - 使用旧版 `acp-adapter` 二进制连接严格 ACP 客户端（如 Zed）时，可能在连接阶段报错：`failed to deserialize response`。
 - 影响：
   - 初始化握手失败，无法进入认证和会话创建流程。
 - 复现：
   - 使用未包含本次修复的旧二进制启动 agent，并让客户端发 `initialize(protocolVersion=1)`。
 - Workaround：
   - 重新构建并替换二进制：
-    - `go build -o ./bin/codex-acp-go ./cmd/codex-acp-go`
+    - `go build -o ./bin/acp-adapter ./cmd/acp-adapter`
   - 重启 ACP 客户端后重连。
 - 后续计划：
   - 保持 `TestE2EInitializeIncludesACPStandardFields` 回归，防止该字段再次回退。

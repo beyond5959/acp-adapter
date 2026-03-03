@@ -1,4 +1,4 @@
-package codexacp
+package acpadapter
 
 import (
 	"context"
@@ -7,10 +7,10 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/beyond5959/codex-acp/internal/acp"
-	"github.com/beyond5959/codex-acp/internal/appserver"
-	"github.com/beyond5959/codex-acp/internal/bridge"
-	"github.com/beyond5959/codex-acp/internal/observability"
+	"github.com/beyond5959/acp-adapter/internal/acp"
+	"github.com/beyond5959/acp-adapter/internal/appserver"
+	"github.com/beyond5959/acp-adapter/internal/bridge"
+	"github.com/beyond5959/acp-adapter/internal/observability"
 )
 
 func runRuntime(

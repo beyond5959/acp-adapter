@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/beyond5959/codex-acp/pkg/codexacp"
+	"github.com/beyond5959/acp-adapter/pkg/acpadapter"
 )
 
 func TestEmbeddedInitializeNewPromptCancel(t *testing.T) {
@@ -17,7 +17,7 @@ func TestEmbeddedInitializeNewPromptCancel(t *testing.T) {
 	rootDir := repoRoot(t)
 	fakeServerBin := buildBinary(t, rootDir, "./testdata/fake_codex_app_server")
 
-	runtime := codexacp.NewEmbeddedRuntime(codexacp.RuntimeConfig{
+	runtime := acpadapter.NewEmbeddedRuntime(acpadapter.RuntimeConfig{
 		AppServerCommand: fakeServerBin,
 		AppServerArgs:    nil,
 		LogLevel:         "debug",
@@ -70,7 +70,7 @@ func TestEmbeddedInitializeNewPromptCancel(t *testing.T) {
 		promptDone <- embeddedCallResult{response: resp, err: err}
 	}()
 
-	if _, err := waitEmbeddedUpdate(updates, 4*time.Second, func(msg codexacp.RPCMessage) bool {
+	if _, err := waitEmbeddedUpdate(updates, 4*time.Second, func(msg acpadapter.RPCMessage) bool {
 		return msg.Method == "session/update"
 	}); err != nil {
 		t.Fatalf("wait first session/update: %v", err)
@@ -120,7 +120,7 @@ func TestEmbeddedPermissionRoundTrip(t *testing.T) {
 	rootDir := repoRoot(t)
 	fakeServerBin := buildBinary(t, rootDir, "./testdata/fake_codex_app_server")
 
-	runtime := codexacp.NewEmbeddedRuntime(codexacp.RuntimeConfig{
+	runtime := acpadapter.NewEmbeddedRuntime(acpadapter.RuntimeConfig{
 		AppServerCommand: fakeServerBin,
 		LogLevel:         "debug",
 		PatchApplyMode:   "appserver",
@@ -169,7 +169,7 @@ func TestEmbeddedPermissionRoundTrip(t *testing.T) {
 		promptDone <- embeddedCallResult{response: resp, err: err}
 	}()
 
-	permissionMsg, err := waitEmbeddedUpdate(updates, 5*time.Second, func(msg codexacp.RPCMessage) bool {
+	permissionMsg, err := waitEmbeddedUpdate(updates, 5*time.Second, func(msg acpadapter.RPCMessage) bool {
 		return msg.Method == "session/request_permission" && msg.ID != nil
 	})
 	if err != nil {
@@ -189,7 +189,7 @@ func TestEmbeddedPermissionRoundTrip(t *testing.T) {
 	if err := runtime.RespondPermission(
 		ctx,
 		*permissionMsg.ID,
-		codexacp.PermissionDecision{Outcome: "approved"},
+		acpadapter.PermissionDecision{Outcome: "approved"},
 	); err != nil {
 		t.Fatalf("respond permission: %v", err)
 	}
@@ -217,18 +217,18 @@ func TestEmbeddedPermissionRoundTrip(t *testing.T) {
 }
 
 type embeddedCallResult struct {
-	response codexacp.RPCMessage
+	response acpadapter.RPCMessage
 	err      error
 }
 
 func embeddedRequest(
 	t *testing.T,
 	ctx context.Context,
-	runtime *codexacp.EmbeddedRuntime,
+	runtime *acpadapter.EmbeddedRuntime,
 	id string,
 	method string,
 	params any,
-) codexacp.RPCMessage {
+) acpadapter.RPCMessage {
 	t.Helper()
 	response, err := runtime.ClientRequest(ctx, embeddedRPCRequest(id, method, params))
 	if err != nil {
@@ -237,9 +237,9 @@ func embeddedRequest(
 	return response
 }
 
-func embeddedRPCRequest(id string, method string, params any) codexacp.RPCMessage {
+func embeddedRPCRequest(id string, method string, params any) acpadapter.RPCMessage {
 	requestID := json.RawMessage(strconvQuote(id))
-	message := codexacp.RPCMessage{
+	message := acpadapter.RPCMessage{
 		JSONRPC: "2.0",
 		ID:      &requestID,
 		Method:  method,
@@ -252,22 +252,22 @@ func embeddedRPCRequest(id string, method string, params any) codexacp.RPCMessag
 }
 
 func waitEmbeddedUpdate(
-	updates <-chan codexacp.RPCMessage,
+	updates <-chan acpadapter.RPCMessage,
 	timeout time.Duration,
-	predicate func(codexacp.RPCMessage) bool,
-) (codexacp.RPCMessage, error) {
+	predicate func(acpadapter.RPCMessage) bool,
+) (acpadapter.RPCMessage, error) {
 	deadline := time.After(timeout)
 	for {
 		select {
 		case msg, ok := <-updates:
 			if !ok {
-				return codexacp.RPCMessage{}, errors.New("updates channel closed")
+				return acpadapter.RPCMessage{}, errors.New("updates channel closed")
 			}
 			if predicate(msg) {
 				return msg, nil
 			}
 		case <-deadline:
-			return codexacp.RPCMessage{}, errors.New("timed out waiting embedded update")
+			return acpadapter.RPCMessage{}, errors.New("timed out waiting embedded update")
 		}
 	}
 }

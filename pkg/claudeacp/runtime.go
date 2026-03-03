@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/beyond5959/codex-acp/internal/acp"
-	"github.com/beyond5959/codex-acp/internal/claude"
+	"github.com/beyond5959/acp-adapter/internal/acp"
+	"github.com/beyond5959/acp-adapter/internal/claude"
 )
 
 const (
@@ -16,7 +16,7 @@ const (
 	defaultPatchApplyMode = "appserver"
 )
 
-// ProfileConfig defines one named runtime profile (mirrors codexacp.ProfileConfig).
+// ProfileConfig defines one named runtime profile (mirrors acpadapter.ProfileConfig).
 type ProfileConfig struct {
 	Model              string
 	ApprovalPolicy     string
@@ -34,7 +34,7 @@ type RuntimeConfig struct {
 	SkipPerms    bool
 	AllowedTools string
 
-	// Shared adapter settings (same semantics as codexacp.RuntimeConfig).
+	// Shared adapter settings (same semantics as acpadapter.RuntimeConfig).
 	TraceJSON      bool
 	TraceJSONFile  string
 	LogLevel       string

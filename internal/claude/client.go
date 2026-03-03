@@ -11,7 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/beyond5959/codex-acp/internal/appserver"
+	"github.com/beyond5959/acp-adapter/internal/appserver"
 )
 
 // session holds per-thread state for the claude CLI adapter.

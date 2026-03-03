@@ -37,6 +37,7 @@
 - ADR-0031：嵌入 API 设计（ClientRequest + SubscribeUpdates + RespondPermission）
 - ADR-0032：R4 契约对照测试策略（同脚本双驱动 + 关键序列比对）
 - ADR-0033：Claude 适配器架构（appClient 接口 + claude -p CLI 子进程后端）
+- ADR-0034：项目统一命名为 acp-adapter（module/import/cmd/npm）
 
 ---
 
@@ -95,7 +96,7 @@
 - 影响范围（文件/模块）：
   - `internal/appserver/supervisor.go`
   - `internal/appserver/process.go`
-  - `cmd/codex-acp-go/main.go`
+  - `cmd/acp-adapter/main.go`
   - `test/integration/e2e_test.go`
   - `testdata/fake_codex_app_server/main.go`
 - 验证方式（测试/验收项）：
@@ -195,7 +196,7 @@
   - Cons：Mode B 依赖 ACP fs 方法契约，客户端兼容性风险上升。
 - 影响范围（文件/模块）：
   - `internal/config/config.go`
-  - `cmd/codex-acp-go/main.go`
+  - `cmd/acp-adapter/main.go`
   - `internal/acp/server.go`
   - `test/integration/e2e_test.go`
   - `testdata/fake_codex_app_server/main.go`
@@ -259,7 +260,7 @@
   - `internal/acp/types.go`
   - `internal/acp/server.go`
   - `internal/appserver/types.go`
-  - `cmd/codex-acp-go/main.go`
+  - `cmd/acp-adapter/main.go`
 - 验证方式（测试/验收项）：
   - `TestE2EAcceptanceH1ProfilesAffectRuntime`
   - 对应验收：H1
@@ -363,7 +364,7 @@
   - `internal/acp/codec_stdio.go`
   - `internal/appserver/codec_jsonl.go`
   - `internal/appserver/process.go`
-  - `cmd/codex-acp-go/main.go`
+  - `cmd/acp-adapter/main.go`
   - `test/integration/e2e_test.go`
 - 验证方式（测试/验收项）：
   - `TestE2ERealCodexAppServer_BasicPromptAndCancel`（trace 文件存在 + 脱敏断言）
@@ -447,7 +448,7 @@
   - `internal/acp/server.go`
   - `internal/bridge/session_state.go`
   - `internal/config/config.go`
-  - `cmd/codex-acp-go/main.go`
+  - `cmd/acp-adapter/main.go`
   - `testdata/fake_codex_app_server/main.go`
   - `test/integration/e2e_test.go`
 - 验证方式（测试/验收项）：
@@ -490,10 +491,10 @@
 - 日期：2026-02-27
 - 状态：Accepted
 - 背景：
-  - 仓库已固定托管在 `https://github.com/beyond5959/codex-acp`。
-  - `go.mod` 若使用短路径（`module codex-acp`），外部通过仓库地址安装时会出现模块路径不匹配。
+  - 仓库已固定托管在 `https://github.com/beyond5959/acp-adapter`。
+  - `go.mod` 若使用短路径（`module acp-adapter`），外部通过仓库地址安装时会出现模块路径不匹配。
 - 决策：
-  - 将 module 路径统一为 `github.com/beyond5959/codex-acp`。
+  - 将 module 路径统一为 `github.com/beyond5959/acp-adapter`。
   - 所有仓库内 Go 导入路径统一使用该 canonical 前缀，避免后续新增代码继续使用短路径。
 - 备选方案：
   - 方案A：保留短 module 路径，仅在本仓库内构建。
@@ -503,7 +504,7 @@
   - Cons：fork 或迁移仓库地址时需同步更新 module 与导入路径。
 - 影响范围（文件/模块）：
   - `go.mod`
-  - `cmd/codex-acp-go/main.go`
+  - `cmd/acp-adapter/main.go`
   - `internal/acp/server.go`
   - `testdata/fake_codex_app_server/main.go`
 - 验证方式（测试/验收项）：
@@ -577,7 +578,7 @@
 - 日期：2026-02-28
 - 状态：Accepted
 - 背景：
-  - 现有工程以 `cmd/codex-acp-go` 独立进程模式为主，便于 ACP client 直接拉起。
+  - 现有工程以 `cmd/acp-adapter` 独立进程模式为主，便于 ACP client 直接拉起。
   - 新目标要求在不影响现有能力前提下，同时支持“可独立运行 + 可复用库”。
 - 决策：
   - 采用“双入口单内核”演进路径：保留现有 `cmd` 入口不变，同时新增 `pkg` 级嵌入入口。
@@ -591,7 +592,7 @@
   - Pros：最大化复用既有测试与行为，降低协议回归风险，便于渐进发布。
   - Cons：短期需要处理装配层与核心层边界，初期目录与依赖关系会更复杂。
 - 影响范围（文件/模块）：
-  - `cmd/codex-acp-go/*`
+  - `cmd/acp-adapter/*`
   - `internal/*`（核心逻辑）
   - `pkg/*`（新增嵌入入口，R1-R3 分步引入）
   - `test/integration/*`（契约对照，R4）
@@ -606,7 +607,7 @@
   - 库化目标要求“可独立运行 + 可复用库”，同时必须保证现有 ACP 行为不回退。
   - 若在同一阶段同时做入口库化与传输抽象，回归面会扩大，定位成本高。
 - 决策：
-  - R1 只做外观库化：新增 `pkg/codexacp.RunStdio`，并让 `cmd/codex-acp-go` 委托该入口。
+  - R1 只做外观库化：新增 `pkg/acpadapter.RunStdio`，并让 `cmd/acp-adapter` 委托该入口。
   - R1 不改动 `internal/acp`、`internal/appserver`、`internal/bridge` 的协议处理语义。
   - R2 再进行传输层抽象（stdio/app-server 连接解耦），并通过契约测试锁定行为。
 - 备选方案：
@@ -616,8 +617,8 @@
   - Pros：把风险集中在装配层，便于验证“零行为变化”；故障定位更直接。
   - Cons：短期会保留一些跨层依赖，R2 仍需继续清理边界。
 - 影响范围（文件/模块）：
-  - `pkg/codexacp/*`
-  - `cmd/codex-acp-go/main.go`
+  - `pkg/acpadapter/*`
+  - `cmd/acp-adapter/main.go`
   - `internal/observability/logger.go`
   - `test/*`（新增库入口最小映射测试）
 - 验证方式（测试/验收项）：
@@ -632,7 +633,7 @@
   - R3 需要支持外部 server 进程内调用，不再依赖 ACP 客户端子进程 stdio 连接。
   - 同时必须复用同一套 ACP server 业务逻辑，避免复制分支导致行为漂移。
 - 决策：
-  - 基于 R2 的 `internal/acp.Transport` 抽象，新增 `pkg/codexacp.EmbeddedRuntime`。
+  - 基于 R2 的 `internal/acp.Transport` 抽象，新增 `pkg/acpadapter.EmbeddedRuntime`。
   - 嵌入 API 采用“请求-响应 + 事件订阅”模型：
     - `ClientRequest(ctx, msg)`：发送 ACP request 并等待 response。
     - `SubscribeUpdates(...)`：接收 `session/update` 和 server-initiated requests（含 permission）。
@@ -646,8 +647,8 @@
   - Pros：最大化行为一致性，便于后续做 standalone vs embedded 契约对照（R4）。
   - Cons：嵌入宿主需正确处理订阅消费与 permission 回写时序，集成复杂度上升。
 - 影响范围（文件/模块）：
-  - `pkg/codexacp/embedded.go`
-  - `pkg/codexacp/runtime_runner.go`
+  - `pkg/acpadapter/embedded.go`
+  - `pkg/acpadapter/runtime_runner.go`
   - `test/integration/embedded_test.go`
   - `internal/acp/transport_inproc.go`（R2 复用）
 - 验证方式（测试/验收项）：
@@ -721,3 +722,35 @@
   - `go test ./...`（Codex 零回退；Claude 集成测试全通过）
   - `go test ./test/integration -run TestClaude -count=1`
   - `docs/ACCEPTANCE.md`：L1-L9
+
+### ADR-0034：项目统一命名为 acp-adapter（module/import/cmd/npm）
+- 日期：2026-03-03
+- 状态：Accepted
+- 背景：
+  - 项目已从仅 Codex 后端扩展到 Codex + Claude 双后端，“codex-acp-go”命名不再准确。
+  - 仓库内仍存在旧命名路径，容易导致对外导入和构建混淆。
+- 决策：
+  - 统一项目命名为 `acp-adapter`，并同步以下路径：
+    - Go module：`github.com/beyond5959/acp-adapter`
+    - cmd：`cmd/acp-adapter`
+    - 包路径：`pkg/acpadapter`
+    - npm 包：`@beyond5959/acp-adapter` 及平台子包
+  - 保留 `cmd/acp --adapter codex|claude` 作为统一入口，不改变协议层行为。
+- 备选方案：
+  - 方案A：仅改文档展示名，保留旧 module/import/cmd 路径。
+  - 方案B：全仓统一重命名并同步测试与发布脚本。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：命名与能力范围一致；对外导入、构建、发布路径统一；减少后续沟通成本。
+  - Cons：外部引用旧路径的脚本/配置需要迁移。
+- 影响范围（文件/模块）：
+  - `go.mod`
+  - `cmd/acp-adapter/main.go`
+  - `pkg/acpadapter/*`
+  - `cmd/acp/main.go`
+  - `npm/package.json`
+  - `npm/packages/acp-adapter*/package.json`
+  - `test/integration/*`
+  - `README.md`、`docs/*`
+- 验证方式（测试/验收项）：
+  - `go test ./...`
+  - 全仓检索无旧 module/import/cmd 路径残留

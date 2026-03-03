@@ -1,7 +1,7 @@
-# codex-acp-go
+# acp-adapter
 
 ## 1) What is this?
-`codex-acp-go` is a Go ACP adapter that lets ACP clients (such as Zed External Agents) drive AI assistants over the [ACP protocol](docs/SPEC.md).
+`acp-adapter` is a Go ACP adapter that lets ACP clients (such as Zed External Agents) drive AI assistants over the [ACP protocol](docs/SPEC.md).
 
 Two backends are supported:
 
@@ -19,7 +19,7 @@ ACP transport rules are strict: `stdout` must contain protocol messages only, an
 - Structured TODO updates
 - Slash commands: `/review`, `/review-branch`, `/review-commit`, `/init`, `/compact`, `/logout`
 - Client MCP servers via `/mcp list`, `/mcp call`, `/mcp oauth`
-- Embedded library mode (`pkg/codexacp` / `pkg/claudeacp`) for in-process use
+- Embedded library mode (`pkg/acpadapter` / `pkg/claudeacp`) for in-process use
 
 ## 3) Quickstart
 
@@ -27,8 +27,8 @@ ACP transport rules are strict: `stdout` must contain protocol messages only, an
 Prerequisite: Codex CLI installed and logged in.
 
 ```bash
-go build -o ./bin/codex-acp-go ./cmd/codex-acp-go
-./bin/codex-acp-go
+go build -o ./bin/acp-adapter ./cmd/acp-adapter
+./bin/acp-adapter
 ```
 
 Auth (one of):
@@ -53,7 +53,7 @@ Optional overrides:
 ### Option C: Unified binary (both backends)
 ```bash
 go build -o ./bin/acp ./cmd/acp
-./bin/acp --adapter codex   # same as codex-acp-go
+./bin/acp --adapter codex   # same as acp-adapter
 ./bin/acp --adapter claude  # Claude Code CLI subprocess
 ```
 
@@ -63,8 +63,8 @@ Minimal template for Codex backend:
 ```json
 {
   "agent_servers": {
-    "codex-acp-go": {
-      "command": "/absolute/path/to/bin/codex-acp-go",
+    "acp-adapter": {
+      "command": "/absolute/path/to/bin/acp-adapter",
       "args": [],
       "env": {
         "CODEX_APP_SERVER_CMD": "codex",

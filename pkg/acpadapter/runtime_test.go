@@ -1,4 +1,4 @@
-package codexacp
+package acpadapter
 
 import (
 	"bufio"

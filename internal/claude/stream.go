@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/beyond5959/codex-acp/internal/appserver"
+	"github.com/beyond5959/acp-adapter/internal/appserver"
 )
 
 // streamLine is the top-level JSON object emitted by claude --output-format stream-json --verbose.

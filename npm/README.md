@@ -1,6 +1,6 @@
-# npm Packaging for codex-acp-go
+# npm Packaging for acp-adapter
 
-This directory contains an npm workspace that publishes `codex-acp-go` for:
+This directory contains an npm workspace that publishes `acp-adapter` for:
 
 - `darwin` + `x64`
 - `darwin` + `arm64`
@@ -33,7 +33,7 @@ npm --prefix npm run version:set -- 0.1.1
 ```
 
 2. Build binaries.
-3. Publish platform packages first, then publish `@beyond5959/codex-acp-go`.
+3. Publish platform packages first, then publish `@beyond5959/acp-adapter`.
 
 ```bash
 npm --prefix npm run publish:all
@@ -42,5 +42,5 @@ npm --prefix npm run publish:all
 Users can run:
 
 ```bash
-npx -y @beyond5959/codex-acp-go
+npx -y @beyond5959/acp-adapter
 ```

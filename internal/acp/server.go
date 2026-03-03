@@ -17,8 +17,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/beyond5959/codex-acp/internal/appserver"
-	"github.com/beyond5959/codex-acp/internal/bridge"
+	"github.com/beyond5959/acp-adapter/internal/appserver"
+	"github.com/beyond5959/acp-adapter/internal/bridge"
 )
 
 const (
@@ -337,9 +337,9 @@ func (s *Server) handleInitialize(id json.RawMessage, paramsRaw json.RawMessage)
 			Permissions:   true,
 		},
 		AgentInfo: &ImplementationInfo{
-			Name:    "codex-acp-go",
+			Name:    "acp-adapter",
 			Version: "dev",
-			Title:   "Codex ACP Go",
+			Title:   "ACP Adapter",
 		},
 		AuthMethods:      authMethods,
 		ActiveAuthMethod: s.currentAuthMode(),

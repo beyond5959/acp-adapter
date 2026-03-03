@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/beyond5959/codex-acp/internal/appserver"
-	"github.com/beyond5959/codex-acp/internal/bridge"
+	"github.com/beyond5959/acp-adapter/internal/appserver"
+	"github.com/beyond5959/acp-adapter/internal/bridge"
 )
 
 func TestServerStdioBaselineInitializeNewPrompt(t *testing.T) {

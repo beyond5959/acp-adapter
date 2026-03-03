@@ -62,7 +62,7 @@ func NewClient(process *Process, logger *slog.Logger) *Client {
 func (c *Client) Initialize(ctx context.Context) error {
 	params := InitializeParams{
 		ClientInfo: ClientInfo{
-			Name:    "codex-acp-go",
+			Name:    "acp-adapter",
 			Version: "0.1.0",
 		},
 		Capabilities: map[string]any{},
