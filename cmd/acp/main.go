@@ -42,10 +42,10 @@ Flags (--adapter codex):
   --retry-turn-on-crash  Retry current turn once after crash (default: true)
 
 Flags (--adapter claude):
-  --anthropic-auth-token  Anthropic API auth token (env: ANTHROPIC_AUTH_TOKEN)
-  --anthropic-base-url    Anthropic API base URL (env: ANTHROPIC_BASE_URL)
-  --model                 Default model (default: claude-opus-4-6)
-  --max-tokens            Max tokens per turn (default: 8192)
+  --claude-bin            Path to claude binary (env: CLAUDE_BIN, default: claude)
+  --model                 Default model (env: CLAUDE_MODEL, default: claude-opus-4-6)
+  --max-turns             Max agentic turns per invocation (default: 10)
+  --skip-perms            Pass --dangerously-skip-permissions to claude (default: true)
 `
 
 func main() {
@@ -78,10 +78,10 @@ func run(ctx context.Context, args []string) error {
 	retryOnCrash := fs.Bool("retry-turn-on-crash", parseBoolDefault(os.Getenv("RETRY_TURN_ON_CRASH"), true), "retry turn on crash")
 
 	// ---- claude-specific flags ----
-	anthropicAuthToken := fs.String("anthropic-auth-token", os.Getenv("ANTHROPIC_AUTH_TOKEN"), "Anthropic auth token")
-	anthropicBaseURL := fs.String("anthropic-base-url", os.Getenv("ANTHROPIC_BASE_URL"), "Anthropic base URL")
+	claudeBin := fs.String("claude-bin", firstEnv("CLAUDE_BIN", "claude"), "path to claude binary")
 	model := fs.String("model", firstEnv("CLAUDE_MODEL", ""), "Claude default model")
-	maxTokens := fs.Int64("max-tokens", 8192, "max tokens per turn")
+	maxTurns := fs.Int("max-turns", 10, "max agentic turns per invocation")
+	skipPerms := fs.Bool("skip-perms", parseBoolDefault(os.Getenv("CLAUDE_SKIP_PERMS"), true), "pass --dangerously-skip-permissions to claude")
 
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -106,10 +106,10 @@ func run(ctx context.Context, args []string) error {
 		})
 	case "claude":
 		return runClaudeAdapter(ctx, runClaudeParams{
-			authToken:      *anthropicAuthToken,
-			baseURL:        *anthropicBaseURL,
+			claudeBin:      *claudeBin,
 			model:          *model,
-			maxTokens:      *maxTokens,
+			maxTurns:       *maxTurns,
+			skipPerms:      *skipPerms,
 			logLevel:       *logLevel,
 			traceJSON:      *traceJSON,
 			traceJSONFile:  *traceJSONFile,
@@ -164,10 +164,10 @@ func runCodexAdapter(ctx context.Context, p runCodexParams) error {
 // ---- claude adapter wiring ----
 
 type runClaudeParams struct {
-	authToken      string
-	baseURL        string
+	claudeBin      string
 	model          string
-	maxTokens      int64
+	maxTurns       int
+	skipPerms      bool
 	logLevel       string
 	traceJSON      bool
 	traceJSONFile  string
@@ -181,16 +181,16 @@ func runClaudeAdapter(ctx context.Context, p runClaudeParams) error {
 	profiles := loadProfiles(p.profilesFile, p.profilesJSON)
 
 	cfg := claudeacp.RuntimeConfig{
-		AnthropicAuthToken: p.authToken,
-		AnthropicBaseURL:   p.baseURL,
-		DefaultModel:       p.model,
-		MaxTokens:          p.maxTokens,
-		TraceJSON:          p.traceJSON,
-		TraceJSONFile:      p.traceJSONFile,
-		LogLevel:           p.logLevel,
-		PatchApplyMode:     p.patchApplyMode,
-		Profiles:           mapClaudeProfiles(profiles),
-		DefaultProfile:     p.defaultProfile,
+		ClaudeBin:      p.claudeBin,
+		DefaultModel:   p.model,
+		MaxTurns:       p.maxTurns,
+		SkipPerms:      p.skipPerms,
+		TraceJSON:      p.traceJSON,
+		TraceJSONFile:  p.traceJSONFile,
+		LogLevel:       p.logLevel,
+		PatchApplyMode: p.patchApplyMode,
+		Profiles:       mapClaudeProfiles(profiles),
+		DefaultProfile: p.defaultProfile,
 	}
 	return claudeacp.RunStdio(ctx, cfg, os.Stdin, os.Stdout, os.Stderr)
 }

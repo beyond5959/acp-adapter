@@ -8,7 +8,7 @@ Two backends are supported:
 | Backend | Flag | Description |
 |---|---|---|
 | **Codex** (default) | `--adapter codex` | Drives Codex via `codex app-server` subprocess |
-| **Claude** | `--adapter claude` | Calls Anthropic API directly via `anthropic-sdk-go` |
+| **Claude** | `--adapter claude` | Drives Claude Code CLI (`claude -p`) as a subprocess |
 
 ACP transport rules are strict: `stdout` must contain protocol messages only, and logs must go to `stderr`.
 
@@ -37,24 +37,24 @@ Auth (one of):
 - `OPENAI_API_KEY`
 
 ### Option B: Claude backend
-Prerequisite: an Anthropic API auth token.
+Prerequisite: Claude Code CLI installed and logged in (`claude auth login`).
 
 ```bash
 go build -o ./bin/acp ./cmd/acp
-export ANTHROPIC_AUTH_TOKEN=sk-ant-...
 ./bin/acp --adapter claude
 ```
 
 Optional overrides:
-- `ANTHROPIC_BASE_URL` — custom base URL (default: `https://api.anthropic.com`)
+- `CLAUDE_BIN` — path to the `claude` binary (default: `claude` in `$PATH`)
 - `--model` — model name (default: `claude-opus-4-6`)
-- `--max-tokens` — max tokens per turn (default: `8192`)
+- `--max-turns` — max agentic turns per invocation (default: `10`)
+- `--skip-perms` — pass `--dangerously-skip-permissions` to claude (default: `true`)
 
 ### Option C: Unified binary (both backends)
 ```bash
 go build -o ./bin/acp ./cmd/acp
 ./bin/acp --adapter codex   # same as codex-acp-go
-./bin/acp --adapter claude  # Claude direct API
+./bin/acp --adapter claude  # Claude Code CLI subprocess
 ```
 
 ### Step 2: Point Zed External Agent config to this binary
@@ -84,7 +84,7 @@ Minimal template for Claude backend:
       "command": "/absolute/path/to/bin/acp",
       "args": ["--adapter", "claude"],
       "env": {
-        "ANTHROPIC_AUTH_TOKEN": "sk-ant-..."
+        "CLAUDE_BIN": "/usr/local/bin/claude"
       }
     }
   }
@@ -101,6 +101,6 @@ Open Zed's Agent panel, choose the agent server, and start a new thread.
 - For side-effect actions, handle the permission prompt: approve to proceed, decline to block safely.
 - Default policy is fail-closed: without permission, write/command/network/MCP side-effects are not executed.
 - If you wrap this binary, never write logs to `stdout`; use `stderr` only, or ACP parsing will fail.
-- Claude backend: conversation history is in-process memory; restarting the adapter resets context.
+- Claude backend: conversation history is managed by the Claude Code CLI (`~/.claude/projects/`); the adapter itself is stateless across restarts.
 
 For protocol details and development/testing docs, see [`docs/SPEC.md`](docs/SPEC.md), [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md), and [`PROGRESS.md`](PROGRESS.md).

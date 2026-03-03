@@ -1,4 +1,4 @@
-// Package claudeacp provides an ACP adapter backed by the Anthropic API.
+// Package claudeacp provides an ACP adapter backed by the claude CLI subprocess.
 package claudeacp
 
 import (
@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	defaultTraceJSONFile    = "trace-jsonl.log"
-	defaultPatchApplyMode   = "appserver"
+	defaultTraceJSONFile  = "trace-jsonl.log"
+	defaultPatchApplyMode = "appserver"
 )
 
 // ProfileConfig defines one named runtime profile (mirrors codexacp.ProfileConfig).
@@ -27,11 +27,12 @@ type ProfileConfig struct {
 
 // RuntimeConfig configures the Claude adapter runtime.
 type RuntimeConfig struct {
-	// Claude-specific settings.
-	AnthropicAuthToken string
-	AnthropicBaseURL   string
-	DefaultModel       string
-	MaxTokens          int64
+	// Claude CLI-specific settings.
+	ClaudeBin    string
+	DefaultModel string
+	MaxTurns     int
+	SkipPerms    bool
+	AllowedTools string
 
 	// Shared adapter settings (same semantics as codexacp.RuntimeConfig).
 	TraceJSON      bool
@@ -45,14 +46,14 @@ type RuntimeConfig struct {
 // DefaultRuntimeConfig returns the default Claude adapter runtime settings.
 func DefaultRuntimeConfig() RuntimeConfig {
 	return RuntimeConfig{
-		AnthropicAuthToken: os.Getenv("ANTHROPIC_AUTH_TOKEN"),
-		AnthropicBaseURL:   os.Getenv("ANTHROPIC_BASE_URL"),
-		DefaultModel:       claude.DefaultModel,
-		MaxTokens:          claude.DefaultMaxTokens,
-		TraceJSONFile:      defaultTraceJSONFile,
-		LogLevel:           "info",
-		PatchApplyMode:     defaultPatchApplyMode,
-		Profiles:           map[string]ProfileConfig{},
+		ClaudeBin:      claude.DefaultBin(),
+		DefaultModel:   claude.DefaultModel,
+		MaxTurns:       claude.DefaultMaxTurns,
+		SkipPerms:      true,
+		TraceJSONFile:  defaultTraceJSONFile,
+		LogLevel:       "info",
+		PatchApplyMode: defaultPatchApplyMode,
+		Profiles:       map[string]ProfileConfig{},
 	}
 }
 
@@ -71,17 +72,14 @@ func RunStdio(
 }
 
 func normalizeRuntimeConfig(cfg RuntimeConfig) RuntimeConfig {
-	if strings.TrimSpace(cfg.AnthropicAuthToken) == "" {
-		cfg.AnthropicAuthToken = os.Getenv("ANTHROPIC_AUTH_TOKEN")
-	}
-	if strings.TrimSpace(cfg.AnthropicBaseURL) == "" {
-		cfg.AnthropicBaseURL = os.Getenv("ANTHROPIC_BASE_URL")
+	if strings.TrimSpace(cfg.ClaudeBin) == "" {
+		cfg.ClaudeBin = claude.DefaultBin()
 	}
 	if strings.TrimSpace(cfg.DefaultModel) == "" {
 		cfg.DefaultModel = claude.DefaultModel
 	}
-	if cfg.MaxTokens <= 0 {
-		cfg.MaxTokens = claude.DefaultMaxTokens
+	if cfg.MaxTurns <= 0 {
+		cfg.MaxTurns = claude.DefaultMaxTurns
 	}
 	if strings.TrimSpace(cfg.TraceJSONFile) == "" {
 		cfg.TraceJSONFile = defaultTraceJSONFile
@@ -125,11 +123,12 @@ func toACPProfiles(profiles map[string]ProfileConfig) map[string]acp.ProfileConf
 	return out
 }
 
-func toClaudeConfig(cfg RuntimeConfig) claude.Config {
+func toClaudeCliConfig(cfg RuntimeConfig) claude.Config {
 	return claude.Config{
-		AuthToken:    cfg.AnthropicAuthToken,
-		BaseURL:      cfg.AnthropicBaseURL,
+		ClaudeBin:    cfg.ClaudeBin,
 		DefaultModel: cfg.DefaultModel,
-		MaxTokens:    cfg.MaxTokens,
+		MaxTurns:     cfg.MaxTurns,
+		SkipPerms:    cfg.SkipPerms,
+		AllowedTools: cfg.AllowedTools,
 	}
 }

@@ -1,27 +1,54 @@
 package claude
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
-
-	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/packages/ssestream"
+	"io"
 
 	"github.com/beyond5959/codex-acp/internal/appserver"
 )
 
+// streamLine is the top-level JSON object emitted by claude --output-format stream-json --verbose.
+type streamLine struct {
+	Type    string          `json:"type"`
+	Subtype string          `json:"subtype"`
+	Event   json.RawMessage `json:"event"`
+	// For type=result
+	Result  string `json:"result"`
+	IsError bool   `json:"is_error"`
+	// For type=assistant
+	Message *assistantMsg `json:"message"`
+}
 
-// streamToEvents reads a Claude streaming response and converts it into
-// TurnEvents on the provided channel. It handles text deltas, tool_use
-// approval gates, and completion.
-//
-// The caller must close out or context cancellation terminates the stream.
+type assistantMsg struct {
+	Content    []contentBlock `json:"content"`
+	StopReason string         `json:"stop_reason"`
+}
+
+type contentBlock struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// streamEvent wraps inner event from type=stream_event lines.
+type streamEvent struct {
+	Type  string        `json:"type"`
+	Delta *streamDelta  `json:"delta"`
+}
+
+type streamDelta struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// streamToEvents reads lines from r (stdout of a claude -p subprocess) and emits
+// TurnEvents on out. It closes out when done.
 func streamToEvents(
 	ctx context.Context,
-	stream *ssestream.Stream[anthropic.MessageStreamEventUnion],
+	r io.Reader,
 	threadID, turnID string,
-	approvals *approvalRegistry,
 	out chan<- appserver.TurnEvent,
 ) {
 	defer close(out)
@@ -39,75 +66,79 @@ func streamToEvents(
 		ItemType: "agent_message",
 	}
 
-	var acc anthropic.Message
-	var stopReason string
+	scanner := bufio.NewScanner(r)
+	// Increase buffer for large lines.
+	scanner.Buffer(make([]byte, 1024*1024), 4*1024*1024)
 
-	for stream.Next() {
+	var stopReason string
+	var streamedDeltas bool // true once we receive at least one stream_event delta
+
+	for scanner.Scan() {
 		if ctx.Err() != nil {
-			_ = stream.Close()
-			out <- appserver.TurnEvent{
-				Type:       appserver.TurnEventTypeCompleted,
-				ThreadID:   threadID,
-				TurnID:     turnID,
-				StopReason: "cancelled",
-			}
+			emitCancelled(out, threadID, turnID)
 			return
 		}
 
-		event := stream.Current()
-		_ = acc.Accumulate(event)
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
 
-		switch ev := event.AsAny().(type) {
-		case anthropic.ContentBlockDeltaEvent:
-			if delta, ok := ev.Delta.AsAny().(anthropic.TextDelta); ok && delta.Text != "" {
+		var sl streamLine
+		if err := json.Unmarshal(line, &sl); err != nil {
+			// non-JSON line (e.g. debug output on stderr leaked) — skip
+			continue
+		}
+
+		switch sl.Type {
+		case "stream_event":
+			var ev streamEvent
+			if err := json.Unmarshal(sl.Event, &ev); err != nil {
+				continue
+			}
+			if ev.Type == "content_block_delta" && ev.Delta != nil &&
+				ev.Delta.Type == "text_delta" && ev.Delta.Text != "" {
+				streamedDeltas = true
 				out <- appserver.TurnEvent{
 					Type:     appserver.TurnEventTypeAgentMessageDelta,
 					ThreadID: threadID,
 					TurnID:   turnID,
 					ItemID:   turnID + "-msg",
-					Delta:    delta.Text,
+					Delta:    ev.Delta.Text,
 				}
 			}
 
-		case anthropic.ContentBlockStartEvent:
-			cb := ev.ContentBlock
-			if cb.Type == "tool_use" {
-				// We will handle tool_use after the full block input is accumulated at
-				// ContentBlockStopEvent — no action here.
+		case "assistant":
+			// Emitted when --include-partial-messages is not set; also emitted as
+			// the final accumulated message. Skip text emission if we already
+			// streamed deltas via stream_event to avoid duplicate output.
+			if sl.Message != nil {
+				if !streamedDeltas {
+					for _, cb := range sl.Message.Content {
+						if cb.Type == "text" && cb.Text != "" {
+							out <- appserver.TurnEvent{
+								Type:     appserver.TurnEventTypeAgentMessageDelta,
+								ThreadID: threadID,
+								TurnID:   turnID,
+								ItemID:   turnID + "-msg",
+								Delta:    cb.Text,
+							}
+						}
+					}
+				}
+				if sl.Message.StopReason != "" {
+					stopReason = sl.Message.StopReason
+				}
 			}
 
-		case anthropic.ContentBlockStopEvent:
-			// Check if the last accumulated content block is a tool_use.
-			if len(acc.Content) == 0 {
-				break
-			}
-			lastBlock := acc.Content[len(acc.Content)-1]
-			if lastBlock.Type != "tool_use" {
-				break
-			}
-			toolUse := lastBlock.AsToolUse()
-			// Build the approval request.
-			approvalID := fmt.Sprintf("%s-approval-%s", turnID, toolUse.ID)
-			decisionCh := make(chan appserver.ApprovalDecision, 1)
-			approvals.register(approvalID, decisionCh)
-
-			inputBytes, _ := toolUse.Input.MarshalJSON()
-			approvalReq := buildApprovalRequest(threadID, turnID, approvalID, toolUse.ID, toolUse.Name, inputBytes)
-
-			out <- appserver.TurnEvent{
-				Type:     appserver.TurnEventTypeApprovalRequired,
-				ThreadID: threadID,
-				TurnID:   turnID,
-				Approval: approvalReq,
-			}
-
-			// Block until decision arrives or context is cancelled.
-			var decision appserver.ApprovalDecision
-			select {
-			case decision = <-decisionCh:
-			case <-ctx.Done():
-				approvals.remove(approvalID)
-				_ = stream.Close()
+		case "result":
+			if sl.IsError {
+				out <- appserver.TurnEvent{
+					Type:     appserver.TurnEventTypeError,
+					ThreadID: threadID,
+					TurnID:   turnID,
+					Message:  fmt.Sprintf("claude cli error: %s", sl.Result),
+				}
 				out <- appserver.TurnEvent{
 					Type:       appserver.TurnEventTypeCompleted,
 					ThreadID:   threadID,
@@ -116,52 +147,48 @@ func streamToEvents(
 				}
 				return
 			}
-			approvals.remove(approvalID)
-
-			// Emit tool result delta (decision text) so ACP layer has visible status.
-			decisionText := fmt.Sprintf("[tool: %s, decision: %s]", toolUse.Name, decision)
-			out <- appserver.TurnEvent{
-				Type:     appserver.TurnEventTypeAgentMessageDelta,
-				ThreadID: threadID,
-				TurnID:   turnID,
-				ItemID:   turnID + "-msg",
-				Delta:    decisionText + "\n",
+			if stopReason == "" {
+				stopReason = "end_turn"
 			}
+			// result line ends the stream; fall through to emit completed below.
+			goto done
 
-			// We record the decision but the streaming response itself is
-			// already in flight — Claude streaming doesn't allow injecting
-			// tool results mid-stream.  We complete the current stream and
-			// signal a synthetic stopReason so the caller can start a follow-up
-			// turn with the tool result if approved.
-			approvals.storeDecision(approvalID, decision, toolUse.ID, toolUse.Name, inputBytes)
+		case "system":
+			// init event — ignore
 
-		case anthropic.MessageDeltaEvent:
-			if ev.Delta.StopReason != "" {
-				stopReason = string(ev.Delta.StopReason)
-			}
+		default:
+			// unknown line type — ignore
 		}
 	}
 
-	if err := stream.Err(); err != nil {
+	if err := scanner.Err(); err != nil {
 		if ctx.Err() != nil {
-			stopReason = "cancelled"
-		} else {
-			out <- appserver.TurnEvent{
-				Type:     appserver.TurnEventTypeError,
-				ThreadID: threadID,
-				TurnID:   turnID,
-				Message:  err.Error(),
-			}
+			emitCancelled(out, threadID, turnID)
 			return
 		}
+		out <- appserver.TurnEvent{
+			Type:     appserver.TurnEventTypeError,
+			ThreadID: threadID,
+			TurnID:   turnID,
+			Message:  err.Error(),
+		}
+		out <- appserver.TurnEvent{
+			Type:       appserver.TurnEventTypeCompleted,
+			ThreadID:   threadID,
+			TurnID:     turnID,
+			StopReason: "cancelled",
+		}
+		return
+	}
+
+done:
+	if ctx.Err() != nil {
+		emitCancelled(out, threadID, turnID)
+		return
 	}
 
 	if stopReason == "" {
-		if ctx.Err() != nil {
-			stopReason = "cancelled"
-		} else {
-			stopReason = "end_turn"
-		}
+		stopReason = "end_turn"
 	}
 
 	out <- appserver.TurnEvent{
@@ -179,87 +206,20 @@ func streamToEvents(
 	}
 }
 
-// mapStopReason converts Anthropic stop reasons to ACP stop reason strings.
-func mapStopReason(anthropicReason string) string {
-	switch anthropicReason {
-	case "end_turn":
-		return "end_turn"
-	case "max_tokens":
-		return "max_tokens"
-	case "stop_sequence":
-		return "end_turn"
-	case "tool_use":
-		return "end_turn"
-	case "cancelled":
-		return "cancelled"
-	default:
-		return "end_turn"
-	}
-}
-
-// buildApprovalRequest constructs an appserver.ApprovalRequest from tool_use data.
-func buildApprovalRequest(
-	threadID, turnID, approvalID, toolUseID, toolName string,
-	inputBytes []byte,
-) appserver.ApprovalRequest {
-	kind := appserver.ApprovalKindCommand
-	var command, writePath, writeText, patch, host, mcpServer, mcpTool string
-	var files []string
-
-	// Infer approval kind from tool name conventions.
-	switch toolName {
-	case "bash", "execute", "run_command", "computer":
-		kind = appserver.ApprovalKindCommand
-		command = extractStringField(inputBytes, "command", "cmd", "input")
-	case "str_replace_editor", "write_file", "text_editor":
-		kind = appserver.ApprovalKindFile
-		writePath = extractStringField(inputBytes, "path", "file_path")
-		writeText = extractStringField(inputBytes, "new_str", "content", "file_text")
-		patch = extractStringField(inputBytes, "patch")
-		if writePath != "" {
-			files = []string{writePath}
-		}
-	case "web_search", "web_fetch", "fetch":
-		kind = appserver.ApprovalKindNetwork
-		host = extractStringField(inputBytes, "host", "url", "query")
-	default:
-		// Treat unknown tools as MCP-style.
-		kind = appserver.ApprovalKindMCP
-		mcpServer = "claude"
-		mcpTool = toolName
-		command = string(inputBytes)
-	}
-
-	return appserver.ApprovalRequest{
+func emitCancelled(out chan<- appserver.TurnEvent, threadID, turnID string) {
+	out <- appserver.TurnEvent{
+		Type:       appserver.TurnEventTypeCompleted,
 		ThreadID:   threadID,
 		TurnID:     turnID,
-		ApprovalID: approvalID,
-		ToolCallID: toolUseID,
-		Kind:       kind,
-		Command:    command,
-		Files:      files,
-		Host:       host,
-		MCPServer:  mcpServer,
-		MCPTool:    mcpTool,
-		WritePath:  writePath,
-		WriteText:  writeText,
-		Patch:      patch,
-		Message:    fmt.Sprintf("Claude tool call: %s", toolName),
+		StopReason: "cancelled",
 	}
 }
 
-// extractStringField tries each key in order and returns the first non-empty string.
-func extractStringField(input []byte, keys ...string) string {
-	var m map[string]any
-	if err := json.Unmarshal(input, &m); err != nil {
-		return string(input)
+func mapStopReason(reason string) string {
+	switch reason {
+	case "end_turn", "max_tokens", "cancelled":
+		return reason
+	default:
+		return "end_turn"
 	}
-	for _, k := range keys {
-		if v, ok := m[k]; ok {
-			if s, ok := v.(string); ok && s != "" {
-				return s
-			}
-		}
-	}
-	return ""
 }

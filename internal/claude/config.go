@@ -5,35 +5,48 @@ import "os"
 const (
 	// DefaultModel is the default Claude model used when none is specified.
 	DefaultModel = "claude-opus-4-6"
-	// DefaultMaxTokens is the default max_tokens for each turn.
-	DefaultMaxTokens = 8192
+	// DefaultMaxTurns is the default --max-turns for claude -p.
+	DefaultMaxTurns = 10
 )
 
-// Config holds Claude-specific adapter configuration.
+// Config holds configuration for the claude CLI-backed adapter.
 type Config struct {
-	// AuthToken is the Anthropic API auth token (ANTHROPIC_AUTH_TOKEN).
-	AuthToken string
-	// BaseURL overrides the default Anthropic API base URL (ANTHROPIC_BASE_URL).
-	BaseURL string
+	// ClaudeBin is the path to the claude binary. Defaults to "claude".
+	ClaudeBin string
 	// DefaultModel is used when the session/turn does not specify a model.
 	DefaultModel string
-	// MaxTokens is the per-turn token limit.
-	MaxTokens int64
+	// MaxTurns limits the number of agentic turns per invocation.
+	MaxTurns int
+	// SkipPerms enables --dangerously-skip-permissions.
+	SkipPerms bool
+	// AllowedTools is passed to --allowedTools when set.
+	AllowedTools string
+	// WorkDir is the working directory for subprocesses (overridden per-thread by cwd).
+	WorkDir string
 }
 
-// ConfigFromEnv builds a Config from environment variables, applying
-// defaults where env vars are absent.
-func ConfigFromEnv() Config {
-	cfg := Config{
-		AuthToken:    os.Getenv("ANTHROPIC_AUTH_TOKEN"),
-		BaseURL:      os.Getenv("ANTHROPIC_BASE_URL"),
-		DefaultModel: DefaultModel,
-		MaxTokens:    DefaultMaxTokens,
+// DefaultBin returns the default claude binary path from env or "claude".
+func DefaultBin() string {
+	if v := os.Getenv("CLAUDE_BIN"); v != "" {
+		return v
 	}
-	return cfg
+	return "claude"
 }
 
-// IsAuthenticated reports whether an auth token is present.
-func (c Config) IsAuthenticated() bool {
-	return c.AuthToken != ""
+// ConfigFromEnv builds a Config from environment variables, applying defaults.
+func ConfigFromEnv() Config {
+	bin := os.Getenv("CLAUDE_BIN")
+	if bin == "" {
+		bin = "claude"
+	}
+	model := os.Getenv("CLAUDE_MODEL")
+	if model == "" {
+		model = DefaultModel
+	}
+	return Config{
+		ClaudeBin:    bin,
+		DefaultModel: model,
+		MaxTurns:     DefaultMaxTurns,
+		SkipPerms:    true,
+	}
 }

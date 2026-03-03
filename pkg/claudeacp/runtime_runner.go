@@ -47,14 +47,7 @@ func runRuntime(
 		return errors.New("acp transport is nil")
 	}
 
-	// Determine initial auth mode for initialize response.
-	initialAuthMode := "none"
-	claudeCfg := toClaudeConfig(cfg)
-	if claudeCfg.IsAuthenticated() {
-		initialAuthMode = "anthropic_auth_token"
-	}
-
-	client := claude.NewClient(claudeCfg)
+	client := claude.NewClient(toClaudeCliConfig(cfg))
 
 	server := acp.NewServer(
 		transport,
@@ -65,7 +58,7 @@ func runRuntime(
 			PatchApplyMode:  cfg.PatchApplyMode,
 			Profiles:        toACPProfiles(cfg.Profiles),
 			DefaultProfile:  cfg.DefaultProfile,
-			InitialAuthMode: initialAuthMode,
+			InitialAuthMode: "claude_cli",
 		},
 	)
 

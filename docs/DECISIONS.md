@@ -36,7 +36,7 @@
 - ADR-0030：先外观后抽象（R1 先库化入口，R2 再做传输层解耦）
 - ADR-0031：嵌入 API 设计（ClientRequest + SubscribeUpdates + RespondPermission）
 - ADR-0032：R4 契约对照测试策略（同脚本双驱动 + 关键序列比对）
-- ADR-0033：Claude 适配器架构（appClient 接口替换 + anthropic-sdk-go 直接集成）
+- ADR-0033：Claude 适配器架构（appClient 接口 + claude -p CLI 子进程后端）
 
 ---
 
@@ -689,33 +689,35 @@
   - `go test ./...`
   - `docs/ACCEPTANCE.md`：K5
 
-### ADR-0033：Claude 适配器架构（appClient 接口替换 + anthropic-sdk-go 直接集成）
-- 日期：2026-03-02
+### ADR-0033：Claude 适配器架构（appClient 接口 + claude -p CLI 子进程后端）
+- 日期：2026-03-03
 - 状态：Accepted
 - 背景：
   - 现有项目以 Codex App Server 子进程为后端，ACP server 通过 `appClient` 接口与之解耦。
-  - 需要在不破坏 Codex 适配器任何能力的前提下，新增以 Anthropic API 为后端的 Claude 适配器。
+  - 需要在不破坏 Codex 适配器任何能力的前提下，新增以 Claude Code CLI 为后端的 Claude 适配器。
 - 决策：
-  - 在 `internal/claude/` 实现 `appClient` 接口，以 `anthropic-sdk-go` 直接调用 Anthropic Messages API。
-  - 复用 `acp.Server`、`acp.Transport`、`bridge.Store`、`pkg/codexacp.EmbeddedRuntime` 框架，不修改任何现有 Codex 代码路径。
-  - 在 `pkg/claudeacp/` 提供与 `pkg/codexacp` 对等的公共 API（`RunStdio` + `NewEmbeddedRuntime`）。
-  - 新增 `cmd/acp` 统一入口，`--adapter codex|claude` 参数选择后端；`cmd/codex-acp-go` 更新为 thin wrapper 保持向后兼容。
-  - Claude 侧无子进程；会话历史在内存中维护（per-thread）；tool_use 通过暂停流 + `ApprovalRespond` 实现与 Codex approval 对等的语义。
-  - `/review` 类命令通过特殊 system prompt 模拟 entered/exited review mode；`/compact` 通过摘要 prompt + 历史替换实现。
+  - `internal/claude/` 实现 `appClient` 接口，通过 `exec.Cmd` 驱动 `claude -p <prompt> --output-format stream-json --verbose --include-partial-messages` 子进程。
+  - 会话连续性通过 `--session-id <uuid>`（首次 turn）与 `--resume <uuid>`（后续 turn）实现；Claude CLI 自行持久化历史到磁盘。
+  - 工具审批使用 `--dangerously-skip-permissions`（默认开启，可配置）；`ApprovalRespond` 为 no-op，不再需要 ACP permission 往返。
+  - 流式解析：逐行读取子进程 stdout，识别 `stream_event/content_block_delta/text_delta` 为增量、`result/success` 为完成；进程退出码非 0 或 `is_error=true` 为错误。
+  - 取消：存储每个 turn 对应的 `*exec.Cmd`，`TurnInterrupt` 调用 `cmd.Process.Kill()`。
+  - 启动子进程时过滤环境变量 `CLAUDECODE`，避免触发 Claude CLI 的嵌套 session 保护。
+  - 复用 `acp.Server`、`acp.Transport`、`bridge.Store`、`pkg/claudeacp` 框架，Codex 代码路径不修改。
+  - `go.mod` 为零外部依赖（纯标准库）。
 - 备选方案：
-  - 方案A：新增独立 ACP server 实现（不复用现有 acp.Server）。
-  - 方案B：复用 appClient 接口替换后端，最大化代码复用。（采用）
+  - 方案A：直接调用 Anthropic API（需管理 token 与会话历史）。
+  - 方案B：以 `claude -p` CLI 子进程为后端，交由 Claude Code 本身管理认证与历史。（采用）
 - 取舍（Pros/Cons）：
-  - Pros：Codex 测试零回退，ACP 协议层只需维护一套；Claude 侧无子进程启动开销；嵌入模式天然支持。
-  - Cons：Claude 流式语义与 Codex app-server 通知语义有差异，转换层需要额外维护；会话历史在进程内存中，重启后丢失。
+  - Pros：无需管理 API token 与会话历史；模型选择/工具执行委托给 CLI；go.mod 零外部依赖；认证复用用户已有 Claude Code 登录态。
+  - Cons：依赖本机安装 Claude Code CLI；子进程冷启动有延迟；`--dangerously-skip-permissions` 默认开启需用户知晓；嵌套 session 保护需主动过滤 `CLAUDECODE` 环境变量。
 - 影响范围（文件/模块）：
-  - `internal/claude/`（新增）
-  - `pkg/claudeacp/`（新增）
-  - `cmd/acp/`（新增）
-  - `cmd/codex-acp-go/main.go`（thin wrapper 改造）
-  - `go.mod`（新增 anthropic-sdk-go 依赖）
+  - `internal/claude/`（config.go / client.go / stream.go）
+  - `pkg/claudeacp/runtime.go`（配置字段：ClaudeBin/MaxTurns/SkipPerms/AllowedTools）
+  - `pkg/claudeacp/runtime_runner.go`（调用 `claude.NewClient`）
+  - `cmd/acp/main.go`（flag：--claude-bin/--max-turns/--skip-perms）
+  - `testdata/fake_claude_cli/main.go`（fake claude 二进制，stream-json 输出）
+  - `test/integration/claude_e2e_test.go`（CLAUDE_BIN + buildFakeClaudeCLI）
 - 验证方式（测试/验收项）：
-  - `go test ./...`（Codex 零回退）
-  - `go test ./internal/claude/...`
+  - `go test ./...`（Codex 零回退；Claude 集成测试全通过）
   - `go test ./test/integration -run TestClaude -count=1`
   - `docs/ACCEPTANCE.md`：L1-L9

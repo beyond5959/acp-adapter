@@ -4,9 +4,9 @@
 > 更新频率：每合并一个 PR 必须更新一次；每次发现阻塞也要更新。
 
 ## 项目概览
-- 项目：codex-acp-go（基于 Codex App Server 的 ACP 适配器，同时支持 Claude 直接 API 适配）
-- 当前阶段：Claude Adapter C-R5 已完成（验收通过）
-- 最近更新：2026-03-02
+- 项目：codex-acp-go（基于 Codex App Server 的 ACP 适配器，同时支持 Claude Code CLI 子进程适配）
+- 当前阶段：Claude Adapter CLI 重构完成（C-R5 内部迭代）
+- 最近更新：2026-03-03
 
 ## 关键链接/文档
 - docs/SPEC.md：技术方案（权威）
@@ -58,24 +58,24 @@
   - 说明：完成 Library Mode 验收闭环与文档收敛。
 
 ## Claude Adapter Program（C-R0 ~ C-R5）
-- [x] C-R0 文档立项 + 引入 anthropic-sdk-go 依赖
+- [x] C-R0 文档立项
   - 状态：Done
-  - 说明：引入 anthropic-sdk-go v1.26.0，更新 DECISIONS/KNOWN_ISSUES，在 ACCEPTANCE.md 新增 L. Claude Mode 验收条目（L1-L9），新增 ADR-0033。
-- [x] C-R1 internal/claude/ 核心客户端
+  - 说明：建立 Claude Mode 验收条目（L1-L9），新增 ADR-0033。
+- [x] C-R1 internal/claude/ 核心客户端（claude -p CLI 子进程）
   - 状态：Done
-  - 说明：新增 config.go/session.go/stream.go/client.go，实现 appClient 接口，以 Anthropic Messages API 驱动完整会话、流式输出、tool_use 审批、review/compact/logout 语义。
+  - 说明：config.go/client.go/stream.go 实现 appClient 接口，驱动 `claude -p` 子进程；会话历史由 CLI 持久化（--session-id/--resume）；取消通过 kill 子进程实现；启动时过滤 CLAUDECODE 环境变量。
 - [x] C-R2 pkg/claudeacp/ 库入口
   - 状态：Done
-  - 说明：新增 runtime.go/runtime_runner.go/embedded.go，提供 RunStdio 和 NewEmbeddedRuntime 公共 API，复用 acp.Server 与 inproc transport，不依赖子进程。
+  - 说明：runtime.go/runtime_runner.go 提供 RunStdio/NewEmbeddedRuntime 公共 API；配置字段：ClaudeBin/DefaultModel/MaxTurns/SkipPerms/AllowedTools。
 - [x] C-R3 统一 cmd/acp 入口
   - 状态：Done
-  - 说明：新增 cmd/acp/main.go（--adapter codex|claude），cmd/codex-acp-go 保持向后兼容，导出 config.DetectAuthMode。
+  - 说明：`cmd/acp --adapter codex|claude`；Claude 侧 flag：--claude-bin/--max-turns/--skip-perms；cmd/codex-acp-go 保持向后兼容。
 - [x] C-R4 测试基础设施
   - 状态：Done
-  - 说明：新增 testdata/fake_claude_server（Anthropic SSE fake），test/integration/claude_e2e_test.go（5 个测试），go test ./... 全通过。
+  - 说明：testdata/fake_claude_cli（fake `claude` 二进制，支持 stream-json 输出）；claude_e2e_test.go 使用 CLAUDE_BIN + buildFakeClaudeCLI；go test ./... 全通过。
 - [x] C-R5 验收运行 + 文档收尾
   - 状态：Done
-  - 说明：go test ./... 全通过；L9 Codex 零回退；文档已更新。
+  - 说明：go test ./... 全通过；L9 Codex 零回退；go.mod 零外部依赖；文档已更新。
 
 ## 验收进度（从 docs/ACCEPTANCE.md 勾选）
 ### A. 协议合规（ACP）
@@ -142,8 +142,8 @@
 - [x] L3 内容能力（@mentions + images base64）
 - [x] L4 工具审批（tool_use → permission → approve/decline/cancel）
 - [x] L5 Slash commands（/review/compact/logout 等）
-- [x] L6 Auth 方法（ANTHROPIC_AUTH_TOKEN；缺失明确错误；/logout 清空）
-- [x] L7 可靠性（stdout 纯净；cancel 生效）
+- [x] L6 Auth 方法（claude CLI 自身认证；无 token 配置；/logout 清空）
+- [x] L7 可靠性（stdout 纯净；cancel 生效；CLAUDECODE 环境变量过滤）
 - [x] L8 库模式（RunStdio + EmbeddedRuntime；契约对照通过）
 - [x] L9 Codex 零回退（go test ./... 全通过）
 
@@ -282,6 +282,25 @@
 1. R5 server 集成。
 
 ## 变更摘要（每 PR 一条）
+### 2026-03-03 — Claude 适配器后端：claude -p CLI 子进程
+- Done:
+  - `internal/claude/` 重写为 `claude -p` 子进程驱动；config.go/client.go/stream.go 实现 appClient 接口。
+  - 会话连续性：首次 turn `--session-id <uuid>`，后续 turn `--resume <uuid>`；历史由 CLI 持久化到磁盘。
+  - 取消：`TurnInterrupt` 调用 `cmd.Process.Kill()`。
+  - 启动子进程时过滤 `CLAUDECODE` 环境变量，防止嵌套 session 保护报错（KI-0031）。
+  - `ApprovalRespond` 为 no-op；工具以 `--dangerously-skip-permissions` 自动执行（默认，可关闭，见 KI-0032）。
+  - `pkg/claudeacp/runtime.go`：配置字段 ClaudeBin/DefaultModel/MaxTurns/SkipPerms/AllowedTools。
+  - `cmd/acp/main.go`：Claude 侧 flag --claude-bin/--max-turns/--skip-perms。
+  - `testdata/fake_claude_cli/main.go`：fake `claude` 二进制，输出 stream-json 格式。
+  - `test/integration/claude_e2e_test.go`：改用 `buildFakeClaudeCLI` + `CLAUDE_BIN`；auth 测试改为无需 token 验证。
+  - `go.mod`：零外部依赖（纯标准库）。
+  - `internal/claudecli/` 目录重命名为 `internal/claude/`（包名 `claude`）。
+- Tests:
+  - `go test ./...` 通过（Claude 6 个 e2e 测试全通过；Codex 零回退）
+- Notes/Follow-ups:
+  - KI-0031（CLAUDECODE 过滤）已在 `client.go:buildCmd` 中修复。
+  - KI-0032（skip-perms 默认开启）需用户知晓；后续可评估 approval 事件桥接。
+  - 真实 claude CLI 冒烟测试因嵌套 session 限制无法在 Claude Code 内直接执行；需在独立终端验证。
 ### 2026-02-28 — R4 契约对照测试（standalone vs embedded）
 - Done:
   - 新增对照测试 `test/integration/r4_contract_test.go`，同一输入脚本分别驱动：

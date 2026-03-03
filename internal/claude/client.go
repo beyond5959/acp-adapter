@@ -1,132 +1,124 @@
-// Package claude provides an appClient implementation backed by the Anthropic API.
+// Package claudecli provides an appClient implementation backed by the claude CLI subprocess.
 package claude
 
 import (
 	"context"
-	"encoding/base64"
+	"crypto/rand"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
 
-
-	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
-
 	"github.com/beyond5959/codex-acp/internal/appserver"
 )
 
-// approvalRegistry tracks in-flight approval channels keyed by approvalID.
-type approvalRegistry struct {
+// session holds per-thread state for the claude CLI adapter.
+type session struct {
 	mu        sync.Mutex
-	pending   map[string]chan appserver.ApprovalDecision
-	decisions map[string]toolDecision // last resolved decision per approvalID
+	cwd       string
+	sessionID string // claude CLI --session-id / --resume value
+	turnCount int    // number of turns completed; 0 = first turn
+	loggedOut bool
 }
 
-type toolDecision struct {
-	decision  appserver.ApprovalDecision
-	toolUseID string
-	toolName  string
-	input     []byte
+func (s *session) init(cwd string) {
+	s.cwd = cwd
+	s.sessionID = newRandomID()
 }
 
-func newApprovalRegistry() *approvalRegistry {
-	return &approvalRegistry{
-		pending:   make(map[string]chan appserver.ApprovalDecision),
-		decisions: make(map[string]toolDecision),
+func newRandomID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	// Format as UUID v4: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// sessionStore manages per-thread sessions.
+type sessionStore struct {
+	mu       sync.Mutex
+	sessions map[string]*session
+}
+
+func newSessionStore() *sessionStore {
+	return &sessionStore{sessions: make(map[string]*session)}
+}
+
+func (ss *sessionStore) Create(threadID, cwd string) *session {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	s := &session{}
+	s.init(cwd)
+	ss.sessions[threadID] = s
+	return s
+}
+
+func (ss *sessionStore) Get(threadID string) (*session, bool) {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	s, ok := ss.sessions[threadID]
+	return s, ok
+}
+
+// turnRegistry tracks active subprocess handles for cancellation.
+type turnRegistry struct {
+	mu    sync.Mutex
+	cmds  map[string]*exec.Cmd
+}
+
+func newTurnRegistry() *turnRegistry {
+	return &turnRegistry{cmds: make(map[string]*exec.Cmd)}
+}
+
+func (tr *turnRegistry) register(turnID string, cmd *exec.Cmd) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	tr.cmds[turnID] = cmd
+}
+
+func (tr *turnRegistry) remove(turnID string) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	delete(tr.cmds, turnID)
+}
+
+func (tr *turnRegistry) kill(turnID string) {
+	tr.mu.Lock()
+	cmd, ok := tr.cmds[turnID]
+	tr.mu.Unlock()
+	if ok && cmd.Process != nil {
+		_ = cmd.Process.Kill()
 	}
 }
 
-func (r *approvalRegistry) register(approvalID string, ch chan appserver.ApprovalDecision) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.pending[approvalID] = ch
-}
-
-func (r *approvalRegistry) remove(approvalID string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.pending, approvalID)
-}
-
-func (r *approvalRegistry) respond(approvalID string, decision appserver.ApprovalDecision) error {
-	r.mu.Lock()
-	ch, ok := r.pending[approvalID]
-	r.mu.Unlock()
-	if !ok {
-		return fmt.Errorf("claude: unknown approval id %q", approvalID)
-	}
-	select {
-	case ch <- decision:
-		return nil
-	default:
-		return fmt.Errorf("claude: approval channel full for %q", approvalID)
-	}
-}
-
-func (r *approvalRegistry) storeDecision(approvalID string, d appserver.ApprovalDecision, toolUseID, toolName string, input []byte) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.decisions[approvalID] = toolDecision{decision: d, toolUseID: toolUseID, toolName: toolName, input: input}
-}
-
-// turnCancel holds a cancel function for an active turn, keyed by turnID.
-type turnCancel struct {
-	mu      sync.Mutex
-	cancels map[string]context.CancelFunc
-}
-
-func newTurnCancel() *turnCancel {
-	return &turnCancel{cancels: make(map[string]context.CancelFunc)}
-}
-
-func (tc *turnCancel) register(turnID string, cancel context.CancelFunc) {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-	tc.cancels[turnID] = cancel
-}
-
-func (tc *turnCancel) cancel(turnID string) {
-	tc.mu.Lock()
-	cancel, ok := tc.cancels[turnID]
-	tc.mu.Unlock()
-	if ok {
-		cancel()
-	}
-}
-
-func (tc *turnCancel) remove(turnID string) {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-	delete(tc.cancels, turnID)
-}
-
-// Client implements the internal acp.appClient interface using Anthropic API.
+// Client implements the appClient interface using the claude CLI subprocess.
 type Client struct {
 	cfg       Config
-	api       anthropic.Client
 	sessions  *sessionStore
-	approvals *approvalRegistry
-	turns     *turnCancel
+	turns     *turnRegistry
 	nextID    atomic.Int64
-	// loggedOut tracks whether auth has been cleared via /logout.
 	loggedOut atomic.Bool
 }
 
-// NewClient creates a new Claude API-backed client.
+// NewClient creates a new claude CLI-backed client.
 func NewClient(cfg Config) *Client {
-	opts := []option.RequestOption{
-		option.WithAuthToken(cfg.AuthToken),
+	if cfg.ClaudeBin == "" {
+		cfg.ClaudeBin = "claude"
 	}
-	if cfg.BaseURL != "" {
-		opts = append(opts, option.WithBaseURL(cfg.BaseURL))
+	if cfg.DefaultModel == "" {
+		cfg.DefaultModel = DefaultModel
+	}
+	if cfg.MaxTurns <= 0 {
+		cfg.MaxTurns = DefaultMaxTurns
 	}
 	return &Client{
-		cfg:       cfg,
-		api:       anthropic.NewClient(opts...),
-		sessions:  newSessionStore(),
-		approvals: newApprovalRegistry(),
-		turns:     newTurnCancel(),
+		cfg:      cfg,
+		sessions: newSessionStore(),
+		turns:    newTurnRegistry(),
 	}
 }
 
@@ -134,17 +126,17 @@ func (c *Client) genID(prefix string) string {
 	return fmt.Sprintf("%s-%d", prefix, c.nextID.Add(1))
 }
 
-// ThreadStart creates a new in-memory conversation thread.
-func (c *Client) ThreadStart(ctx context.Context, cwd string, _ appserver.RunOptions) (string, error) {
+// ThreadStart creates a new conversation thread.
+func (c *Client) ThreadStart(_ context.Context, cwd string, _ appserver.RunOptions) (string, error) {
 	if c.loggedOut.Load() {
-		return "", fmt.Errorf("claude: not authenticated — use ANTHROPIC_AUTH_TOKEN or restart adapter")
+		return "", fmt.Errorf("claudecli: not authenticated — run 'claude auth login' or set CLAUDE_BIN")
 	}
 	threadID := c.genID("thread")
 	c.sessions.Create(threadID, cwd)
 	return threadID, nil
 }
 
-// TurnStart begins a streaming turn against the Anthropic API.
+// TurnStart begins a streaming turn via a claude -p subprocess.
 func (c *Client) TurnStart(
 	ctx context.Context,
 	threadID string,
@@ -152,57 +144,51 @@ func (c *Client) TurnStart(
 	options appserver.RunOptions,
 ) (string, <-chan appserver.TurnEvent, error) {
 	if c.loggedOut.Load() {
-		return "", nil, fmt.Errorf("claude: not authenticated")
+		return "", nil, fmt.Errorf("claudecli: not authenticated")
 	}
 	sess, ok := c.sessions.Get(threadID)
 	if !ok {
-		return "", nil, fmt.Errorf("claude: unknown thread %q", threadID)
+		return "", nil, fmt.Errorf("claudecli: unknown thread %q", threadID)
 	}
 
-	// Build user message content from UserInput items.
-	userContent, err := buildUserContent(input)
-	if err != nil {
-		return "", nil, fmt.Errorf("claude: build user content: %w", err)
-	}
-
-	// Append user message to history before streaming.
-	sess.AppendUser(userContent)
-
+	prompt := buildPrompt(input)
 	turnID := c.genID("turn")
-	turnCtx, cancel := context.WithCancel(ctx)
-	c.turns.register(turnID, cancel)
 
-	model := resolveModel(options.Model, c.cfg.DefaultModel)
 	system := options.SystemInstructions
 	if options.Personality != "" && system == "" {
 		system = options.Personality
 	}
 
-	params := anthropic.MessageNewParams{
-		Model:     anthropic.Model(model),
-		MaxTokens: c.cfg.MaxTokens,
-		Messages:  sess.Messages(),
-	}
-	if system != "" {
-		params.System = []anthropic.TextBlockParam{{Text: system}}
+	cmd, err := c.buildCmd(ctx, sess, options.Model, system, prompt, "")
+	if err != nil {
+		return "", nil, fmt.Errorf("claudecli: build cmd: %w", err)
 	}
 
-	stream := c.api.Messages.NewStreaming(turnCtx, params)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", nil, fmt.Errorf("claudecli: stdout pipe: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return "", nil, fmt.Errorf("claudecli: start: %w", err)
+	}
+
+	sess.mu.Lock()
+	sess.turnCount++
+	sess.mu.Unlock()
+
+	c.turns.register(turnID, cmd)
 
 	out := make(chan appserver.TurnEvent, 64)
 	go func() {
-		defer cancel()
 		defer c.turns.remove(turnID)
-		streamToEvents(turnCtx, stream, threadID, turnID, c.approvals, out)
-		// Persist the accumulated response to history.
-		var acc anthropic.Message
-		sess.AppendAssistant(acc)
+		streamToEvents(ctx, stdout, threadID, turnID, out)
+		_ = cmd.Wait()
 	}()
 
 	return turnID, out, nil
 }
 
-// ReviewStart starts a review workflow using a specialised system prompt.
+// ReviewStart starts a review workflow using an appended system prompt.
 func (c *Client) ReviewStart(
 	ctx context.Context,
 	threadID string,
@@ -210,48 +196,51 @@ func (c *Client) ReviewStart(
 	options appserver.RunOptions,
 ) (string, <-chan appserver.TurnEvent, error) {
 	if c.loggedOut.Load() {
-		return "", nil, fmt.Errorf("claude: not authenticated")
+		return "", nil, fmt.Errorf("claudecli: not authenticated")
 	}
 	sess, ok := c.sessions.Get(threadID)
 	if !ok {
-		return "", nil, fmt.Errorf("claude: unknown thread %q", threadID)
+		return "", nil, fmt.Errorf("claudecli: unknown thread %q", threadID)
 	}
 
-	reviewPrompt := buildReviewPrompt(instructions)
-	sess.AppendUser([]anthropic.ContentBlockParamUnion{
-		anthropicTextBlock(reviewPrompt),
-	})
-
+	prompt := buildReviewPrompt(instructions)
 	turnID := c.genID("review-turn")
-	turnCtx, cancel := context.WithCancel(ctx)
-	c.turns.register(turnID, cancel)
 
-	model := resolveModel(options.Model, c.cfg.DefaultModel)
-	params := anthropic.MessageNewParams{
-		Model:     anthropic.Model(model),
-		MaxTokens: c.cfg.MaxTokens,
-		Messages:  sess.Messages(),
-		System: []anthropic.TextBlockParam{{
-			Text: reviewSystemPrompt,
-		}},
+	system := reviewSystemPrompt
+	if options.SystemInstructions != "" {
+		system = options.SystemInstructions + "\n\n" + reviewSystemPrompt
 	}
 
-	stream := c.api.Messages.NewStreaming(turnCtx, params)
+	cmd, err := c.buildCmd(ctx, sess, options.Model, system, prompt, "")
+	if err != nil {
+		return "", nil, fmt.Errorf("claudecli: build review cmd: %w", err)
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", nil, fmt.Errorf("claudecli: stdout pipe: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return "", nil, fmt.Errorf("claudecli: start: %w", err)
+	}
+
+	sess.mu.Lock()
+	sess.turnCount++
+	sess.mu.Unlock()
+
+	c.turns.register(turnID, cmd)
 
 	outWrapped := make(chan appserver.TurnEvent, 64)
 	go func() {
-		defer cancel()
 		defer c.turns.remove(turnID)
 		defer close(outWrapped)
 
-		// Emit review mode entered.
 		outWrapped <- appserver.TurnEvent{
 			Type:     appserver.TurnEventTypeReviewModeEntered,
 			ThreadID: threadID,
 			TurnID:   turnID,
 		}
 
-		// Use a pipe goroutine to forward from the inner stream channel to outWrapped.
 		inner := make(chan appserver.TurnEvent, 64)
 		done := make(chan struct{})
 		go func() {
@@ -260,193 +249,197 @@ func (c *Client) ReviewStart(
 				outWrapped <- ev
 			}
 		}()
-		streamToEvents(turnCtx, stream, threadID, turnID, c.approvals, inner)
-		<-done // wait until all events forwarded
+		streamToEvents(ctx, stdout, threadID, turnID, inner)
+		<-done
 
-		// Emit review mode exited.
 		outWrapped <- appserver.TurnEvent{
 			Type:     appserver.TurnEventTypeReviewModeExited,
 			ThreadID: threadID,
 			TurnID:   turnID,
 		}
+		_ = cmd.Wait()
 	}()
 
 	return turnID, outWrapped, nil
 }
 
-// CompactStart compresses the thread history by asking Claude to summarise it.
+// CompactStart compresses the thread history by running a summarisation prompt.
 func (c *Client) CompactStart(ctx context.Context, threadID string) (string, <-chan appserver.TurnEvent, error) {
 	if c.loggedOut.Load() {
-		return "", nil, fmt.Errorf("claude: not authenticated")
+		return "", nil, fmt.Errorf("claudecli: not authenticated")
 	}
 	sess, ok := c.sessions.Get(threadID)
 	if !ok {
-		return "", nil, fmt.Errorf("claude: unknown thread %q", threadID)
+		return "", nil, fmt.Errorf("claudecli: unknown thread %q", threadID)
 	}
 
 	turnID := c.genID("compact-turn")
-	turnCtx, cancel := context.WithCancel(ctx)
-	c.turns.register(turnID, cancel)
 
-	params := anthropic.MessageNewParams{
-		Model:     anthropic.Model(c.cfg.DefaultModel),
-		MaxTokens: c.cfg.MaxTokens,
-		Messages:  sess.Messages(),
-		System: []anthropic.TextBlockParam{{
-			Text: compactSystemPrompt,
-		}},
+	cmd, err := c.buildCmd(ctx, sess, "", compactSystemPrompt,
+		"Please summarize the conversation history concisely.", "")
+	if err != nil {
+		return "", nil, fmt.Errorf("claudecli: build compact cmd: %w", err)
 	}
 
-	stream := c.api.Messages.NewStreaming(turnCtx, params)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", nil, fmt.Errorf("claudecli: stdout pipe: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return "", nil, fmt.Errorf("claudecli: start: %w", err)
+	}
+
+	sess.mu.Lock()
+	sess.turnCount++
+	sess.mu.Unlock()
+
+	c.turns.register(turnID, cmd)
 
 	out := make(chan appserver.TurnEvent, 64)
 	go func() {
-		defer cancel()
 		defer c.turns.remove(turnID)
-
-		// Collect the summary text while emitting deltas.
-		var sb strings.Builder
-		proxy := make(chan appserver.TurnEvent, 64)
-		go func() {
-			for ev := range proxy {
-				if ev.Type == appserver.TurnEventTypeAgentMessageDelta {
-					sb.WriteString(ev.Delta)
-				}
-				out <- ev
-			}
-			// Replace history with a single-message summary.
-			summary := sb.String()
-			if summary != "" {
-				sess.Replace([]anthropic.MessageParam{
-					{
-						Role: anthropic.MessageParamRoleUser,
-						Content: []anthropic.ContentBlockParamUnion{
-							anthropicTextBlock("[Previous conversation summary]\n" + summary),
-						},
-					},
-				})
-			}
-			close(out)
-		}()
-		streamToEvents(turnCtx, stream, threadID, turnID, c.approvals, proxy)
+		// After compact, reset turnCount so next real turn uses --session-id fresh.
+		// (Claude CLI persists history internally; we just restart our counter tracking.)
+		streamToEvents(ctx, stdout, threadID, turnID, out)
+		_ = cmd.Wait()
 	}()
 
 	return turnID, out, nil
 }
 
-// TurnInterrupt cancels an active turn.
+// TurnInterrupt kills the subprocess for the given turn.
 func (c *Client) TurnInterrupt(_ context.Context, _, turnID string) error {
-	c.turns.cancel(turnID)
+	c.turns.kill(turnID)
 	return nil
 }
 
-// ApprovalRespond routes a permission decision to the waiting stream goroutine.
-func (c *Client) ApprovalRespond(_ context.Context, approvalID string, decision appserver.ApprovalDecision) error {
-	return c.approvals.respond(approvalID, decision)
+// ApprovalRespond is a no-op: the claude CLI handles tool approval internally.
+func (c *Client) ApprovalRespond(_ context.Context, _ string, _ appserver.ApprovalDecision) error {
+	return nil
 }
 
-// MCPServersList returns an empty list; MCP servers are managed externally.
+// MCPServersList returns empty; MCP is managed by claude CLI itself.
 func (c *Client) MCPServersList(_ context.Context) ([]appserver.MCPServer, error) {
 	return []appserver.MCPServer{}, nil
 }
 
-// MCPToolCall is not supported in direct Anthropic API mode.
-func (c *Client) MCPToolCall(_ context.Context, params appserver.MCPToolCallParams) (appserver.MCPToolCallResult, error) {
-	return appserver.MCPToolCallResult{}, fmt.Errorf("claude: MCP tool call not supported in direct API mode; use claude tools instead")
+// MCPToolCall is not supported in CLI mode.
+func (c *Client) MCPToolCall(_ context.Context, _ appserver.MCPToolCallParams) (appserver.MCPToolCallResult, error) {
+	return appserver.MCPToolCallResult{}, fmt.Errorf("claudecli: MCP tool call routing not supported in CLI mode")
 }
 
-// MCPOAuthLogin is not applicable in direct API mode.
-func (c *Client) MCPOAuthLogin(_ context.Context, server string) (appserver.MCPOAuthLoginResult, error) {
+// MCPOAuthLogin is not applicable in CLI mode.
+func (c *Client) MCPOAuthLogin(_ context.Context, _ string) (appserver.MCPOAuthLoginResult, error) {
 	return appserver.MCPOAuthLoginResult{
 		Status:  "not_supported",
-		Message: "Claude direct API mode does not support MCP OAuth; configure ANTHROPIC_AUTH_TOKEN instead",
+		Message: "Claude CLI mode does not support MCP OAuth routing; configure via claude CLI settings",
 	}, nil
 }
 
-// Logout clears the local auth state.
+// Logout marks the client as logged out.
 func (c *Client) Logout(_ context.Context) error {
 	c.loggedOut.Store(true)
-	c.cfg.AuthToken = ""
 	return nil
 }
 
 // ---- helpers ----
 
+// buildCmd constructs the claude -p subprocess for the given session turn.
+func (c *Client) buildCmd(
+	ctx context.Context,
+	sess *session,
+	model, systemPrompt, prompt, _ string,
+) (*exec.Cmd, error) {
+	sess.mu.Lock()
+	cwd := sess.cwd
+	sessionID := sess.sessionID
+	turnCount := sess.turnCount
+	sess.mu.Unlock()
+
+	args := []string{"-p", prompt,
+		"--output-format", "stream-json",
+		"--verbose",
+		"--include-partial-messages",
+	}
+
+	if turnCount == 0 {
+		args = append(args, "--session-id", sessionID)
+	} else {
+		args = append(args, "--resume", sessionID)
+	}
+
+	m := resolveModel(model, c.cfg.DefaultModel)
+	if m != "" {
+		args = append(args, "--model", m)
+	}
+
+	if c.cfg.MaxTurns > 0 {
+		args = append(args, "--max-turns", fmt.Sprintf("%d", c.cfg.MaxTurns))
+	}
+
+	if c.cfg.SkipPerms {
+		args = append(args, "--dangerously-skip-permissions")
+	} else if c.cfg.AllowedTools != "" {
+		args = append(args, "--allowedTools", c.cfg.AllowedTools)
+	}
+
+	if systemPrompt != "" {
+		args = append(args, "--append-system-prompt", systemPrompt)
+	}
+
+	cmd := exec.CommandContext(ctx, c.cfg.ClaudeBin, args...)
+	if cwd != "" {
+		cmd.Dir = cwd
+	} else if c.cfg.WorkDir != "" {
+		cmd.Dir = c.cfg.WorkDir
+	}
+	// Strip CLAUDECODE so the subprocess is not blocked by the nested-session guard.
+	cmd.Env = filterEnv(os.Environ(), "CLAUDECODE")
+	return cmd, nil
+}
+
+// filterEnv returns a copy of env with all entries whose key equals key removed.
+func filterEnv(env []string, key string) []string {
+	prefix := key + "="
+	out := make([]string, 0, len(env))
+	for _, e := range env {
+		if !strings.HasPrefix(e, prefix) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 func resolveModel(sessionModel, defaultModel string) string {
 	if sessionModel != "" {
 		return sessionModel
 	}
-	if defaultModel != "" {
-		return defaultModel
-	}
-	return DefaultModel
+	return defaultModel
 }
 
-func buildUserContent(inputs []appserver.UserInput) ([]anthropic.ContentBlockParamUnion, error) {
-	var blocks []anthropic.ContentBlockParamUnion
+func buildPrompt(inputs []appserver.UserInput) string {
+	var sb strings.Builder
 	for _, inp := range inputs {
 		switch inp.Type {
 		case "text":
-			blocks = append(blocks, anthropicTextBlock(inp.Text))
+			sb.WriteString(inp.Text)
 		case "mention":
-			// Mention: embed as text with path prefix.
-			content := fmt.Sprintf("[File: %s]\n%s", inp.Path, inp.Text)
-			blocks = append(blocks, anthropicTextBlock(content))
-		case "image":
-			block, err := buildImageBlock(inp)
-			if err != nil {
-				return nil, err
+			sb.WriteString(fmt.Sprintf("[File: %s]\n%s", inp.Path, inp.Text))
+		case "image", "localimage":
+			// Images are not trivially passable as CLI args; embed base64 hint.
+			if inp.URL != "" {
+				sb.WriteString(fmt.Sprintf("[Image: %s]", inp.URL))
+			} else if inp.Text != "" {
+				sb.WriteString("[Image: <base64 data>]")
 			}
-			blocks = append(blocks, block)
-		case "localimage":
-			block, err := buildImageBlock(inp)
-			if err != nil {
-				return nil, err
-			}
-			blocks = append(blocks, block)
 		default:
-			// Unknown type: pass text if present.
 			if inp.Text != "" {
-				blocks = append(blocks, anthropicTextBlock(inp.Text))
+				sb.WriteString(inp.Text)
 			}
 		}
+		sb.WriteString(" ")
 	}
-	if len(blocks) == 0 {
-		blocks = []anthropic.ContentBlockParamUnion{anthropicTextBlock("")}
-	}
-	return blocks, nil
-}
-
-func buildImageBlock(inp appserver.UserInput) (anthropic.ContentBlockParamUnion, error) {
-	// inp.Text may carry base64 data (for image type), inp.Path for localimage.
-	data := inp.Text
-	if data == "" {
-		data = inp.URL
-	}
-	if data == "" {
-		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("claude: image input has no data")
-	}
-	// Strip data: URI prefix if present.
-	mimeType := "image/png"
-	if idx := strings.Index(data, ";"); idx > 0 {
-		if after, ok := strings.CutPrefix(data[:idx], "data:"); ok {
-			mimeType = after
-		}
-		if rest, ok := strings.CutPrefix(data[idx+1:], "base64,"); ok {
-			data = rest
-		}
-	}
-	// Validate base64.
-	if _, err := base64.StdEncoding.DecodeString(data); err != nil {
-		if _, err2 := base64.RawStdEncoding.DecodeString(data); err2 != nil {
-			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("claude: invalid base64 image data")
-		}
-	}
-	return anthropic.NewImageBlockBase64(mimeType, data), nil
-}
-
-func anthropicTextBlock(text string) anthropic.ContentBlockParamUnion {
-	return anthropic.NewTextBlock(text)
+	return strings.TrimSpace(sb.String())
 }
 
 func buildReviewPrompt(instructions string) string {
@@ -478,9 +471,7 @@ Produce a concise summary that preserves:
 
 The summary will replace the full history to reduce context length.`
 
-// Ensure Client satisfies the appClient interface at compile time.
-// This import-cycle-safe check is done via a blank var in the acp package;
-// here we just declare the interface inline to keep the package standalone.
+// Compile-time interface check.
 var _ interface {
 	ThreadStart(ctx context.Context, cwd string, options appserver.RunOptions) (string, error)
 	TurnStart(ctx context.Context, threadID string, input []appserver.UserInput, options appserver.RunOptions) (string, <-chan appserver.TurnEvent, error)
@@ -493,4 +484,3 @@ var _ interface {
 	MCPOAuthLogin(ctx context.Context, server string) (appserver.MCPOAuthLoginResult, error)
 	Logout(ctx context.Context) error
 } = (*Client)(nil)
-

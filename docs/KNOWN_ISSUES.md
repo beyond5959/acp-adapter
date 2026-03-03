@@ -31,9 +31,11 @@
 - KI-0025：嵌入模式并发/阻塞风险（宿主线程模型差异）
 - KI-0026：permission 回写超时风险（嵌入链路）
 - KI-0027：inproc transport 背压风险（宿主未及时消费导致写阻塞）
-- KI-0028：Claude 适配器会话历史进程内存储（重启丢失）
+- KI-0028：Claude 适配器依赖本机 Claude Code CLI（claude 命令）
 - KI-0029：Claude /review 命令通过 system prompt 模拟，非原生 review/start 语义
-- KI-0030：Claude /compact 仅做内存历史压缩，不持久化
+- KI-0030：Claude /compact 仅做摘要 prompt 压缩，不跨 CLI session 持久化
+- KI-0031：Claude 子进程 CLAUDECODE 环境变量需过滤，否则触发嵌套 session 保护
+- KI-0032：Claude 适配器 --dangerously-skip-permissions 默认开启
 
 ---
 
@@ -325,17 +327,19 @@
 - 后续计划：
   - R3 评估引入可观测指标（队列深度/阻塞时长）与可配置背压策略，R4 增加压力回归。
 
-## KI-0028：Claude 适配器会话历史进程内存储（重启丢失）
+## KI-0028：Claude 适配器依赖本机 Claude Code CLI（claude 命令）
 - 现象：
-  - Claude 适配器将 per-thread 对话历史维护在进程内存中，进程重启后所有历史丢失。
+  - `cmd/acp --adapter claude` 依赖 `$CLAUDE_BIN`（默认 `claude`）可执行文件存在并已登录认证。
+  - 若 `claude` 未安装或未登录，`TurnStart` 时子进程启动失败，`session/prompt` 返回错误。
 - 影响：
-  - 长会话场景下重启 adapter 会导致上下文丢失，用户需重新建立 session。
+  - 在未安装 Claude Code 的 CI / Docker 环境中，Claude 适配器完全不可用。
 - 复现：
-  - 正常对话若干轮后重启 `cmd/acp --adapter claude`，发现历史不可恢复。
+  - 不安装 claude 直接运行 `cmd/acp --adapter claude` 并发 `session/prompt`。
 - Workaround：
-  - 对需要持久化上下文的场景，客户端侧保存对话摘要并在新 session 重新注入。
+  - 确保运行环境已安装 Claude Code 并完成 `claude auth login`。
+  - 在测试环境设置 `CLAUDE_BIN=<path/to/fake_claude_cli>` 使用 fake 替身。
 - 后续计划：
-  - 评估将历史序列化到本地文件或数据库，支持 session resume。
+  - 评估内嵌 claude API 调用作为无 CLI 降级路径。
 
 ## KI-0029：Claude /review 命令通过 system prompt 模拟，非原生 review/start 语义
 - 现象：
@@ -349,12 +353,40 @@
 - 后续计划：
   - 若 Anthropic API 未来支持原生 review 能力，替换为原生实现。
 
-## KI-0030：Claude /compact 仅做内存历史压缩，不持久化
+## KI-0030：Claude /compact 仅做摘要 prompt 压缩，不跨 CLI session 持久化
 - 现象：
-  - `/compact` 通过向 Claude 发送摘要 prompt 并替换内存中的历史，无法持久化。重启后原始历史不可恢复。
+  - `/compact` 向 claude CLI 发送压缩 prompt；由于 `--resume <uuid>` 机制，CLI 本身已持久化历史，但 compact 后的新摘要仍依赖 Claude Code 磁盘上的 session 文件。
+  - 若 CLI session 文件被清理，历史不可恢复。
 - 影响：
-  - 与 KI-0028 叠加：compact + 重启会同时丢失压缩前后的历史。
+  - compact 后若 claude 清理旧 session，后续 `--resume` 会失败并触发错误。
 - Workaround：
-  - compact 后导出摘要文本作为新 session 的初始上下文。
+  - 避免在 compact 后清理 claude 的 session 存储（`~/.claude/projects/`）。
 - 后续计划：
-  - 与 KI-0028 一同评估持久化方案。
+  - 检测 `--resume` 失败时自动回退到新 `--session-id` 重新建立会话。
+
+## KI-0031：Claude 子进程 CLAUDECODE 环境变量需过滤，否则触发嵌套 session 保护
+- 现象：
+  - 在 Claude Code 交互会话内运行 `cmd/acp --adapter claude` 时，`claude` 子进程检测到 `CLAUDECODE` 环境变量并拒绝启动（报 `Claude Code cannot be launched inside another Claude Code session`）。
+- 影响：
+  - 在 Claude Code 内部调试/测试 Claude 适配器时，所有 `session/prompt` 均失败。
+- 复现：
+  - 在 Claude Code 终端中执行 `cmd/acp --adapter claude` 并发 `session/prompt`。
+- Workaround：
+  - 适配器已在 `buildCmd` 中自动过滤 `CLAUDECODE` 变量（`filterEnv`），正常使用无需手动处理。
+  - 若手动测试需要在 Claude Code 内运行 `claude -p`，可先执行 `unset CLAUDECODE`。
+- 后续计划：
+  - 当前已在 `client.go:buildCmd` 中修复，保持回归测试覆盖。
+
+## KI-0032：Claude 适配器 --dangerously-skip-permissions 默认开启
+- 现象：
+  - `SkipPerms: true` 为默认配置，`claude -p` 子进程以 `--dangerously-skip-permissions` 启动，工具调用不经过用户审批自动执行。
+- 影响：
+  - 模型若调用文件写入、命令执行等副作用工具，会在无用户介入的情况下执行。
+  - ACP `session/request_permission` 不会被触发（`ApprovalRespond` 为 no-op）。
+- 复现：
+  - 默认配置下发送含工具调用触发词的 prompt，观察无 permission 请求。
+- Workaround：
+  - 若需要审批，通过 `--skip-perms=false` 关闭，并配置 `--allowed-tools` 显式白名单。
+  - 或在受信任的 CI/自动化环境中维持默认（skip）以减少交互。
+- 后续计划：
+  - 评估将 tool approval 事件从 `claude -p` 的 stream-json 输出中解析并桥接到 ACP `session/request_permission`，恢复 approval 往返语义。

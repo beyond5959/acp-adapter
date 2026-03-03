@@ -12,8 +12,8 @@ import (
 )
 
 // startClaudeAdapter builds and starts the cmd/acp binary with --adapter claude,
-// pointing at the fake Claude server.
-func startClaudeAdapter(t *testing.T, fakeServerURL string, extraEnv ...string) *adapterHarness {
+// pointing at the fake Claude CLI binary.
+func startClaudeAdapter(t *testing.T, claudeBin string, extraEnv ...string) *adapterHarness {
 	t.Helper()
 
 	rootDir := repoRoot(t)
@@ -21,8 +21,7 @@ func startClaudeAdapter(t *testing.T, fakeServerURL string, extraEnv ...string) 
 
 	envBase := []string{
 		"LOG_LEVEL=debug",
-		"ANTHROPIC_AUTH_TOKEN=test-token",
-		"ANTHROPIC_BASE_URL=" + fakeServerURL,
+		"CLAUDE_BIN=" + claudeBin,
 	}
 
 	cmd := exec.Command(adapterBin, "--adapter", "claude")
@@ -64,45 +63,15 @@ func startClaudeAdapter(t *testing.T, fakeServerURL string, extraEnv ...string) 
 	return h
 }
 
-// startFakeClaudeServer builds and starts the fake Anthropic API server.
-// Returns the base URL (e.g. "http://127.0.0.1:PORT").
-func startFakeClaudeServer(t *testing.T) string {
+// buildFakeClaudeCLI builds the fake_claude_cli binary and returns its path.
+func buildFakeClaudeCLI(t *testing.T) string {
 	t.Helper()
-	rootDir := repoRoot(t)
-	serverBin := buildBinary(t, rootDir, "./testdata/fake_claude_server")
-
-	cmd := exec.Command(serverBin)
-	cmd.Dir = rootDir
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		t.Fatalf("fake claude server stdout pipe: %v", err)
-	}
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start fake claude server: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-	})
-
-	// Read port from first line.
-	scanner := bufio.NewScanner(stdout)
-	if !scanner.Scan() {
-		t.Fatalf("fake claude server did not print port")
-	}
-	portLine := strings.TrimSpace(scanner.Text())
-	// Drain remaining stdout in background.
-	go func() {
-		for scanner.Scan() {
-		}
-	}()
-	return "http://127.0.0.1:" + portLine
+	return buildBinary(t, repoRoot(t), "./testdata/fake_claude_cli")
 }
 
 func TestClaudeE2EBasicPromptAndCancel(t *testing.T) {
-	baseURL := startFakeClaudeServer(t)
-	h := startClaudeAdapter(t, baseURL)
+	claudeBin := buildFakeClaudeCLI(t)
+	h := startClaudeAdapter(t, claudeBin)
 
 	// L1/L2: initialize
 	h.sendRequest("1", "initialize", map[string]any{})
@@ -205,18 +174,18 @@ func TestClaudeE2EBasicPromptAndCancel(t *testing.T) {
 	h.assertStdoutPureJSONRPC()
 }
 
-func TestClaudeE2EAuthMissingReturnsError(t *testing.T) {
-	baseURL := startFakeClaudeServer(t)
+func TestClaudeE2ENoAuthRequiredWithCLI(t *testing.T) {
+	// In CLI mode auth is handled by the claude binary itself; no token needed in adapter.
+	claudeBin := buildFakeClaudeCLI(t)
 	rootDir := repoRoot(t)
 	adapterBin := buildBinary(t, rootDir, "./cmd/acp")
 
 	cmd := exec.Command(adapterBin, "--adapter", "claude")
 	cmd.Dir = rootDir
-	// No ANTHROPIC_AUTH_TOKEN — adapter should still start but fail on session/new or session/prompt.
 	cmd.Env = append(os.Environ(),
 		"LOG_LEVEL=debug",
-		"ANTHROPIC_AUTH_TOKEN=",
-		"ANTHROPIC_BASE_URL="+baseURL,
+		"CLAUDE_BIN="+claudeBin,
+		// No API token needed — claude CLI handles auth.
 	)
 
 	stdin, _ := cmd.StdinPipe()
@@ -231,77 +200,29 @@ func TestClaudeE2EAuthMissingReturnsError(t *testing.T) {
 	reader := newRPCReader(t, stdout)
 
 	writeRequest(t, stdin, "1", "initialize", map[string]any{})
-	var initMsg rpcMessage
-	deadline := time.Now().Add(responseTimeout)
-	for time.Now().Before(deadline) {
-		select {
-		case msg, ok := <-reader.messages:
-			if !ok {
-				t.Fatalf("reader closed before initialize response")
-			}
-			if messageID(msg) == "1" {
-				initMsg = msg
-				goto gotInit
-			}
-		case <-time.After(responseTimeout):
-			t.Fatalf("timed out waiting for initialize")
+	select {
+	case msg, ok := <-reader.messages:
+		if !ok {
+			t.Fatalf("reader closed before initialize response")
 		}
-	}
-gotInit:
-	if initMsg.Error != nil {
-		// initialize itself might error with no-auth; that's acceptable.
-		if !strings.Contains(initMsg.Error.Message, "auth") &&
-			!strings.Contains(strings.ToLower(initMsg.Error.Message), "token") {
-			t.Fatalf("unexpected initialize error: %s", initMsg.Error.Message)
+		if messageID(msg) != "1" {
+			t.Fatalf("unexpected first message id: %s", messageID(msg))
 		}
-		return
+		if msg.Error != nil {
+			t.Fatalf("initialize error: %s", msg.Error.Message)
+		}
+	case <-time.After(responseTimeout):
+		t.Fatalf("timed out waiting for initialize")
 	}
 
-	writeRequest(t, stdin, "2", "session/new", map[string]any{})
-	for {
-		select {
-		case msg, ok := <-reader.messages:
-			if !ok {
-				t.Fatalf("reader closed")
-			}
-			if messageID(msg) == "2" {
-				// session/new may succeed (thread is local) or fail with auth error.
-				if msg.Error != nil {
-					// acceptable: auth gate at session/new
-					return
-				}
-				var nr struct{ SessionID string `json:"sessionId"` }
-				unmarshalResult(t, msg, &nr)
-
-				// Now try a prompt — should fail with auth error.
-				writeRequest(t, stdin, "3", "session/prompt", map[string]any{
-					"sessionId": nr.SessionID,
-					"prompt":    "hello",
-				})
-				for {
-					select {
-					case msg2, ok2 := <-reader.messages:
-						if !ok2 {
-							return
-						}
-						if messageID(msg2) == "3" {
-							// Either an RPC error or a stop with an error result — both acceptable.
-							return
-						}
-					case <-time.After(responseTimeout):
-						t.Fatalf("timed out waiting for prompt error response")
-					}
-				}
-			}
-		case <-time.After(responseTimeout):
-			t.Fatalf("timed out waiting for session/new")
-		}
-	}
+	_ = stdin.Close()
 }
 
-func TestClaudeE2EApprovalRoundTrip(t *testing.T) {
-	baseURL := startFakeClaudeServer(t)
-	h := startClaudeAdapter(t, baseURL)
+func TestClaudeE2EApprovalAutoApproved(t *testing.T) {
+	// In CLI mode with --dangerously-skip-permissions, tools are auto-executed.
+	// The fake CLI binary returns a normal text response for "approval command" prompts.
+	claudeBin := buildFakeClaudeCLI(t)
+	h := startClaudeAdapter(t, claudeBin)
 
 	h.sendRequest("1", "initialize", map[string]any{})
 	_ = h.waitResponse("1", responseTimeout)
@@ -313,48 +234,36 @@ func TestClaudeE2EApprovalRoundTrip(t *testing.T) {
 	}
 	unmarshalResult(t, newResp, &newResult)
 
-	// Trigger approval flow (fake server returns tool_use for "approval command").
 	h.sendRequest("3", "session/prompt", map[string]any{
 		"sessionId": newResult.SessionID,
 		"prompt":    "approval command please",
 	})
 
-	gotPermission := false
 	gotPromptResp := false
 	for !gotPromptResp {
 		msg := h.nextMessage(responseTimeout)
-		switch msg.Method {
-		case "session/request_permission":
-			gotPermission = true
-			// Approve the permission.
-			h.sendResultResponse(messageID(msg), map[string]any{"outcome": "approved"})
-		case "session/update":
-			// consume
-		default:
-			if messageID(msg) != "3" {
-				continue
-			}
-			var result struct {
-				StopReason string `json:"stopReason"`
-			}
-			unmarshalResult(t, msg, &result)
-			if result.StopReason != "end_turn" {
-				t.Fatalf("approval prompt expected stopReason=end_turn, got %q", result.StopReason)
-			}
-			gotPromptResp = true
+		if msg.Method == "session/update" {
+			continue
 		}
-	}
-
-	if !gotPermission {
-		t.Fatalf("approval flow: expected session/request_permission")
+		if messageID(msg) != "3" {
+			continue
+		}
+		var result struct {
+			StopReason string `json:"stopReason"`
+		}
+		unmarshalResult(t, msg, &result)
+		if result.StopReason != "end_turn" {
+			t.Fatalf("expected stopReason=end_turn, got %q", result.StopReason)
+		}
+		gotPromptResp = true
 	}
 
 	h.assertStdoutPureJSONRPC()
 }
 
 func TestClaudeE2EInitializeContainsStandardFields(t *testing.T) {
-	baseURL := startFakeClaudeServer(t)
-	h := startClaudeAdapter(t, baseURL)
+	claudeBin := buildFakeClaudeCLI(t)
+	h := startClaudeAdapter(t, claudeBin)
 
 	h.sendRequest("1", "initialize", map[string]any{})
 	resp := h.waitResponse("1", responseTimeout)
@@ -376,10 +285,10 @@ func TestClaudeE2EInitializeContainsStandardFields(t *testing.T) {
 }
 
 func TestClaudeContractStandaloneVsEmbedded(t *testing.T) {
-	baseURL := startFakeClaudeServer(t)
+	claudeBin := buildFakeClaudeCLI(t)
 
 	// Standalone mode.
-	h := startClaudeAdapter(t, baseURL)
+	h := startClaudeAdapter(t, claudeBin)
 	h.sendRequest("1", "initialize", map[string]any{})
 	initResp := h.waitResponse("1", responseTimeout)
 	var standaloneInit struct {
@@ -427,7 +336,6 @@ func TestClaudeContractStandaloneVsEmbedded(t *testing.T) {
 		t.Fatalf("standalone: expected streaming chunk")
 	}
 
-	// Verify protocol version is non-empty (both modes use same ACP server).
 	if len(standaloneInit.ProtocolVersion) == 0 {
 		t.Fatalf("standalone: expected non-empty protocolVersion")
 	}
@@ -438,7 +346,6 @@ func TestClaudeContractStandaloneVsEmbedded(t *testing.T) {
 
 func TestClaudeE2EUnifiedCmdAdapterFlag(t *testing.T) {
 	// Verify that cmd/acp with --adapter codex still works (Codex zero-regression check).
-	// We reuse the fake codex app-server.
 	if isRealCodexEnabled() {
 		t.Skip("skipped when E2E_REAL_CODEX=1")
 	}
@@ -483,3 +390,6 @@ func TestClaudeE2EUnifiedCmdAdapterFlag(t *testing.T) {
 	}
 	_ = stdin.Close()
 }
+
+// Ensure unused imports are satisfied.
+var _ = strings.Contains
