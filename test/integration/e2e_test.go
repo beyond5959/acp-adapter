@@ -200,7 +200,7 @@ func startAdapterWithConfig(t *testing.T, args []string, useRealCodex bool, extr
 	t.Helper()
 
 	rootDir := repoRoot(t)
-	adapterBin := buildBinary(t, rootDir, "./cmd/acp-adapter")
+	adapterBin := buildBinary(t, rootDir, "./cmd/acp")
 
 	cmdArgs := append([]string(nil), args...)
 	cmd := exec.Command(adapterBin, cmdArgs...)
@@ -2998,7 +2998,7 @@ func TestE2ERealCodexPromptInteractions(t *testing.T) {
 		},
 		{
 			name:   "EntryPointQuestion",
-			prompt: "What does cmd/acp-adapter do? Answer in one sentence.",
+			prompt: "What does cmd/acp do? Answer in one sentence.",
 		},
 	}
 

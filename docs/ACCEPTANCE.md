@@ -111,7 +111,7 @@ J2. **stdout 纯净**
 
 ## K. Library Mode（初版）
 K1. **双入口可启动（cmd + pkg）**
-- 操作：分别通过 `cmd/acp-adapter` 与库入口创建服务实例并完成 initialize/new/prompt 基线流程。  
+- 操作：通过 `cmd/acp --adapter codex` 与库入口创建服务实例并完成 initialize/new/prompt 基线流程。  
 - 预期：两种入口都可独立跑通，且不要求修改 ACP client 侧协议调用方式。
 
 K2. **R1 零行为变化**
@@ -139,7 +139,7 @@ K5. **独立模式与库模式契约对照（R4）**
   - embedded：无阻塞/无死锁，且并发多 session 不发生跨 session 串扰。
 
 K6. **server 集成（R5）**
-- 操作：`cmd/acp-adapter` 改为调用库入口后执行 `go test ./...` 与现有集成测试。  
+- 操作：`cmd/acp --adapter codex` 调用库入口后执行 `go test ./...` 与现有集成测试。  
 - 预期：既有 PR1-PR5 能力不回退，CLI 对用户的参数与运行方式保持兼容。
 
 K7. **收尾验收（R6）**
@@ -182,4 +182,4 @@ L8. **库模式（等同 K1-K5）**
 
 L9. **Codex 零回退**
 - 操作：在新增 Claude 适配器代码后执行 `go test ./...`。
-- 预期：全部 Codex 相关测试通过；`cmd/acp-adapter` 行为与改动前完全一致。
+- 预期：全部 Codex 相关测试通过；`cmd/acp --adapter codex` 行为与改动前一致。

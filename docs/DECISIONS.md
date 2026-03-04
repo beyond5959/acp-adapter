@@ -38,6 +38,7 @@
 - ADR-0032：R4 契约对照测试策略（同脚本双驱动 + 关键序列比对）
 - ADR-0033：Claude 适配器架构（appClient 接口 + claude -p CLI 子进程后端）
 - ADR-0034：项目统一命名为 acp-adapter（module/import/cmd/npm）
+- ADR-0035：移除 `cmd/acp-adapter`，统一 `cmd/acp` 单入口
 
 ---
 
@@ -754,3 +755,32 @@
 - 验证方式（测试/验收项）：
   - `go test ./...`
   - 全仓检索无旧 module/import/cmd 路径残留
+
+### ADR-0035：移除 `cmd/acp-adapter`，统一 `cmd/acp` 单入口
+- 日期：2026-03-04
+- 状态：Accepted
+- 背景：
+  - `cmd/acp-adapter` 与 `cmd/acp --adapter codex` 在行为上重复，长期并存会造成入口维护与文档漂移。
+  - 当前项目已支持 Codex + Claude 双后端，`cmd/acp` 已是统一入口。
+- 决策：
+  - 删除 `cmd/acp-adapter` 模块，统一通过 `cmd/acp --adapter codex|claude` 启动。
+  - 保持 Codex 默认后端不变，使 `cmd/acp` 在不传 `--adapter` 时仍可跑 Codex 兼容路径。
+  - 同步更新集成测试、README、验收文档与 npm 二进制构建脚本到 `cmd/acp`。
+- 备选方案：
+  - 方案A：保留 `cmd/acp-adapter` 作为长期兼容壳层。
+  - 方案B：标记 deprecated 一段周期后再删除。
+  - 方案C：直接删除并统一单入口。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：减少重复入口和维护成本；文档与脚本收敛到单一命令；避免双入口行为漂移。
+  - Cons：对仍依赖 `cmd/acp-adapter` 的外部脚本是破坏性变更，需要迁移。
+- 影响范围（文件/模块）：
+  - `cmd/acp-adapter/main.go`（删除）
+  - `cmd/acp/main.go`
+  - `test/integration/e2e_test.go`
+  - `npm/scripts/build-binaries.mjs`
+  - `README.md`
+  - `docs/ACCEPTANCE.md`
+  - `docs/KNOWN_ISSUES.md`
+- 验证方式（测试/验收项）：
+  - `go test ./...`
+  - `docs/ACCEPTANCE.md`：K1、K6、L9（入口描述）更新并与实现一致

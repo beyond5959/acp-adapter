@@ -6,7 +6,7 @@
 ## 项目概览
 - 项目：acp-adapter（基于 Codex App Server 的 ACP 适配器，同时支持 Claude Code CLI 子进程适配）
 - 当前阶段：Claude Adapter CLI 重构完成（C-R5 内部迭代）
-- 最近更新：2026-03-03
+- 最近更新：2026-03-04
 
 ## 关键链接/文档
 - docs/SPEC.md：技术方案（权威）
@@ -69,7 +69,7 @@
   - 说明：runtime.go/runtime_runner.go 提供 RunStdio/NewEmbeddedRuntime 公共 API；配置字段：ClaudeBin/DefaultModel/MaxTurns/SkipPerms/AllowedTools。
 - [x] C-R3 统一 cmd/acp 入口
   - 状态：Done
-  - 说明：`cmd/acp --adapter codex|claude`；Claude 侧 flag：--claude-bin/--max-turns/--skip-perms；cmd/acp-adapter 保持向后兼容。
+  - 说明：`cmd/acp --adapter codex|claude`；Claude 侧 flag：--claude-bin/--max-turns/--skip-perms；Codex/Claude 统一由 `cmd/acp` 启动。
 - [x] C-R4 测试基础设施
   - 状态：Done
   - 说明：testdata/fake_claude_cli（fake `claude` 二进制，支持 stream-json 输出）；claude_e2e_test.go 使用 CLAUDE_BIN + buildFakeClaudeCLI；go test ./... 全通过。
@@ -282,6 +282,18 @@
 1. R5 server 集成。
 
 ## 变更摘要（每 PR 一条）
+### 2026-03-04 — 移除 `cmd/acp-adapter`，统一 `cmd/acp` 单入口
+- Done:
+  - 删除 `cmd/acp-adapter/main.go`。
+  - `test/integration/e2e_test.go` 改为构建 `./cmd/acp`（Codex 默认后端），并更新真实 e2e 提示文案为 `cmd/acp`。
+  - `npm/scripts/build-binaries.mjs` 改为构建 `./cmd/acp`，保持产物文件名不变。
+  - 更新 README / ACCEPTANCE / CLAUDE 文档中的启动与配置示例到 `cmd/acp --adapter codex|claude`。
+  - 更新 `docs/KNOWN_ISSUES.md`：记录入口迁移（KI-0034）并修正旧构建/安装命令。
+- Tests:
+  - `go test ./...` 通过
+- Notes/Follow-ups:
+  - 外部仍依赖 `cmd/acp-adapter` 的脚本需迁移到 `cmd/acp`。
+
 ### 2026-03-03 — 项目统一重命名：acp-adapter
 - Done:
   - Go module 路径统一为 `github.com/beyond5959/acp-adapter`。

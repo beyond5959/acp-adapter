@@ -37,6 +37,7 @@
 - KI-0031：Claude 子进程 CLAUDECODE 环境变量需过滤，否则触发嵌套 session 保护
 - KI-0032：Claude 适配器 --dangerously-skip-permissions 默认开启
 - KI-0033：项目重命名后的兼容路径变更（module/import/cmd/npm）
+- KI-0034：`cmd/acp-adapter` 入口已移除（统一为 `cmd/acp`）
 
 ---
 
@@ -231,7 +232,7 @@
 - 影响：
   - `go get` / `go install` 失败，第三方集成与 CI 拉取依赖不稳定。
 - 复现：
-  - 保持短 module 路径后执行：`go install github.com/beyond5959/acp-adapter/cmd/acp-adapter@latest`。
+  - 保持短 module 路径后执行：`go install github.com/beyond5959/acp-adapter/cmd/acp@latest`。
 - Workaround：
   - 使用 canonical module：`module github.com/beyond5959/acp-adapter`。
   - 变更后同步替换仓库内 `acp-adapter/...` 导入路径。
@@ -248,11 +249,25 @@
 - Workaround：
   - 统一切换到新路径：
     - Go module/import：`github.com/beyond5959/acp-adapter`
-    - cmd 入口：`cmd/acp-adapter`
+    - cmd 入口：`cmd/acp`（使用 `--adapter codex|claude`）
     - 包路径：`pkg/codexacp`
     - npm 包：`@beyond5959/acp-adapter` 及其平台子包
 - 后续计划：
   - 当前仓库内已完成替换并通过 `go test ./...`；对外使用方需同步升级配置。
+
+## KI-0034：`cmd/acp-adapter` 入口已移除（统一为 `cmd/acp`）
+- 现象：
+  - 新版本删除了 `cmd/acp-adapter`，统一使用 `cmd/acp` 并通过 `--adapter codex|claude` 选择后端。
+- 影响：
+  - 仍执行 `go build ./cmd/acp-adapter`、或在外部配置中直接引用旧入口路径的脚本会失败。
+- 复现：
+  - 执行：`go build ./cmd/acp-adapter`
+- Workaround：
+  - 构建：`go build -o ./bin/acp ./cmd/acp`
+  - 运行 Codex 后端：`./bin/acp --adapter codex`
+  - 运行 Claude 后端：`./bin/acp --adapter claude`
+- 后续计划：
+  - 保持文档、测试和发布脚本全部围绕 `cmd/acp` 维护，避免双入口漂移。
 
 ## KI-0021：`session/update` 的标准 `update.sessionUpdate` 在低频事件上仍是回退语义
 - 现象：
@@ -291,7 +306,7 @@
   - 使用未包含本次修复的旧二进制启动 agent，并让客户端发 `initialize(protocolVersion=1)`。
 - Workaround：
   - 重新构建并替换二进制：
-    - `go build -o ./bin/acp-adapter ./cmd/acp-adapter`
+    - `go build -o ./bin/acp ./cmd/acp`
   - 重启 ACP 客户端后重连。
 - 后续计划：
   - 保持 `TestE2EInitializeIncludesACPStandardFields` 回归，防止该字段再次回退。

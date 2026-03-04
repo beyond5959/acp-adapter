@@ -74,7 +74,7 @@ make stress-j1
 make schema
 
 # 构建二进制
-go build -o ./bin/acp-adapter ./cmd/acp-adapter
+go build -o ./bin/acp ./cmd/acp
 ```
 
 ## 6. 关键架构速查
@@ -82,7 +82,7 @@ go build -o ./bin/acp-adapter ./cmd/acp-adapter
 ```
 ACP Client (Zed/etc)
        ↕  ACP stdio newline-delimited JSON-RPC
-  acp-adapter  ← cmd/ 入口委托 pkg/codexacp
+  acp (--adapter codex|claude)  ← cmd/ 入口委托 pkg/codexacp / pkg/claudeacp
        ↕  App Server stdio JSONL JSON-RPC
   codex app-server (子进程)
 ```

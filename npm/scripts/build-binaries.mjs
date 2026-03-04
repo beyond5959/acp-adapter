@@ -63,7 +63,7 @@ for (const target of targets) {
       ldflags,
       "-o",
       outPath,
-      "./cmd/acp-adapter",
+      "./cmd/acp",
     ],
     {
       cwd: repoRoot,

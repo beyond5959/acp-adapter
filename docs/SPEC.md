@@ -321,7 +321,7 @@ Codex（CLI/App Server）提供审批与沙箱机制；App Server 的 thread/tur
 ```
 acp-adapter/
   cmd/
-    acp-adapter/              # main: ACP stdio server
+    acp/                      # main: ACP stdio server (choose backend via --adapter)
   internal/
     acp/
       codec_stdio.go           # newline-delimited JSON-RPC codec 

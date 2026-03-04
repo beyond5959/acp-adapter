@@ -2,14 +2,14 @@
 
 ![acp-adapter promo](docs/assets/acp-adapter.png)
 
-`acp-adapter` is a Go ACP adapter that lets ACP clients drive AI assistants over the [ACP protocol](https://agentclientprotocol.com/).
+`acp-adapter` is a Go ACP adapter that lets ACP clients drive Codex and Claude Code over the [ACP protocol](https://agentclientprotocol.com/).
 
 ## 1) Positioning
 This component supports two integration models:
 
 | Model | Best for | Entry point |
 |---|---|---|
-| **Standalone (process mode)** | Configure a binary directly in Zed or other ACP clients | `cmd/acp-adapter` (Codex) / `cmd/acp` (Codex + Claude) |
+| **Standalone (process mode)** | Configure a binary directly in Zed or other ACP clients | `cmd/acp` (Codex + Claude) |
 | **Library (embedded mode)** | Host ACP runtime directly inside your Go service | `pkg/codexacp` / `pkg/claudeacp` |
 
 Supported backends:
@@ -35,8 +35,8 @@ ACP transport rules are strict: `stdout` must contain protocol messages only, an
 Prerequisite: Codex CLI installed and logged in.
 
 ```bash
-go build -o ./bin/acp-adapter ./cmd/acp-adapter
-./bin/acp-adapter
+go build -o ./bin/acp ./cmd/acp
+./bin/acp --adapter codex
 ```
 
 Auth (one of):
@@ -61,8 +61,8 @@ Optional overrides:
 ### Option C: Unified binary (both backends)
 ```bash
 go build -o ./bin/acp ./cmd/acp
-./bin/acp --adapter codex   # same as acp-adapter
-./bin/acp --adapter claude  # Claude Code CLI subprocess
+./bin/acp --adapter codex
+./bin/acp --adapter claude
 ```
 
 ### Zed External Agent config (minimal)
@@ -71,9 +71,9 @@ Codex backend:
 ```json
 {
   "agent_servers": {
-    "acp-adapter": {
-      "command": "/absolute/path/to/bin/acp-adapter",
-      "args": [],
+    "codex-acp": {
+      "command": "/absolute/path/to/bin/acp",
+      "args": ["--adapter", "codex"],
       "env": {
         "CODEX_APP_SERVER_CMD": "codex",
         "CODEX_APP_SERVER_ARGS": "app-server"
