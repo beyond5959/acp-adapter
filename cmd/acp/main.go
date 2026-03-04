@@ -18,7 +18,7 @@ import (
 
 	"github.com/beyond5959/acp-adapter/internal/config"
 	"github.com/beyond5959/acp-adapter/pkg/claudeacp"
-	"github.com/beyond5959/acp-adapter/pkg/acpadapter"
+	"github.com/beyond5959/acp-adapter/pkg/codexacp"
 )
 
 const usage = `acp — ACP adapter with multiple backend support
@@ -146,7 +146,7 @@ func runCodexAdapter(ctx context.Context, p runCodexParams) error {
 		os.Getenv("CHATGPT_SUBSCRIPTION_ACTIVE"),
 	)
 
-	cfg := acpadapter.RuntimeConfig{
+	cfg := codexacp.RuntimeConfig{
 		AppServerCommand: p.appServerCmd,
 		AppServerArgs:    p.appServerArgs,
 		TraceJSON:        p.traceJSON,
@@ -158,7 +158,7 @@ func runCodexAdapter(ctx context.Context, p runCodexParams) error {
 		DefaultProfile:   p.defaultProfile,
 		InitialAuthMode:  initialAuthMode,
 	}
-	return acpadapter.RunStdio(ctx, cfg, os.Stdin, os.Stdout, os.Stderr)
+	return codexacp.RunStdio(ctx, cfg, os.Stdin, os.Stdout, os.Stderr)
 }
 
 // ---- claude adapter wiring ----
@@ -259,10 +259,10 @@ func mergeProfiles(dst map[string]profileValues, data []byte) {
 	}
 }
 
-func mapCodexProfiles(profiles map[string]profileValues) map[string]acpadapter.ProfileConfig {
-	out := make(map[string]acpadapter.ProfileConfig, len(profiles))
+func mapCodexProfiles(profiles map[string]profileValues) map[string]codexacp.ProfileConfig {
+	out := make(map[string]codexacp.ProfileConfig, len(profiles))
 	for name, p := range profiles {
-		out[name] = acpadapter.ProfileConfig{
+		out[name] = codexacp.ProfileConfig{
 			Model:              p.Model,
 			ApprovalPolicy:     p.ApprovalPolicy,
 			Sandbox:            p.Sandbox,

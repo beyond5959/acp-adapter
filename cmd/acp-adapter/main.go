@@ -1,5 +1,5 @@
 // Command acp-adapter is the ACP adapter binary for the Codex backend.
-// It is a thin wrapper around pkg/acpadapter.
+// It is a thin wrapper around pkg/codexacp.
 package main
 
 import (
@@ -9,7 +9,7 @@ import (
 	"syscall"
 
 	"github.com/beyond5959/acp-adapter/internal/config"
-	"github.com/beyond5959/acp-adapter/pkg/acpadapter"
+	"github.com/beyond5959/acp-adapter/pkg/codexacp"
 )
 
 func main() {
@@ -18,7 +18,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	runtimeCfg := acpadapter.RuntimeConfig{
+	runtimeCfg := codexacp.RuntimeConfig{
 		AppServerCommand: cfg.AppServerCommand,
 		AppServerArgs:    cfg.AppServerArgs,
 		TraceJSON:        cfg.TraceJSON,
@@ -31,15 +31,15 @@ func main() {
 		InitialAuthMode:  cfg.InitialAuthMode,
 	}
 
-	if err := acpadapter.RunStdio(ctx, runtimeCfg, os.Stdin, os.Stdout, os.Stderr); err != nil {
+	if err := codexacp.RunStdio(ctx, runtimeCfg, os.Stdin, os.Stdout, os.Stderr); err != nil {
 		os.Exit(1)
 	}
 }
 
-func mapProfiles(profiles map[string]config.ProfileConfig) map[string]acpadapter.ProfileConfig {
-	out := make(map[string]acpadapter.ProfileConfig, len(profiles))
+func mapProfiles(profiles map[string]config.ProfileConfig) map[string]codexacp.ProfileConfig {
+	out := make(map[string]codexacp.ProfileConfig, len(profiles))
 	for name, profile := range profiles {
-		out[name] = acpadapter.ProfileConfig{
+		out[name] = codexacp.ProfileConfig{
 			Model:              profile.Model,
 			ApprovalPolicy:     profile.ApprovalPolicy,
 			Sandbox:            profile.Sandbox,

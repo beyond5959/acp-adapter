@@ -40,7 +40,7 @@
   - 说明：完成库化目标建档（里程碑、ADR、风险、初版验收项），未改动运行时行为。
 - [x] R1 外观库化（零行为变化）
   - 状态：Done
-  - 说明：新增 `pkg/acpadapter` 外观 API（`RunStdio`）并将 `cmd` 启动委托到库入口，协议行为保持不变。
+  - 说明：新增 `pkg/codexacp` 外观 API（`RunStdio`）并将 `cmd` 启动委托到库入口，协议行为保持不变。
 - [x] R2 传输层抽象
   - 状态：Done
   - 说明：引入 ACP 传输接口并新增 inproc channel transport，Server 改为依赖接口，stdio 行为保持兼容。
@@ -270,7 +270,7 @@
 ## Done / In Progress / Next（Library Embedding Program）
 ### Done
 1. R0 文档立项：补充里程碑、ADR、风险与 Library Mode 初版验收项。
-2. R1 外观库化：新增 `pkg/acpadapter`，`cmd` 入口委托库启动，新增最小参数映射测试。
+2. R1 外观库化：新增 `pkg/codexacp`，`cmd` 入口委托库启动，新增最小参数映射测试。
 3. R2 传输层抽象：新增 ACP 传输接口与 inproc transport，Server 改为基于接口，补充传输/stdio 基线测试。
 4. R3 嵌入 API：新增进程内调用 API 与 permission 回写能力，并补充嵌入模式 integration tests。
 5. R4 契约对照测试：新增同脚本双驱动对照框架，覆盖 initialize/new/prompt/cancel/permission（approve+decline）并补充嵌入模式并发不变量测试。
@@ -285,7 +285,7 @@
 ### 2026-03-03 — 项目统一重命名：acp-adapter
 - Done:
   - Go module 路径统一为 `github.com/beyond5959/acp-adapter`。
-  - 包路径从 `pkg/codexacp` 重命名为 `pkg/acpadapter`，并同步所有导入。
+  - 包路径从 `pkg/acpadapter` 重命名为 `pkg/codexacp`，并同步所有导入。
   - 入口命令从 `cmd/codex-acp-go` 重命名为 `cmd/acp-adapter`。
   - npm workspace 与发布包统一改名为 `acp-adapter` 系列（含平台子包与构建脚本）。
   - 主文档与工程文档中的项目名/路径同步为 `acp-adapter`。
@@ -317,7 +317,7 @@
 - Done:
   - 新增对照测试 `test/integration/r4_contract_test.go`，同一输入脚本分别驱动：
     - standalone：`cmd/acp-adapter` + stdio JSON-RPC
-    - embedded：`pkg/acpadapter.EmbeddedRuntime` + inproc transport
+    - embedded：`pkg/codexacp.EmbeddedRuntime` + inproc transport
   - 对照范围覆盖：
     - initialize 字段完整性（`protocolVersion` + capabilities）
     - `session/new` + `session/prompt`（流式 chunk）
@@ -334,7 +334,7 @@
 
 ### 2026-02-28 — R3 嵌入 API（进程内调用）
 - Done:
-  - 在 `pkg/acpadapter` 新增嵌入模式 API：
+  - 在 `pkg/codexacp` 新增嵌入模式 API：
     - `NewEmbeddedRuntime(...)`
     - `Start(ctx)`
     - `ClientRequest(ctx, msg)`
@@ -369,12 +369,12 @@
 
 ### 2026-02-28 — R1 外观库化（零行为变化）
 - Done:
-  - 新增 `pkg/acpadapter`，导出运行时配置与 `RunStdio(ctx, cfg, stdin, stdout, stderr)`。
-  - `cmd/acp-adapter/main.go` 仅保留参数解析与信号处理，核心启动逻辑委托 `pkg/acpadapter`。
+  - 新增 `pkg/codexacp`，导出运行时配置与 `RunStdio(ctx, cfg, stdin, stdout, stderr)`。
+  - `cmd/acp-adapter/main.go` 仅保留参数解析与信号处理，核心启动逻辑委托 `pkg/codexacp`。
   - 保持协议约束：stdout 仅 ACP JSON-RPC；stderr 仅日志。
   - 新增最小单测：`TestRunStdio_ProfileMappingWithFakeAppServer`，验证库入口参数映射（profile/run options）路径。
 - Tests:
-  - `go test ./pkg/acpadapter -run TestRunStdio_ProfileMappingWithFakeAppServer -count=1` 通过
+  - `go test ./pkg/codexacp -run TestRunStdio_ProfileMappingWithFakeAppServer -count=1` 通过
   - `go test ./...` 通过（含 `test/integration`）
 - Notes/Follow-ups:
   - R1 完成，下一阶段进入 R2（传输层抽象）
@@ -418,8 +418,6 @@
     - `TestE2ENotificationRoutingBySessionAndTurn`
     - `TestRPCReaderDetectsInvalidStdoutLine`
   - `go test ./...` 通过
-- D. 文档:
-  - 更新 `PROGRESS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`
 
 ### 2026-02-27 — PR3 Approvals -> ACP session/request_permission
 - A. 范围与目标:
@@ -433,8 +431,6 @@
 - C. 验证:
   - 新增 `TestE2EAcceptanceD1ToD5ApprovalsBridge`
   - `go test ./...` 通过
-- D. 文档:
-  - 更新 `PROGRESS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`
 
 ### 2026-02-27 — PR4 Edit review + patch 落盘两模式
 - A. 范围与目标:
@@ -452,8 +448,6 @@
     - `TestE2EAcceptanceE2PatchModeBACPFS`
     - `TestE2EReviewPatchConflictVisibleModeB`
   - `go test ./...` 通过
-- D. 文档:
-  - 更新 `PROGRESS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`
 
 ### 2026-02-27 — PR5 Slash commands + Profiles + MCP + Auth 收尾
 - A. 范围与目标:
@@ -476,8 +470,6 @@
     - `TestE2EAuthRequiredWithoutConfiguredMethod`
     - `TestE2EAcceptanceJ1Stress100Turns`（`RUN_STRESS_J1=1`）
   - `go test ./...` 通过
-- D. 文档:
-  - 更新 `PROGRESS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`
 
 ### 2026-02-27 — Real Codex e2e + trace-json + schema 前置校验
 - A. 范围与目标:
@@ -491,8 +483,6 @@
 - C. 验证:
   - `go test ./...` 通过
   - `E2E_REAL_CODEX=1 go test ./... -run TestE2EReal -count=1`（本机具备 codex/auth 环境时）
-- D. 文档:
-  - 更新 `PROGRESS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`
 
 ### 2026-02-27 — C1/C2/F1 收尾（mentions + images + structured TODO）
 - A. 范围与目标:
@@ -512,8 +502,6 @@
     - `TestE2EAcceptanceF1StructuredTODOAcrossTurns`
     - `TestE2ERealCodexContentBlocksMentionsImagesAndTODO`（`E2E_REAL_CODEX=1`）
   - `go test ./...` 通过
-- D. 文档:
-  - 更新 `PROGRESS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`
 
 ### 2026-02-27 — 崩溃恢复增强：当次 turn 自动重试一次（默认开启）
 - A. 范围与目标:
@@ -529,8 +517,6 @@
     - `TestE2EAcceptanceB1AppServerCrashDuringTurnAutoRetry`
     - `TestE2EAcceptanceB1AppServerCrashDuringTurnRetryFailureHasHint`
   - `go test ./...` 通过
-- D. 文档:
-  - 更新 `PROGRESS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`
 
 ### 2026-02-27 — `/logout` 增强：可复制恢复指引 + app-server auth 清理兼容
 - A. 范围与目标:
@@ -548,8 +534,7 @@
     - `TestE2EAcceptanceI1ToI3AuthMethods`
     - `TestE2EAuthRequiredWithoutConfiguredMethod`
   - `go test ./...` 通过
-- D. 文档:
-  - 更新 `PROGRESS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`
+
 
 ### 2026-02-27 — Real app-server 存在性回归补齐（mcp/auth/compact）
 - A. 范围与目标:
@@ -565,8 +550,6 @@
 - C. 验证:
   - 已执行：`go test ./...`
   - real 回归入口：`E2E_REAL_CODEX=1 go test ./... -run TestE2EReal -count=1`
-- D. 文档:
-  - 更新 `PROGRESS.md`、`docs/KNOWN_ISSUES.md`
 
 ### 2026-02-27 — go module 路径与 GitHub 仓库地址对齐
 - A. 范围与目标:
@@ -577,8 +560,6 @@
 - C. 验证:
   - 执行 `go test ./...` 通过
   - 全仓检查无残留 `\"codex-acp/...\"` 导入
-- D. 文档:
-  - 更新 `PROGRESS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`
 
 ### 2026-02-27 — 协议形态兼容修复（prompt 多形态 + session/update 标准 envelope）
 - A. 范围与目标:
@@ -602,5 +583,3 @@
     - `TestE2EAcceptanceA1ToA5AndB1`
     - `TestE2EAuthMethodsAndAuthenticateFlow`
   - `go test ./...` 通过（偶发 integration 超时重跑后可过）
-- D. 文档:
-  - 更新 `PROGRESS.md`、`docs/DECISIONS.md`、`docs/KNOWN_ISSUES.md`

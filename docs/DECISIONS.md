@@ -607,7 +607,7 @@
   - 库化目标要求“可独立运行 + 可复用库”，同时必须保证现有 ACP 行为不回退。
   - 若在同一阶段同时做入口库化与传输抽象，回归面会扩大，定位成本高。
 - 决策：
-  - R1 只做外观库化：新增 `pkg/acpadapter.RunStdio`，并让 `cmd/acp-adapter` 委托该入口。
+  - R1 只做外观库化：新增 `pkg/codexacp.RunStdio`，并让 `cmd/acp-adapter` 委托该入口。
   - R1 不改动 `internal/acp`、`internal/appserver`、`internal/bridge` 的协议处理语义。
   - R2 再进行传输层抽象（stdio/app-server 连接解耦），并通过契约测试锁定行为。
 - 备选方案：
@@ -617,7 +617,7 @@
   - Pros：把风险集中在装配层，便于验证“零行为变化”；故障定位更直接。
   - Cons：短期会保留一些跨层依赖，R2 仍需继续清理边界。
 - 影响范围（文件/模块）：
-  - `pkg/acpadapter/*`
+  - `pkg/codexacp/*`
   - `cmd/acp-adapter/main.go`
   - `internal/observability/logger.go`
   - `test/*`（新增库入口最小映射测试）
@@ -633,7 +633,7 @@
   - R3 需要支持外部 server 进程内调用，不再依赖 ACP 客户端子进程 stdio 连接。
   - 同时必须复用同一套 ACP server 业务逻辑，避免复制分支导致行为漂移。
 - 决策：
-  - 基于 R2 的 `internal/acp.Transport` 抽象，新增 `pkg/acpadapter.EmbeddedRuntime`。
+  - 基于 R2 的 `internal/acp.Transport` 抽象，新增 `pkg/codexacp.EmbeddedRuntime`。
   - 嵌入 API 采用“请求-响应 + 事件订阅”模型：
     - `ClientRequest(ctx, msg)`：发送 ACP request 并等待 response。
     - `SubscribeUpdates(...)`：接收 `session/update` 和 server-initiated requests（含 permission）。
@@ -647,8 +647,8 @@
   - Pros：最大化行为一致性，便于后续做 standalone vs embedded 契约对照（R4）。
   - Cons：嵌入宿主需正确处理订阅消费与 permission 回写时序，集成复杂度上升。
 - 影响范围（文件/模块）：
-  - `pkg/acpadapter/embedded.go`
-  - `pkg/acpadapter/runtime_runner.go`
+  - `pkg/codexacp/embedded.go`
+  - `pkg/codexacp/runtime_runner.go`
   - `test/integration/embedded_test.go`
   - `internal/acp/transport_inproc.go`（R2 复用）
 - 验证方式（测试/验收项）：
@@ -733,7 +733,7 @@
   - 统一项目命名为 `acp-adapter`，并同步以下路径：
     - Go module：`github.com/beyond5959/acp-adapter`
     - cmd：`cmd/acp-adapter`
-    - 包路径：`pkg/acpadapter`
+    - 包路径：`pkg/codexacp`
     - npm 包：`@beyond5959/acp-adapter` 及平台子包
   - 保留 `cmd/acp --adapter codex|claude` 作为统一入口，不改变协议层行为。
 - 备选方案：
@@ -745,7 +745,7 @@
 - 影响范围（文件/模块）：
   - `go.mod`
   - `cmd/acp-adapter/main.go`
-  - `pkg/acpadapter/*`
+  - `pkg/codexacp/*`
   - `cmd/acp/main.go`
   - `npm/package.json`
   - `npm/packages/acp-adapter*/package.json`

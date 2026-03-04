@@ -240,7 +240,7 @@
 
 ## KI-0033：项目重命名后的兼容路径变更（module/import/cmd/npm）
 - 现象：
-  - 项目从 `codex-acp-go` 重命名为 `acp-adapter` 后，旧路径（如 `cmd/codex-acp-go`、`pkg/codexacp`、`github.com/beyond5959/codex-acp`、`@beyond5959/codex-acp-go`）已不可用。
+  - 项目从 `codex-acp-go` 重命名为 `acp-adapter` 后，旧路径（如 `cmd/codex-acp-go`、`pkg/acpadapter`、`github.com/beyond5959/codex-acp`、`@beyond5959/codex-acp-go`）已不可用。
 - 影响：
   - 外部脚本、CI 配置、第三方导入若仍依赖旧命名，会出现构建失败或命令找不到。
 - 复现：
@@ -249,7 +249,7 @@
   - 统一切换到新路径：
     - Go module/import：`github.com/beyond5959/acp-adapter`
     - cmd 入口：`cmd/acp-adapter`
-    - 包路径：`pkg/acpadapter`
+    - 包路径：`pkg/codexacp`
     - npm 包：`@beyond5959/acp-adapter` 及其平台子包
 - 后续计划：
   - 当前仓库内已完成替换并通过 `go test ./...`；对外使用方需同步升级配置。

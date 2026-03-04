@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/beyond5959/acp-adapter/pkg/acpadapter"
+	"github.com/beyond5959/acp-adapter/pkg/codexacp"
 )
 
 type contractPromptScenario struct {
@@ -72,7 +72,7 @@ type contractPromptOutcome struct {
 }
 
 type embeddedPromptCallResult struct {
-	response acpadapter.RPCMessage
+	response codexacp.RPCMessage
 	err      error
 }
 
@@ -137,7 +137,7 @@ func TestR4EmbeddedInvariants_NoDeadlock_NoCrossSessionCrosstalk(t *testing.T) {
 	rootDir := repoRoot(t)
 	fakeServerBin := buildBinary(t, rootDir, "./testdata/fake_codex_app_server")
 
-	runtime := acpadapter.NewEmbeddedRuntime(acpadapter.RuntimeConfig{
+	runtime := codexacp.NewEmbeddedRuntime(codexacp.RuntimeConfig{
 		AppServerCommand: fakeServerBin,
 		LogLevel:         "debug",
 		PatchApplyMode:   "appserver",
@@ -286,7 +286,7 @@ func runContractScriptEmbedded(
 	rootDir := repoRoot(t)
 	fakeServerBin := buildBinary(t, rootDir, "./testdata/fake_codex_app_server")
 
-	runtime := acpadapter.NewEmbeddedRuntime(acpadapter.RuntimeConfig{
+	runtime := codexacp.NewEmbeddedRuntime(codexacp.RuntimeConfig{
 		AppServerCommand: fakeServerBin,
 		LogLevel:         "debug",
 		PatchApplyMode:   "appserver",
@@ -333,7 +333,7 @@ func contractInitializeStandalone(t *testing.T, h *adapterHarness) contractIniti
 func contractInitializeEmbedded(
 	t *testing.T,
 	ctx context.Context,
-	runtime *acpadapter.EmbeddedRuntime,
+	runtime *codexacp.EmbeddedRuntime,
 ) contractInitializeSnapshot {
 	t.Helper()
 	initResp := embeddedRequest(t, ctx, runtime, "contract-init", "initialize", map[string]any{
@@ -361,7 +361,7 @@ func contractSessionNewStandalone(t *testing.T, h *adapterHarness) string {
 func embeddedNewSession(
 	t *testing.T,
 	ctx context.Context,
-	runtime *acpadapter.EmbeddedRuntime,
+	runtime *codexacp.EmbeddedRuntime,
 	requestID string,
 	cwd string,
 ) string {
@@ -473,8 +473,8 @@ func runContractPromptStandalone(
 func runContractPromptEmbedded(
 	t *testing.T,
 	ctx context.Context,
-	runtime *acpadapter.EmbeddedRuntime,
-	updates <-chan acpadapter.RPCMessage,
+	runtime *codexacp.EmbeddedRuntime,
+	updates <-chan codexacp.RPCMessage,
 	sessionID string,
 	promptID string,
 	scenario contractPromptScenario,
@@ -550,7 +550,7 @@ func runContractPromptEmbedded(
 				if err := runtime.RespondPermission(
 					ctx,
 					*msg.ID,
-					acpadapter.PermissionDecision{Outcome: scenario.PermissionOutcome},
+					codexacp.PermissionDecision{Outcome: scenario.PermissionOutcome},
 				); err != nil {
 					t.Fatalf("embedded respond permission: %v", err)
 				}
@@ -574,7 +574,7 @@ func decodeInitializeSnapshot(
 		if v != nil {
 			t.Fatalf("%s returned rpc error: code=%d message=%s", label, v.Code, v.Message)
 		}
-	case *acpadapter.RPCError:
+	case *codexacp.RPCError:
 		if v != nil {
 			t.Fatalf("%s returned rpc error: code=%d message=%s", label, v.Code, v.Message)
 		}
@@ -885,7 +885,7 @@ func drainStandalonePromptTail(
 
 func drainEmbeddedPromptTail(
 	t *testing.T,
-	updates <-chan acpadapter.RPCMessage,
+	updates <-chan codexacp.RPCMessage,
 	outcome *contractPromptOutcome,
 	sessionID string,
 ) {
@@ -938,14 +938,14 @@ func shouldTrackPromptUpdate(
 	return update.TurnID == outcome.TurnID
 }
 
-func embeddedEnsureNoRPCError(t *testing.T, method string, resp acpadapter.RPCMessage) {
+func embeddedEnsureNoRPCError(t *testing.T, method string, resp codexacp.RPCMessage) {
 	t.Helper()
 	if resp.Error != nil {
 		t.Fatalf("%s rpc error code=%d message=%s", method, resp.Error.Code, resp.Error.Message)
 	}
 }
 
-func embeddedUnmarshalResult(t *testing.T, method string, resp acpadapter.RPCMessage, out any) {
+func embeddedUnmarshalResult(t *testing.T, method string, resp codexacp.RPCMessage, out any) {
 	t.Helper()
 	embeddedEnsureNoRPCError(t, method, resp)
 	if len(resp.Result) == 0 {
@@ -959,7 +959,7 @@ func embeddedUnmarshalResult(t *testing.T, method string, resp acpadapter.RPCMes
 func embeddedDecodeStopReason(
 	t *testing.T,
 	label string,
-	resp acpadapter.RPCMessage,
+	resp codexacp.RPCMessage,
 ) string {
 	t.Helper()
 	var result struct {
@@ -969,7 +969,7 @@ func embeddedDecodeStopReason(
 	return result.StopReason
 }
 
-func embeddedDecodeSessionUpdate(t *testing.T, msg acpadapter.RPCMessage) sessionUpdateParams {
+func embeddedDecodeSessionUpdate(t *testing.T, msg codexacp.RPCMessage) sessionUpdateParams {
 	t.Helper()
 	var params sessionUpdateParams
 	if err := json.Unmarshal(msg.Params, &params); err != nil {
@@ -980,7 +980,7 @@ func embeddedDecodeSessionUpdate(t *testing.T, msg acpadapter.RPCMessage) sessio
 
 func embeddedDecodeSessionRequestPermission(
 	t *testing.T,
-	msg acpadapter.RPCMessage,
+	msg codexacp.RPCMessage,
 ) sessionRequestPermissionParams {
 	t.Helper()
 	var params sessionRequestPermissionParams

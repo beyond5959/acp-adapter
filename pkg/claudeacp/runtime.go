@@ -16,7 +16,7 @@ const (
 	defaultPatchApplyMode = "appserver"
 )
 
-// ProfileConfig defines one named runtime profile (mirrors acpadapter.ProfileConfig).
+// ProfileConfig defines one named runtime profile (mirrors codexacp.ProfileConfig).
 type ProfileConfig struct {
 	Model              string
 	ApprovalPolicy     string
@@ -34,7 +34,7 @@ type RuntimeConfig struct {
 	SkipPerms    bool
 	AllowedTools string
 
-	// Shared adapter settings (same semantics as acpadapter.RuntimeConfig).
+	// Shared adapter settings (same semantics as codexacp.RuntimeConfig).
 	TraceJSON      bool
 	TraceJSONFile  string
 	LogLevel       string

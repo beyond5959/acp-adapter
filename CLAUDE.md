@@ -82,12 +82,12 @@ go build -o ./bin/acp-adapter ./cmd/acp-adapter
 ```
 ACP Client (Zed/etc)
        ↕  ACP stdio newline-delimited JSON-RPC
-  acp-adapter  ← cmd/ 入口委托 pkg/acpadapter
+  acp-adapter  ← cmd/ 入口委托 pkg/codexacp
        ↕  App Server stdio JSONL JSON-RPC
   codex app-server (子进程)
 ```
 
-- `pkg/acpadapter`：独立模式（`RunStdio`）+ 嵌入模式（`EmbeddedRuntime`）
+- `pkg/codexacp`：独立模式（`RunStdio`）+ 嵌入模式（`EmbeddedRuntime`）
 - `internal/acp`：ACP server、传输层抽象（stdio / inproc）
 - `internal/appserver`：App Server 子进程生命周期、supervisor、client
 - `internal/bridge`：ACP ↔ App Server 协议映射、session 状态机
