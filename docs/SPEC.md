@@ -1,6 +1,6 @@
 # 基于 Codex App Server 的 Go 版 ACP 适配器（acp-adapter）：详细可落地技术方案（全功能）
 
-> 目标：用 **Go** 实现一个 **ACP（Agent Client Protocol）Agent 进程**，在上游对接 **ACP-compatible 客户端（例如 Zed）**，在下游通过 **Codex App Server（`codex app-server`）** 驱动 Codex 的完整 IDE 级能力（认证/会话历史/审批/流式事件/Review/Slash commands/MCP 等），达到与 `zed-industries/codex-acp` 相同的“全功能”体验。  
+> 目标：用 **Go** 实现一个 **ACP（Agent Client Protocol）Agent 进程**，在上游对接 **ACP-compatible 客户端（例如 Zed）**，在下游通过 **Codex App Server（`codex app-server`）** 驱动 Codex 的完整 IDE 级能力（认证/会话历史/审批/流式事件/Review/Slash commands/MCP 等）。  
 > 说明：**App Server 与 ACP 是两套协议**，本项目本质是一个 **协议桥接（bridge）**。Codex App Server 是 Codex 富客户端（如 VS Code 扩展）使用的双向 JSON-RPC 协议，支持 stdio(JSONL) 与 websocket（实验），并提供 approvals、conversation history、streamed agent events 等能力。  
 > ACP stdio 传输同样是 **newline-delimited JSON-RPC**：消息以 `\n` 分隔且不得内嵌换行，stdout 只能输出协议消息，日志走 stderr。
 
@@ -8,7 +8,7 @@
 
 ## 1. 范围与功能清单（必须全部实现）
 
-对齐 `zed-industries/codex-acp` 所宣称支持的能力清单：  
+能力清单：  
 - Context **@-mentions**（文件/符号/选区等上下文注入）  
 - **Images**（以 ACP content block image 形式传递）  
 - **Tool calls**（含 permission requests）  
@@ -29,7 +29,7 @@
 ## 2. 核心技术原理（两层协议 + 双向事件流）
 
 ### 2.1 上游：ACP Agent（stdio JSON-RPC）
-- Zed 等客户端以子进程启动适配器，走 stdio。  
+- Zed 等 ACP 客户端以子进程启动适配器，走 stdio。  
 - ACP stdio：每条 JSON-RPC 消息 `\n` 分隔、不得嵌入换行；适配器 stdout 只能写 ACP 消息，stderr 用于日志。  
 
 ### 2.2 下游：Codex App Server（stdio JSONL JSON-RPC）
@@ -321,7 +321,7 @@ Codex（CLI/App Server）提供审批与沙箱机制；App Server 的 thread/tur
 ```
 acp-adapter/
   cmd/
-    acp-adapter/              # main: ACP stdio server
+    acp/                      # main: ACP stdio server (choose backend via --adapter)
   internal/
     acp/
       codec_stdio.go           # newline-delimited JSON-RPC codec 
@@ -446,6 +446,5 @@ acp-adapter/
 - App Server 开源 README（thread/turn/item、review/start、API 列表、initialize 规则、opt-out 通知）  
 - ACP 协议：Transports（stdio newline-delimited JSON）  
 - ACP 协议：Prompt Turn（permission、tool_call_update、stopReason 等）  
-- ACP schema（ContentBlock 等核心类型）  
-- `zed-industries/codex-acp` 功能清单（对齐范围）  
+- ACP schema（ContentBlock 等核心类型）    
 - Zed External Agents（ACP 在 Zed 的集成入口）  

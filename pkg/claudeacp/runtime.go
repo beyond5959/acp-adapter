@@ -16,7 +16,7 @@ const (
 	defaultPatchApplyMode = "appserver"
 )
 
-// ProfileConfig defines one named runtime profile (mirrors acpadapter.ProfileConfig).
+// ProfileConfig defines one named runtime profile (mirrors codexacp.ProfileConfig).
 type ProfileConfig struct {
 	Model              string
 	ApprovalPolicy     string
@@ -30,11 +30,13 @@ type RuntimeConfig struct {
 	// Claude CLI-specific settings.
 	ClaudeBin    string
 	DefaultModel string
-	MaxTurns     int
-	SkipPerms    bool
-	AllowedTools string
+	// AvailableModels are exposed to ACP model picker UI.
+	AvailableModels []string
+	MaxTurns        int
+	SkipPerms       bool
+	AllowedTools    string
 
-	// Shared adapter settings (same semantics as acpadapter.RuntimeConfig).
+	// Shared adapter settings (same semantics as codexacp.RuntimeConfig).
 	TraceJSON      bool
 	TraceJSONFile  string
 	LogLevel       string
@@ -46,14 +48,15 @@ type RuntimeConfig struct {
 // DefaultRuntimeConfig returns the default Claude adapter runtime settings.
 func DefaultRuntimeConfig() RuntimeConfig {
 	return RuntimeConfig{
-		ClaudeBin:      claude.DefaultBin(),
-		DefaultModel:   claude.DefaultModel,
-		MaxTurns:       claude.DefaultMaxTurns,
-		SkipPerms:      true,
-		TraceJSONFile:  defaultTraceJSONFile,
-		LogLevel:       "info",
-		PatchApplyMode: defaultPatchApplyMode,
-		Profiles:       map[string]ProfileConfig{},
+		ClaudeBin:       claude.DefaultBin(),
+		DefaultModel:    claude.DefaultModel,
+		AvailableModels: []string{claude.DefaultModel},
+		MaxTurns:        claude.DefaultMaxTurns,
+		SkipPerms:       true,
+		TraceJSONFile:   defaultTraceJSONFile,
+		LogLevel:        "info",
+		PatchApplyMode:  defaultPatchApplyMode,
+		Profiles:        map[string]ProfileConfig{},
 	}
 }
 
@@ -78,6 +81,8 @@ func normalizeRuntimeConfig(cfg RuntimeConfig) RuntimeConfig {
 	if strings.TrimSpace(cfg.DefaultModel) == "" {
 		cfg.DefaultModel = claude.DefaultModel
 	}
+	cfg.AvailableModels = append(uniqueModels(cfg.AvailableModels), cfg.DefaultModel)
+	cfg.AvailableModels = uniqueModels(cfg.AvailableModels)
 	if cfg.MaxTurns <= 0 {
 		cfg.MaxTurns = claude.DefaultMaxTurns
 	}
@@ -125,10 +130,28 @@ func toACPProfiles(profiles map[string]ProfileConfig) map[string]acp.ProfileConf
 
 func toClaudeCliConfig(cfg RuntimeConfig) claude.Config {
 	return claude.Config{
-		ClaudeBin:    cfg.ClaudeBin,
-		DefaultModel: cfg.DefaultModel,
-		MaxTurns:     cfg.MaxTurns,
-		SkipPerms:    cfg.SkipPerms,
-		AllowedTools: cfg.AllowedTools,
+		ClaudeBin:       cfg.ClaudeBin,
+		DefaultModel:    cfg.DefaultModel,
+		AvailableModels: uniqueModels(cfg.AvailableModels),
+		MaxTurns:        cfg.MaxTurns,
+		SkipPerms:       cfg.SkipPerms,
+		AllowedTools:    cfg.AllowedTools,
 	}
+}
+
+func uniqueModels(models []string) []string {
+	seen := make(map[string]struct{}, len(models))
+	out := make([]string, 0, len(models))
+	for _, model := range models {
+		value := strings.TrimSpace(model)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }

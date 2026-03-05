@@ -1,9 +1,18 @@
 # acp-adapter
 
-## 1) What is this?
-`acp-adapter` is a Go ACP adapter that lets ACP clients (such as Zed External Agents) drive AI assistants over the [ACP protocol](docs/SPEC.md).
+![acp-adapter promo](docs/assets/acp-adapter.png)
 
-Two backends are supported:
+`acp-adapter` is a Go ACP adapter that lets ACP clients drive Codex and Claude Code over the [ACP protocol](https://agentclientprotocol.com/).
+
+## 1) Positioning
+This component supports two integration models:
+
+| Model | Best for | Entry point |
+|---|---|---|
+| **Standalone (process mode)** | Configure a binary directly in Zed or other ACP clients | `cmd/acp` (Codex + Claude) |
+| **Library (embedded mode)** | Host ACP runtime directly inside your Go service | `pkg/codexacp` / `pkg/claudeacp` |
+
+Supported backends:
 
 | Backend | Flag | Description |
 |---|---|---|
@@ -19,16 +28,15 @@ ACP transport rules are strict: `stdout` must contain protocol messages only, an
 - Structured TODO updates
 - Slash commands: `/review`, `/review-branch`, `/review-commit`, `/init`, `/compact`, `/logout`
 - Client MCP servers via `/mcp list`, `/mcp call`, `/mcp oauth`
-- Embedded library mode (`pkg/acpadapter` / `pkg/claudeacp`) for in-process use
+- Library mode APIs for in-process integration (`RunStdio` + `NewEmbeddedRuntime`)
 
-## 3) Quickstart
-
+## 3) Standalone Usage (Binary)
 ### Option A: Codex backend
 Prerequisite: Codex CLI installed and logged in.
 
 ```bash
-go build -o ./bin/acp-adapter ./cmd/acp-adapter
-./bin/acp-adapter
+go build -o ./bin/acp ./cmd/acp
+./bin/acp --adapter codex
 ```
 
 Auth (one of):
@@ -53,19 +61,19 @@ Optional overrides:
 ### Option C: Unified binary (both backends)
 ```bash
 go build -o ./bin/acp ./cmd/acp
-./bin/acp --adapter codex   # same as acp-adapter
-./bin/acp --adapter claude  # Claude Code CLI subprocess
+./bin/acp --adapter codex
+./bin/acp --adapter claude
 ```
 
-### Step 2: Point Zed External Agent config to this binary
-Minimal template for Codex backend:
+### Zed External Agent config (minimal)
+Codex backend:
 
 ```json
 {
   "agent_servers": {
-    "acp-adapter": {
-      "command": "/absolute/path/to/bin/acp-adapter",
-      "args": [],
+    "codex-acp": {
+      "command": "/absolute/path/to/bin/acp",
+      "args": ["--adapter", "codex"],
       "env": {
         "CODEX_APP_SERVER_CMD": "codex",
         "CODEX_APP_SERVER_ARGS": "app-server"
@@ -75,7 +83,7 @@ Minimal template for Codex backend:
 }
 ```
 
-Minimal template for Claude backend:
+Claude backend:
 
 ```json
 {
@@ -91,10 +99,57 @@ Minimal template for Claude backend:
 }
 ```
 
-### Step 3: Start using it in Zed
-Open Zed's Agent panel, choose the agent server, and start a new thread.
+## 4) Use as a Library (Go)
+### 4.1 Stdio Mode (Wrap in your own `main`)
 
-## 4) Usage tips
+```go
+package main
+
+import (
+	"context"
+	"log"
+	"os"
+
+	"github.com/beyond5959/acp-adapter/pkg/codexacp"
+)
+
+func main() {
+	cfg := codexacp.DefaultRuntimeConfig()
+	if err := codexacp.RunStdio(context.Background(), cfg, os.Stdin, os.Stdout, os.Stderr); err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+### 4.2 Embedded Mode (In-Process RPC)
+
+```go
+cfg := codexacp.DefaultRuntimeConfig()
+rt := codexacp.NewEmbeddedRuntime(cfg)
+if err := rt.Start(ctx); err != nil {
+	return err
+}
+defer rt.Close()
+
+updates, unsubscribe := rt.SubscribeUpdates(64)
+defer unsubscribe()
+
+rawID := json.RawMessage(`1`)
+rawParams := json.RawMessage(`{"protocolVersion":1}`)
+
+// Send ACP JSON-RPC initialize request.
+resp, err := rt.ClientRequest(ctx, codexacp.RPCMessage{
+	ID:     &rawID,
+	Method: "initialize",
+	Params: rawParams,
+})
+_ = resp
+_ = updates
+```
+
+For Claude in library mode, use `github.com/beyond5959/acp-adapter/pkg/claudeacp`; the API shape is aligned with `codexacp` (`RunStdio` / `NewEmbeddedRuntime`).
+
+## 5) Usage tips
 - Use your client's mention UX (for example `@file`) to pass file context.
 - Common slash commands: `/review`, `/review-branch`, `/review-commit`, `/init`, `/compact`, `/logout`.
 - MCP helpers (Codex backend): `/mcp list`, `/mcp call <server> <tool> [args]`, `/mcp oauth <server>`.

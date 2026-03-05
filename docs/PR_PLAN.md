@@ -6,12 +6,12 @@
 **目标**：可运行、可测试地完成 initialize/new/prompt/cancel 的“空心链路”。
 
 - 新增文件
-  - `cmd/acp-adapter/main.go`
+  - `cmd/acp/main.go`
   - `internal/acp/codec_stdio.go`（newline JSON-RPC）
   - `internal/acp/server.go`（handlers：initialize/session/new/session/prompt/session/cancel）
-  - `internal/appserver/process.go`（spawn `codex app-server`）
-  - `internal/appserver/codec_jsonl.go`
-  - `internal/appserver/client.go`（initialize/initialized + thread/start + turn/start 的最小调用）
+  - `internal/codex/process.go`（spawn `codex app-server`）
+  - `internal/codex/codec_jsonl.go`
+  - `internal/codex/client.go`（initialize/initialized + thread/start + turn/start 的最小调用）
   - `internal/bridge/session_state.go`
   - `test/integration/e2e_test.go`（启动 adapter 进程，模拟 ACP client）
 - 验收（自动化）

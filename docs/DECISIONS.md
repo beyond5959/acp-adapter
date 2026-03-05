@@ -38,6 +38,8 @@
 - ADR-0032：R4 契约对照测试策略（同脚本双驱动 + 关键序列比对）
 - ADR-0033：Claude 适配器架构（appClient 接口 + claude -p CLI 子进程后端）
 - ADR-0034：项目统一命名为 acp-adapter（module/import/cmd/npm）
+- ADR-0035：移除 `cmd/acp-adapter`，统一 `cmd/acp` 单入口
+- ADR-0036：Session Config Options（model 列表 + `session/set_config_option`）
 
 ---
 
@@ -71,8 +73,8 @@
 - 影响范围（文件/模块）：
   - `internal/acp/server.go`
   - `internal/acp/types.go`
-  - `internal/appserver/types.go`
-  - `internal/appserver/client.go`
+  - `internal/codex/types.go`
+  - `internal/codex/client.go`
 - 验证方式（测试/验收项）：
   - `TestE2EAcceptanceA1ToA5AndB1`
   - `TestE2ENotificationRoutingBySessionAndTurn`
@@ -94,8 +96,8 @@
   - Pros：提升稳定性，用户可继续会话；B1 可自动验证崩溃恢复路径。
   - Cons：崩溃当次请求仍会失败，需要客户端重试。
 - 影响范围（文件/模块）：
-  - `internal/appserver/supervisor.go`
-  - `internal/appserver/process.go`
+  - `internal/codex/supervisor.go`
+  - `internal/codex/process.go`
   - `cmd/acp-adapter/main.go`
   - `test/integration/e2e_test.go`
   - `testdata/fake_codex_app_server/main.go`
@@ -145,8 +147,8 @@
 - 影响范围（文件/模块）：
   - `internal/acp/server.go`
   - `internal/acp/types.go`
-  - `internal/appserver/client.go`
-  - `internal/appserver/types.go`
+  - `internal/codex/client.go`
+  - `internal/codex/types.go`
 - 验证方式（测试/验收项）：
   - `TestE2EAcceptanceD1ToD5ApprovalsBridge`
   - 对应验收：D1、D2、D3、D4、D5
@@ -169,9 +171,9 @@
   - Cons：协议面增大，fake/real app-server 都需要对齐 review 事件。
 - 影响范围（文件/模块）：
   - `internal/acp/server.go`
-  - `internal/appserver/types.go`
-  - `internal/appserver/client.go`
-  - `internal/appserver/supervisor.go`
+  - `internal/codex/types.go`
+  - `internal/codex/client.go`
+  - `internal/codex/supervisor.go`
   - `testdata/fake_codex_app_server/main.go`
 - 验证方式（测试/验收项）：
   - `TestE2EAcceptanceE1ReviewWorkflow`
@@ -225,9 +227,9 @@
   - Cons：路由分支增多，命令解析复杂度上升。
 - 影响范围（文件/模块）：
   - `internal/acp/server.go`
-  - `internal/appserver/types.go`
-  - `internal/appserver/client.go`
-  - `internal/appserver/supervisor.go`
+  - `internal/codex/types.go`
+  - `internal/codex/client.go`
+  - `internal/codex/supervisor.go`
   - `testdata/fake_codex_app_server/main.go`
 - 验证方式（测试/验收项）：
   - `TestE2EAcceptanceG2G3ReviewBranchAndCommit`
@@ -259,7 +261,7 @@
   - `internal/config/config.go`
   - `internal/acp/types.go`
   - `internal/acp/server.go`
-  - `internal/appserver/types.go`
+  - `internal/codex/types.go`
   - `cmd/acp-adapter/main.go`
 - 验证方式（测试/验收项）：
   - `TestE2EAcceptanceH1ProfilesAffectRuntime`
@@ -286,8 +288,8 @@
   - `internal/config/config.go`
   - `internal/acp/types.go`
   - `internal/acp/server.go`
-  - `internal/appserver/client.go`
-  - `internal/appserver/supervisor.go`
+  - `internal/codex/client.go`
+  - `internal/codex/supervisor.go`
 - 验证方式（测试/验收项）：
   - `TestE2EAcceptanceI1ToI3AuthMethods`
   - `TestE2EAuthRequiredWithoutConfiguredMethod`
@@ -311,9 +313,9 @@
   - Cons：命令由 adapter inline 执行，和 turn-stream 事件模型是两条路径。
 - 影响范围（文件/模块）：
   - `internal/acp/server.go`
-  - `internal/appserver/types.go`
-  - `internal/appserver/client.go`
-  - `internal/appserver/supervisor.go`
+  - `internal/codex/types.go`
+  - `internal/codex/client.go`
+  - `internal/codex/supervisor.go`
   - `testdata/fake_codex_app_server/main.go`
 - 验证方式（测试/验收项）：
   - `TestE2EAcceptanceMCPListCallAndOAuth`
@@ -362,8 +364,8 @@
 - 影响范围（文件/模块）：
   - `internal/observability/trace.go`
   - `internal/acp/codec_stdio.go`
-  - `internal/appserver/codec_jsonl.go`
-  - `internal/appserver/process.go`
+  - `internal/codex/codec_jsonl.go`
+  - `internal/codex/process.go`
   - `cmd/acp-adapter/main.go`
   - `test/integration/e2e_test.go`
 - 验证方式（测试/验收项）：
@@ -411,9 +413,9 @@
 - 影响范围（文件/模块）：
   - `internal/acp/types.go`
   - `internal/acp/server.go`
-  - `internal/appserver/types.go`
-  - `internal/appserver/client.go`
-  - `internal/appserver/supervisor.go`
+  - `internal/codex/types.go`
+  - `internal/codex/client.go`
+  - `internal/codex/supervisor.go`
   - `testdata/fake_codex_app_server/main.go`
   - `test/integration/e2e_test.go`
 - 验证方式（测试/验收项）：
@@ -476,8 +478,8 @@
   - Cons：当前仍需重启 adapter；尚无同进程 re-auth。
 - 影响范围（文件/模块）：
   - `internal/acp/server.go`
-  - `internal/appserver/client.go`
-  - `internal/appserver/types.go`
+  - `internal/codex/client.go`
+  - `internal/codex/types.go`
   - `testdata/fake_codex_app_server/main.go`
   - `test/integration/e2e_test.go`
 - 验证方式（测试/验收项）：
@@ -537,8 +539,8 @@
   - Cons：过渡期需要同时维护扁平字段和标准 envelope；低频更新目前仍走通用回退类型，语义粒度不足。
 - 影响范围（文件/模块）：
   - `internal/acp/server.go`
-  - `internal/appserver/client.go`
-  - `internal/appserver/types.go`
+  - `internal/codex/client.go`
+  - `internal/codex/types.go`
   - `test/integration/e2e_test.go`
 - 验证方式（测试/验收项）：
   - `TestE2EPromptArrayContentBlocksAccepted`
@@ -607,8 +609,8 @@
   - 库化目标要求“可独立运行 + 可复用库”，同时必须保证现有 ACP 行为不回退。
   - 若在同一阶段同时做入口库化与传输抽象，回归面会扩大，定位成本高。
 - 决策：
-  - R1 只做外观库化：新增 `pkg/acpadapter.RunStdio`，并让 `cmd/acp-adapter` 委托该入口。
-  - R1 不改动 `internal/acp`、`internal/appserver`、`internal/bridge` 的协议处理语义。
+  - R1 只做外观库化：新增 `pkg/codexacp.RunStdio`，并让 `cmd/acp-adapter` 委托该入口。
+  - R1 不改动 `internal/acp`、`internal/codex`、`internal/bridge` 的协议处理语义。
   - R2 再进行传输层抽象（stdio/app-server 连接解耦），并通过契约测试锁定行为。
 - 备选方案：
   - 方案A：R1 同步完成库入口与传输抽象。
@@ -617,7 +619,7 @@
   - Pros：把风险集中在装配层，便于验证“零行为变化”；故障定位更直接。
   - Cons：短期会保留一些跨层依赖，R2 仍需继续清理边界。
 - 影响范围（文件/模块）：
-  - `pkg/acpadapter/*`
+  - `pkg/codexacp/*`
   - `cmd/acp-adapter/main.go`
   - `internal/observability/logger.go`
   - `test/*`（新增库入口最小映射测试）
@@ -633,7 +635,7 @@
   - R3 需要支持外部 server 进程内调用，不再依赖 ACP 客户端子进程 stdio 连接。
   - 同时必须复用同一套 ACP server 业务逻辑，避免复制分支导致行为漂移。
 - 决策：
-  - 基于 R2 的 `internal/acp.Transport` 抽象，新增 `pkg/acpadapter.EmbeddedRuntime`。
+  - 基于 R2 的 `internal/acp.Transport` 抽象，新增 `pkg/codexacp.EmbeddedRuntime`。
   - 嵌入 API 采用“请求-响应 + 事件订阅”模型：
     - `ClientRequest(ctx, msg)`：发送 ACP request 并等待 response。
     - `SubscribeUpdates(...)`：接收 `session/update` 和 server-initiated requests（含 permission）。
@@ -647,8 +649,8 @@
   - Pros：最大化行为一致性，便于后续做 standalone vs embedded 契约对照（R4）。
   - Cons：嵌入宿主需正确处理订阅消费与 permission 回写时序，集成复杂度上升。
 - 影响范围（文件/模块）：
-  - `pkg/acpadapter/embedded.go`
-  - `pkg/acpadapter/runtime_runner.go`
+  - `pkg/codexacp/embedded.go`
+  - `pkg/codexacp/runtime_runner.go`
   - `test/integration/embedded_test.go`
   - `internal/acp/transport_inproc.go`（R2 复用）
 - 验证方式（测试/验收项）：
@@ -733,7 +735,7 @@
   - 统一项目命名为 `acp-adapter`，并同步以下路径：
     - Go module：`github.com/beyond5959/acp-adapter`
     - cmd：`cmd/acp-adapter`
-    - 包路径：`pkg/acpadapter`
+    - 包路径：`pkg/codexacp`
     - npm 包：`@beyond5959/acp-adapter` 及平台子包
   - 保留 `cmd/acp --adapter codex|claude` 作为统一入口，不改变协议层行为。
 - 备选方案：
@@ -745,7 +747,7 @@
 - 影响范围（文件/模块）：
   - `go.mod`
   - `cmd/acp-adapter/main.go`
-  - `pkg/acpadapter/*`
+  - `pkg/codexacp/*`
   - `cmd/acp/main.go`
   - `npm/package.json`
   - `npm/packages/acp-adapter*/package.json`
@@ -754,3 +756,74 @@
 - 验证方式（测试/验收项）：
   - `go test ./...`
   - 全仓检索无旧 module/import/cmd 路径残留
+
+### ADR-0035：移除 `cmd/acp-adapter`，统一 `cmd/acp` 单入口
+- 日期：2026-03-04
+- 状态：Accepted
+- 背景：
+  - `cmd/acp-adapter` 与 `cmd/acp --adapter codex` 在行为上重复，长期并存会造成入口维护与文档漂移。
+  - 当前项目已支持 Codex + Claude 双后端，`cmd/acp` 已是统一入口。
+- 决策：
+  - 删除 `cmd/acp-adapter` 模块，统一通过 `cmd/acp --adapter codex|claude` 启动。
+  - 保持 Codex 默认后端不变，使 `cmd/acp` 在不传 `--adapter` 时仍可跑 Codex 兼容路径。
+  - 同步更新集成测试、README、验收文档与 npm 二进制构建脚本到 `cmd/acp`。
+- 备选方案：
+  - 方案A：保留 `cmd/acp-adapter` 作为长期兼容壳层。
+  - 方案B：标记 deprecated 一段周期后再删除。
+  - 方案C：直接删除并统一单入口。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：减少重复入口和维护成本；文档与脚本收敛到单一命令；避免双入口行为漂移。
+  - Cons：对仍依赖 `cmd/acp-adapter` 的外部脚本是破坏性变更，需要迁移。
+- 影响范围（文件/模块）：
+  - `cmd/acp-adapter/main.go`（删除）
+  - `cmd/acp/main.go`
+  - `test/integration/e2e_test.go`
+  - `npm/scripts/build-binaries.mjs`
+  - `README.md`
+  - `docs/ACCEPTANCE.md`
+  - `docs/KNOWN_ISSUES.md`
+- 验证方式（测试/验收项）：
+  - `go test ./...`
+  - `docs/ACCEPTANCE.md`：K1、K6、L9（入口描述）更新并与实现一致
+
+### ADR-0036：Session Config Options（model 列表 + `session/set_config_option`）
+- 日期：2026-03-05
+- 状态：Accepted
+- 背景：
+  - ACP `Session Config Options` 规范要求 agent 通过 `session/new` 返回 `configOptions`，并支持 `session/set_config_option` 在会话内切换模型。
+  - 现有实现虽支持 `session/new/session/prompt` 传入 `model`，但缺少“可枚举模型列表 + 统一切换入口”，客户端无法做标准模型选择 UI。
+- 决策：
+  - 在 ACP 层新增标准链路：
+    - `session/new` 返回 `configOptions`（当前提供 `id=model`、`type=select`、`currentValue`、`options`）
+    - 新增 `session/set_config_option`（当前支持 `configId=model`）
+    - 新增 `session/update` 的 `config_options_update` 映射（同时保留扁平字段并填充 `update.sessionUpdate`）
+  - value 校验策略：`session/set_config_option` 的 `value` 必须命中 `options` 中已有值（与 ACP 文档约束保持一致）。
+  - 后端模型列表来源：
+    - Codex：桥接 app-server `model/list`
+    - Claude：由配置聚合（`CLAUDE_MODELS`/`--models` + `--model` + profile models）
+- 备选方案：
+  - 方案A：继续只支持 `session/new/session/prompt.model`，不实现 `session/set_config_option`。
+  - 方案B：允许 `session/set_config_option` 任意字符串（不校验 options）。
+  - 方案C：按 ACP 标准实现列表 + set 接口，并做 value 严格校验。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：与 ACP Session Config Options 对齐；客户端可直接渲染模型下拉并在会话中切换；codex/claude 行为统一。
+  - Cons：claude 端暂无 CLI 原生“动态模型列表”API，列表质量依赖配置；旧版 codex app-server 若不支持 `model/list`，可用性受版本影响。
+- 影响范围（文件/模块）：
+  - `internal/acp/types.go`
+  - `internal/acp/server.go`
+  - `internal/codex/types.go`
+  - `internal/codex/client.go`
+  - `internal/codex/supervisor.go`
+  - `internal/claude/config.go`
+  - `internal/claude/client.go`
+  - `pkg/claudeacp/runtime.go`
+  - `cmd/acp/main.go`
+  - `testdata/fake_codex_app_server/main.go`
+  - `testdata/fake_claude_cli/main.go`
+  - `test/integration/e2e_test.go`
+  - `test/integration/claude_e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `go test ./...`
+  - `TestE2ESessionConfigOptionsModelListAndSwitch`
+  - `TestClaudeE2ESessionConfigOptionsModelListAndSwitch`
+

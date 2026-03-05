@@ -18,7 +18,7 @@
 - KI-0012：`/logout` 后缺少同进程重新登录入口
 - KI-0013：profiles 配置目前仅支持 JSON（未实现 toml）
 - KI-0014：J1 压测默认不在 `go test ./...` 中执行
-- KI-0015：MCP/compact/auth 方法名对真实 app-server 版本敏感
+- KI-0015：MCP/compact/auth/model-list 方法名对真实 app-server 版本敏感
 - KI-0016：真实 codex e2e 依赖本机 codex 命令与认证态
 - KI-0017：trace-json 脱敏规则为启发式，可能存在漏网字段
 - KI-0018：mentions/images 输入有大小与能力门槛
@@ -37,6 +37,8 @@
 - KI-0031：Claude 子进程 CLAUDECODE 环境变量需过滤，否则触发嵌套 session 保护
 - KI-0032：Claude 适配器 --dangerously-skip-permissions 默认开启
 - KI-0033：项目重命名后的兼容路径变更（module/import/cmd/npm）
+- KI-0034：`cmd/acp-adapter` 入口已移除（统一为 `cmd/acp`）
+- KI-0035：Claude 模型列表依赖本地配置（非动态探测）
 
 ---
 
@@ -90,7 +92,7 @@
 - 影响：
   - 在真实 codex app-server 新字段/兼容字段出现时，可能出现映射遗漏。
 - Workaround：
-  - 通过 `appserver/client` 对未知 notifications 保持忽略且不崩溃。
+  - 通过 `codex/client` 对未知 notifications 保持忽略且不崩溃。
   - 在真实环境补充集成回归并同步 schema。
 - 后续计划：
   - PR4 开始增加真实 app-server 的回归脚本与录制样例（脱敏）。
@@ -154,9 +156,9 @@
 - 后续计划：
   - 在 CI 增加定时/夜间压力作业，独立于常规 PR 快速回归。
 
-## KI-0015：MCP/compact/auth 方法名对真实 app-server 版本敏感
+## KI-0015：MCP/compact/auth/model-list 方法名对真实 app-server 版本敏感
 - 现象：
-  - 当前实现依赖 `thread/compact/start`、`mcpServer/*`、`account/logout|auth/logout` 方法名。
+  - 当前实现依赖 `thread/compact/start`、`mcpServer/*`、`account/logout|auth/logout`、`model/list` 方法名。
   - 已新增 real 存在性回归：`TestE2ERealCodexAppServer_MCPListAndOptionalCall`、`TestE2ERealCodexAppServer_CompactProducesVisibleUpdates`；当 endpoint 不兼容时会暴露为 `method not found` 或兼容降级。
 - 影响：
   - 若真实 app-server 不同版本方法名/参数变更，PR5 相关能力会出现 `method not found` 或参数不兼容。
@@ -231,7 +233,7 @@
 - 影响：
   - `go get` / `go install` 失败，第三方集成与 CI 拉取依赖不稳定。
 - 复现：
-  - 保持短 module 路径后执行：`go install github.com/beyond5959/acp-adapter/cmd/acp-adapter@latest`。
+  - 保持短 module 路径后执行：`go install github.com/beyond5959/acp-adapter/cmd/acp@latest`。
 - Workaround：
   - 使用 canonical module：`module github.com/beyond5959/acp-adapter`。
   - 变更后同步替换仓库内 `acp-adapter/...` 导入路径。
@@ -240,7 +242,7 @@
 
 ## KI-0033：项目重命名后的兼容路径变更（module/import/cmd/npm）
 - 现象：
-  - 项目从 `codex-acp-go` 重命名为 `acp-adapter` 后，旧路径（如 `cmd/codex-acp-go`、`pkg/codexacp`、`github.com/beyond5959/codex-acp`、`@beyond5959/codex-acp-go`）已不可用。
+  - 项目从 `codex-acp-go` 重命名为 `acp-adapter` 后，旧路径（如 `cmd/codex-acp-go`、`pkg/acpadapter`、`github.com/beyond5959/codex-acp`、`@beyond5959/codex-acp-go`）已不可用。
 - 影响：
   - 外部脚本、CI 配置、第三方导入若仍依赖旧命名，会出现构建失败或命令找不到。
 - 复现：
@@ -248,11 +250,25 @@
 - Workaround：
   - 统一切换到新路径：
     - Go module/import：`github.com/beyond5959/acp-adapter`
-    - cmd 入口：`cmd/acp-adapter`
-    - 包路径：`pkg/acpadapter`
+    - cmd 入口：`cmd/acp`（使用 `--adapter codex|claude`）
+    - 包路径：`pkg/codexacp`
     - npm 包：`@beyond5959/acp-adapter` 及其平台子包
 - 后续计划：
   - 当前仓库内已完成替换并通过 `go test ./...`；对外使用方需同步升级配置。
+
+## KI-0034：`cmd/acp-adapter` 入口已移除（统一为 `cmd/acp`）
+- 现象：
+  - 新版本删除了 `cmd/acp-adapter`，统一使用 `cmd/acp` 并通过 `--adapter codex|claude` 选择后端。
+- 影响：
+  - 仍执行 `go build ./cmd/acp-adapter`、或在外部配置中直接引用旧入口路径的脚本会失败。
+- 复现：
+  - 执行：`go build ./cmd/acp-adapter`
+- Workaround：
+  - 构建：`go build -o ./bin/acp ./cmd/acp`
+  - 运行 Codex 后端：`./bin/acp --adapter codex`
+  - 运行 Claude 后端：`./bin/acp --adapter claude`
+- 后续计划：
+  - 保持文档、测试和发布脚本全部围绕 `cmd/acp` 维护，避免双入口漂移。
 
 ## KI-0021：`session/update` 的标准 `update.sessionUpdate` 在低频事件上仍是回退语义
 - 现象：
@@ -291,7 +307,7 @@
   - 使用未包含本次修复的旧二进制启动 agent，并让客户端发 `initialize(protocolVersion=1)`。
 - Workaround：
   - 重新构建并替换二进制：
-    - `go build -o ./bin/acp-adapter ./cmd/acp-adapter`
+    - `go build -o ./bin/acp ./cmd/acp`
   - 重启 ACP 客户端后重连。
 - 后续计划：
   - 保持 `TestE2EInitializeIncludesACPStandardFields` 回归，防止该字段再次回退。
@@ -407,3 +423,18 @@
   - 或在受信任的 CI/自动化环境中维持默认（skip）以减少交互。
 - 后续计划：
   - 评估将 tool approval 事件从 `claude -p` 的 stream-json 输出中解析并桥接到 ACP `session/request_permission`，恢复 approval 往返语义。
+
+## KI-0035：Claude 模型列表依赖本地配置（非动态探测）
+- 现象：
+  - Claude 适配器的 `Session Config Options` 模型列表来源于本地配置聚合（`CLAUDE_MODELS` / `--models` / `--model` / profiles）。
+  - 当前未接入 Claude CLI 的“官方模型目录”查询 API（CLI 侧目前也无稳定 JSON-RPC 端点可复用）。
+- 影响：
+  - 若配置缺失，模型列表可能只包含单个默认模型。
+  - 若配置与实际 CLI 支持模型不一致，`session/set_config_option` 可选项可能包含不可用模型，随后 turn 执行会失败。
+- 复现：
+  - 不设置 `CLAUDE_MODELS` 且无 profile model，仅设置 `--model` 启动，`session/new.configOptions` 只返回一个 model 选项。
+- Workaround：
+  - 显式设置 `CLAUDE_MODELS`（或 `--models`）并保持与本机 Claude CLI 实际可用模型一致。
+  - 通过 profile 配置补充团队标准模型列表，统一客户端展示。
+- 后续计划：
+  - 若 Claude CLI 未来提供稳定模型列表接口，切换到动态探测并保留本地配置作为兜底。

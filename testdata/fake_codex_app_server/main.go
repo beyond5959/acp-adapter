@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/beyond5959/acp-adapter/internal/appserver"
+	"github.com/beyond5959/acp-adapter/internal/codex"
 )
 
 type turnControl struct {
@@ -19,15 +19,15 @@ type turnControl struct {
 }
 
 type fakeServer struct {
-	codec *appserver.JSONLCodec
+	codec *codex.JSONLCodec
 
 	mu         sync.Mutex
 	nextThread int
 	nextTurn   int
 	nextReq    int
 	turns      map[string]*turnControl
-	pending    map[string]chan appserver.RPCMessage
-	threadOpts map[string]appserver.RunOptions
+	pending    map[string]chan codex.RPCMessage
+	threadOpts map[string]codex.RunOptions
 
 	receivedInitialize  bool
 	receivedInitialized bool
@@ -39,10 +39,10 @@ type fakeServer struct {
 
 func main() {
 	server := &fakeServer{
-		codec:              appserver.NewJSONLCodec(os.Stdin, os.Stdout),
+		codec:              codex.NewJSONLCodec(os.Stdin, os.Stdout),
 		turns:              make(map[string]*turnControl),
-		pending:            make(map[string]chan appserver.RPCMessage),
-		threadOpts:         make(map[string]appserver.RunOptions),
+		pending:            make(map[string]chan codex.RPCMessage),
+		threadOpts:         make(map[string]codex.RunOptions),
 		crashOnThreadStart: os.Getenv("FAKE_APP_SERVER_CRASH_ON_THREAD_START") == "1",
 		crashOnceFile:      os.Getenv("FAKE_APP_SERVER_CRASH_ON_THREAD_START_ONCE_FILE"),
 		crashDuringTurn:    os.Getenv("FAKE_APP_SERVER_CRASH_DURING_TURN") == "1",
@@ -70,7 +70,7 @@ func (s *fakeServer) serve() error {
 	}
 }
 
-func (s *fakeServer) handle(msg appserver.RPCMessage) {
+func (s *fakeServer) handle(msg codex.RPCMessage) {
 	switch msg.Method {
 	case "initialize":
 		s.receivedInitialize = true
@@ -92,7 +92,7 @@ func (s *fakeServer) handle(msg appserver.RPCMessage) {
 			s.writeError(msg.ID, -32000, "initialize/initialized handshake required")
 			return
 		}
-		var params appserver.ThreadStartParams
+		var params codex.ThreadStartParams
 		if err := json.Unmarshal(msg.Params, &params); err != nil {
 			s.writeError(msg.ID, -32602, "invalid params")
 			return
@@ -102,11 +102,11 @@ func (s *fakeServer) handle(msg appserver.RPCMessage) {
 		}
 		threadID := s.newThreadID()
 		s.storeThreadOptions(threadID, params.RunOptions)
-		s.writeResult(msg.ID, appserver.ThreadStartResult{
+		s.writeResult(msg.ID, codex.ThreadStartResult{
 			ThreadID: threadID,
 		})
 	case "turn/start":
-		var params appserver.TurnStartParams
+		var params codex.TurnStartParams
 		if err := json.Unmarshal(msg.Params, &params); err != nil {
 			s.writeError(msg.ID, -32602, "invalid params")
 			return
@@ -117,14 +117,14 @@ func (s *fakeServer) handle(msg appserver.RPCMessage) {
 		}
 
 		turnID, control := s.newTurn()
-		s.writeResult(msg.ID, appserver.TurnStartResult{
+		s.writeResult(msg.ID, codex.TurnStartResult{
 			TurnID: turnID,
 		})
 
 		effective := s.effectiveRunOptions(params.ThreadID, params.RunOptions)
 		go s.runTurn(params.ThreadID, turnID, params.Input, effective, control)
 	case "review/start":
-		var params appserver.ReviewStartParams
+		var params codex.ReviewStartParams
 		if err := json.Unmarshal(msg.Params, &params); err != nil {
 			s.writeError(msg.ID, -32602, "invalid params")
 			return
@@ -135,12 +135,12 @@ func (s *fakeServer) handle(msg appserver.RPCMessage) {
 		}
 
 		turnID, control := s.newTurn()
-		s.writeResult(msg.ID, appserver.ReviewStartResult{TurnID: turnID})
+		s.writeResult(msg.ID, codex.ReviewStartResult{TurnID: turnID})
 
 		effective := s.effectiveRunOptions(params.ThreadID, params.RunOptions)
 		go s.runReviewTurn(params.ThreadID, turnID, params.Instructions, effective, control)
 	case "thread/compact/start":
-		var params appserver.CompactStartParams
+		var params codex.CompactStartParams
 		if err := json.Unmarshal(msg.Params, &params); err != nil {
 			s.writeError(msg.ID, -32602, "invalid params")
 			return
@@ -150,17 +150,17 @@ func (s *fakeServer) handle(msg appserver.RPCMessage) {
 			return
 		}
 		turnID, control := s.newTurn()
-		s.writeResult(msg.ID, appserver.CompactStartResult{TurnID: turnID})
+		s.writeResult(msg.ID, codex.CompactStartResult{TurnID: turnID})
 		go s.runCompactTurn(params.ThreadID, turnID, control)
 	case "mcpServer/list":
-		s.writeResult(msg.ID, appserver.MCPServerListResult{
-			Servers: []appserver.MCPServer{
+		s.writeResult(msg.ID, codex.MCPServerListResult{
+			Servers: []codex.MCPServer{
 				{Name: "demo-mcp", OAuthRequired: true, Tools: []string{"dangerous-write", "read-info"}},
 				{Name: "metrics-mcp", OAuthRequired: false, Tools: []string{"query"}},
 			},
 		})
 	case "mcpServer/call":
-		var params appserver.MCPToolCallParams
+		var params codex.MCPToolCallParams
 		if err := json.Unmarshal(msg.Params, &params); err != nil {
 			s.writeError(msg.ID, -32602, "invalid params")
 			return
@@ -169,7 +169,7 @@ func (s *fakeServer) handle(msg appserver.RPCMessage) {
 			s.writeError(msg.ID, -32602, "server and tool are required")
 			return
 		}
-		s.writeResult(msg.ID, appserver.MCPToolCallResult{
+		s.writeResult(msg.ID, codex.MCPToolCallResult{
 			Output: fmt.Sprintf(
 				"mcp call ok server=%s tool=%s args=%s",
 				params.Server,
@@ -178,7 +178,7 @@ func (s *fakeServer) handle(msg appserver.RPCMessage) {
 			),
 		})
 	case "mcpServer/oauth/login":
-		var params appserver.MCPOAuthLoginParams
+		var params codex.MCPOAuthLoginParams
 		if err := json.Unmarshal(msg.Params, &params); err != nil {
 			s.writeError(msg.ID, -32602, "invalid params")
 			return
@@ -187,7 +187,7 @@ func (s *fakeServer) handle(msg appserver.RPCMessage) {
 			s.writeError(msg.ID, -32602, "server is required")
 			return
 		}
-		s.writeResult(msg.ID, appserver.MCPOAuthLoginResult{
+		s.writeResult(msg.ID, codex.MCPOAuthLoginResult{
 			Status:  "started",
 			URL:     fmt.Sprintf("https://auth.example.com/%s", params.Server),
 			Message: "open the URL to complete oauth",
@@ -197,19 +197,43 @@ func (s *fakeServer) handle(msg appserver.RPCMessage) {
 	case "account/logout":
 		s.writeResult(msg.ID, map[string]any{"loggedOut": true})
 	case "turn/interrupt":
-		var params appserver.TurnInterruptParams
+		var params codex.TurnInterruptParams
 		if err := json.Unmarshal(msg.Params, &params); err != nil {
 			s.writeError(msg.ID, -32602, "invalid params")
 			return
 		}
 		s.cancelTurn(params.TurnID)
 		s.writeResult(msg.ID, map[string]any{"interrupted": true})
+	case "model/list":
+		s.writeResult(msg.ID, codex.ModelListResult{
+			Data: []codex.ModelListItem{
+				{
+					ID:          "gpt-5.1-codex",
+					Model:       "gpt-5.1-codex",
+					DisplayName: "GPT-5.1 Codex",
+					Description: "default coding model",
+					IsDefault:   true,
+				},
+				{
+					ID:          "gpt-5-codex",
+					Model:       "gpt-5-codex",
+					DisplayName: "GPT-5 Codex",
+					Description: "balanced coding model",
+				},
+				{
+					ID:          "gpt-4.1",
+					Model:       "gpt-4.1",
+					DisplayName: "GPT-4.1",
+					Description: "fast fallback model",
+				},
+			},
+		})
 	default:
 		s.writeError(msg.ID, -32601, "method not found")
 	}
 }
 
-func (s *fakeServer) handleResponse(msg appserver.RPCMessage) {
+func (s *fakeServer) handleResponse(msg codex.RPCMessage) {
 	if msg.ID == nil {
 		return
 	}
@@ -236,13 +260,13 @@ func (s *fakeServer) newThreadID() string {
 	return fmt.Sprintf("thread-%d", s.nextThread)
 }
 
-func (s *fakeServer) storeThreadOptions(threadID string, options appserver.RunOptions) {
+func (s *fakeServer) storeThreadOptions(threadID string, options codex.RunOptions) {
 	s.mu.Lock()
 	s.threadOpts[threadID] = options
 	s.mu.Unlock()
 }
 
-func (s *fakeServer) effectiveRunOptions(threadID string, turnOptions appserver.RunOptions) appserver.RunOptions {
+func (s *fakeServer) effectiveRunOptions(threadID string, turnOptions codex.RunOptions) codex.RunOptions {
 	s.mu.Lock()
 	base := s.threadOpts[threadID]
 	s.mu.Unlock()
@@ -265,7 +289,7 @@ func (s *fakeServer) effectiveRunOptions(threadID string, turnOptions appserver.
 	return base
 }
 
-func flattenUserInputText(input []appserver.UserInput) string {
+func flattenUserInputText(input []codex.UserInput) string {
 	parts := make([]string, 0, len(input))
 	for _, item := range input {
 		switch strings.ToLower(strings.TrimSpace(item.Type)) {
@@ -289,7 +313,7 @@ type mentionInput struct {
 	Path string
 }
 
-func extractMentionInputs(input []appserver.UserInput) []mentionInput {
+func extractMentionInputs(input []codex.UserInput) []mentionInput {
 	mentions := make([]mentionInput, 0, len(input))
 	for _, item := range input {
 		if strings.ToLower(strings.TrimSpace(item.Type)) != "mention" {
@@ -308,7 +332,7 @@ func extractMentionInputs(input []appserver.UserInput) []mentionInput {
 	return mentions
 }
 
-func countImageInputs(input []appserver.UserInput) int {
+func countImageInputs(input []codex.UserInput) int {
 	count := 0
 	for _, item := range input {
 		switch strings.ToLower(strings.TrimSpace(item.Type)) {
@@ -349,8 +373,8 @@ func (s *fakeServer) removeTurn(turnID string) {
 func (s *fakeServer) runTurn(
 	threadID string,
 	turnID string,
-	input []appserver.UserInput,
-	options appserver.RunOptions,
+	input []codex.UserInput,
+	options codex.RunOptions,
 	control *turnControl,
 ) {
 	defer s.removeTurn(turnID)
@@ -445,7 +469,7 @@ func (s *fakeServer) runApprovalTurn(threadID, turnID, input string, control *tu
 	itemID := fmt.Sprintf("item-%s", turnID)
 	toolCallID := fmt.Sprintf("tool-%s", turnID)
 	approvalID := fmt.Sprintf("approval-%s", turnID)
-	approval := appserver.ApprovalRequest{
+	approval := codex.ApprovalRequest{
 		ThreadID:   threadID,
 		TurnID:     turnID,
 		ApprovalID: approvalID,
@@ -455,22 +479,22 @@ func (s *fakeServer) runApprovalTurn(threadID, turnID, input string, control *tu
 
 	switch {
 	case strings.Contains(input, "approval command"):
-		approval.Kind = appserver.ApprovalKindCommand
+		approval.Kind = codex.ApprovalKindCommand
 		approval.Command = "go test ./..."
 	case strings.Contains(input, "approval file"):
-		approval.Kind = appserver.ApprovalKindFile
+		approval.Kind = codex.ApprovalKindFile
 		approval.Files = []string{"docs/README.md"}
 	case strings.Contains(input, "approval network"):
-		approval.Kind = appserver.ApprovalKindNetwork
+		approval.Kind = codex.ApprovalKindNetwork
 		approval.Host = "api.example.com"
 		approval.Protocol = "https"
 		approval.Port = 443
 	case strings.Contains(input, "approval mcp"):
-		approval.Kind = appserver.ApprovalKindMCP
+		approval.Kind = codex.ApprovalKindMCP
 		approval.MCPServer = "demo-mcp"
 		approval.MCPTool = "dangerous-write"
 	default:
-		approval.Kind = appserver.ApprovalKindCommand
+		approval.Kind = codex.ApprovalKindCommand
 		approval.Command = "go test ./..."
 	}
 
@@ -494,7 +518,7 @@ func (s *fakeServer) runApprovalTurn(threadID, turnID, input string, control *tu
 	}
 
 	switch decision {
-	case appserver.ApprovalDecisionApproved:
+	case codex.ApprovalDecisionApproved:
 		s.writeAgentMessageDelta(threadID, turnID, itemID, fmt.Sprintf("executed %s tool", approval.Kind))
 	default:
 		s.writeAgentMessageDelta(threadID, turnID, itemID, fmt.Sprintf("permission %s; tool not executed", decision))
@@ -507,7 +531,7 @@ func (s *fakeServer) runReviewTurn(
 	threadID string,
 	turnID string,
 	instructions string,
-	_ appserver.RunOptions,
+	_ codex.RunOptions,
 	control *turnControl,
 ) {
 	defer s.removeTurn(turnID)
@@ -517,12 +541,12 @@ func (s *fakeServer) runReviewTurn(
 	approvalID := fmt.Sprintf("review-approval-%s", turnID)
 	lower := strings.ToLower(instructions)
 
-	approval := appserver.ApprovalRequest{
+	approval := codex.ApprovalRequest{
 		ThreadID:   threadID,
 		TurnID:     turnID,
 		ApprovalID: approvalID,
 		ToolCallID: toolCallID,
-		Kind:       appserver.ApprovalKindFile,
+		Kind:       codex.ApprovalKindFile,
 		Files:      []string{"docs/README.md"},
 		WritePath:  "docs/README.md",
 		WriteText:  "# updated by review\n",
@@ -562,9 +586,9 @@ func (s *fakeServer) runReviewTurn(
 	}
 
 	switch decision {
-	case appserver.ApprovalDecisionApproved:
+	case codex.ApprovalDecisionApproved:
 		s.writeAgentMessageDelta(threadID, turnID, itemID, "patch applied via appserver")
-	case appserver.ApprovalDecisionDeclined:
+	case codex.ApprovalDecisionDeclined:
 		s.writeAgentMessageDelta(threadID, turnID, itemID, "patch not applied (declined)")
 	default:
 		s.writeAgentMessageDelta(threadID, turnID, itemID, "patch not applied (cancelled)")
@@ -595,14 +619,14 @@ func (s *fakeServer) runCompactTurn(threadID, turnID string, control *turnContro
 }
 
 func (s *fakeServer) writeTurnStarted(threadID, turnID string) {
-	s.writeNotification("turn/started", appserver.TurnStartedNotification{
+	s.writeNotification("turn/started", codex.TurnStartedNotification{
 		ThreadID: threadID,
 		TurnID:   turnID,
 	})
 }
 
 func (s *fakeServer) writeAgentMessageDelta(threadID, turnID, itemID, delta string) {
-	s.writeNotification("item/agentMessage/delta", appserver.ItemAgentMessageDeltaNotification{
+	s.writeNotification("item/agentMessage/delta", codex.ItemAgentMessageDeltaNotification{
 		ThreadID: threadID,
 		TurnID:   turnID,
 		ItemID:   itemID,
@@ -611,7 +635,7 @@ func (s *fakeServer) writeAgentMessageDelta(threadID, turnID, itemID, delta stri
 }
 
 func (s *fakeServer) writeItemStarted(threadID, turnID, itemID, itemType string) {
-	s.writeNotification("item/started", appserver.ItemStartedNotification{
+	s.writeNotification("item/started", codex.ItemStartedNotification{
 		ThreadID: threadID,
 		TurnID:   turnID,
 		ItemID:   itemID,
@@ -620,7 +644,7 @@ func (s *fakeServer) writeItemStarted(threadID, turnID, itemID, itemType string)
 }
 
 func (s *fakeServer) writeItemCompleted(threadID, turnID, itemID, itemType string) {
-	s.writeNotification("item/completed", appserver.ItemCompletedNotification{
+	s.writeNotification("item/completed", codex.ItemCompletedNotification{
 		ThreadID: threadID,
 		TurnID:   turnID,
 		ItemID:   itemID,
@@ -629,7 +653,7 @@ func (s *fakeServer) writeItemCompleted(threadID, turnID, itemID, itemType strin
 }
 
 func (s *fakeServer) writeTurnCompleted(threadID, turnID, stopReason string) {
-	s.writeNotification("turn/completed", appserver.TurnCompletedNotification{
+	s.writeNotification("turn/completed", codex.TurnCompletedNotification{
 		ThreadID:   threadID,
 		TurnID:     turnID,
 		StopReason: stopReason,
@@ -637,14 +661,14 @@ func (s *fakeServer) writeTurnCompleted(threadID, turnID, stopReason string) {
 }
 
 func (s *fakeServer) writeReviewModeEntered(threadID, turnID string) {
-	s.writeNotification("review/mode_entered", appserver.ReviewModeNotification{
+	s.writeNotification("review/mode_entered", codex.ReviewModeNotification{
 		ThreadID: threadID,
 		TurnID:   turnID,
 	})
 }
 
 func (s *fakeServer) writeReviewModeExited(threadID, turnID string) {
-	s.writeNotification("review/mode_exited", appserver.ReviewModeNotification{
+	s.writeNotification("review/mode_exited", codex.ReviewModeNotification{
 		ThreadID: threadID,
 		TurnID:   turnID,
 	})
@@ -658,7 +682,7 @@ func (s *fakeServer) writeResult(id *json.RawMessage, result any) {
 			resultRaw = raw
 		}
 	}
-	_ = s.codec.WriteMessage(appserver.RPCMessage{
+	_ = s.codec.WriteMessage(codex.RPCMessage{
 		JSONRPC: "2.0",
 		ID:      cloneID(id),
 		Result:  resultRaw,
@@ -666,10 +690,10 @@ func (s *fakeServer) writeResult(id *json.RawMessage, result any) {
 }
 
 func (s *fakeServer) writeError(id *json.RawMessage, code int, message string) {
-	_ = s.codec.WriteMessage(appserver.RPCMessage{
+	_ = s.codec.WriteMessage(codex.RPCMessage{
 		JSONRPC: "2.0",
 		ID:      cloneID(id),
-		Error: &appserver.RPCError{
+		Error: &codex.RPCError{
 			Code:    code,
 			Message: message,
 		},
@@ -684,7 +708,7 @@ func (s *fakeServer) writeNotification(method string, params any) {
 			paramsRaw = raw
 		}
 	}
-	_ = s.codec.WriteMessage(appserver.RPCMessage{
+	_ = s.codec.WriteMessage(codex.RPCMessage{
 		JSONRPC: "2.0",
 		Method:  method,
 		Params:  paramsRaw,
@@ -735,7 +759,7 @@ func (s *fakeServer) shouldCrashDuringTurn() bool {
 	return true
 }
 
-func (s *fakeServer) requestApproval(approval appserver.ApprovalRequest) (appserver.ApprovalDecision, error) {
+func (s *fakeServer) requestApproval(approval codex.ApprovalRequest) (codex.ApprovalDecision, error) {
 	resp, err := s.callAdapter(methodApprovalRequest, approval, 3*time.Second)
 	if err != nil {
 		return "", err
@@ -744,27 +768,27 @@ func (s *fakeServer) requestApproval(approval appserver.ApprovalRequest) (appser
 		return "", fmt.Errorf("approval/request failed code=%d message=%s", resp.Error.Code, resp.Error.Message)
 	}
 
-	var result appserver.ApprovalDecisionResult
+	var result codex.ApprovalDecisionResult
 	if len(resp.Result) > 0 {
 		if err := json.Unmarshal(resp.Result, &result); err != nil {
 			return "", fmt.Errorf("decode approval decision: %w", err)
 		}
 	}
 	switch result.Outcome {
-	case string(appserver.ApprovalDecisionApproved):
-		return appserver.ApprovalDecisionApproved, nil
-	case string(appserver.ApprovalDecisionDeclined):
-		return appserver.ApprovalDecisionDeclined, nil
+	case string(codex.ApprovalDecisionApproved):
+		return codex.ApprovalDecisionApproved, nil
+	case string(codex.ApprovalDecisionDeclined):
+		return codex.ApprovalDecisionDeclined, nil
 	default:
-		return appserver.ApprovalDecisionCancelled, nil
+		return codex.ApprovalDecisionCancelled, nil
 	}
 }
 
-func (s *fakeServer) callAdapter(method string, params any, timeout time.Duration) (appserver.RPCMessage, error) {
+func (s *fakeServer) callAdapter(method string, params any, timeout time.Duration) (codex.RPCMessage, error) {
 	id := s.nextRequestID()
 	rawID := json.RawMessage(strconv.Quote(id))
 
-	msg := appserver.RPCMessage{
+	msg := codex.RPCMessage{
 		JSONRPC: "2.0",
 		Method:  method,
 		ID:      cloneID(&rawID),
@@ -772,12 +796,12 @@ func (s *fakeServer) callAdapter(method string, params any, timeout time.Duratio
 	if params != nil {
 		rawParams, err := json.Marshal(params)
 		if err != nil {
-			return appserver.RPCMessage{}, fmt.Errorf("%s encode params: %w", method, err)
+			return codex.RPCMessage{}, fmt.Errorf("%s encode params: %w", method, err)
 		}
 		msg.Params = rawParams
 	}
 
-	ch := make(chan appserver.RPCMessage, 1)
+	ch := make(chan codex.RPCMessage, 1)
 	s.mu.Lock()
 	s.pending[id] = ch
 	s.mu.Unlock()
@@ -786,7 +810,7 @@ func (s *fakeServer) callAdapter(method string, params any, timeout time.Duratio
 		s.mu.Lock()
 		delete(s.pending, id)
 		s.mu.Unlock()
-		return appserver.RPCMessage{}, fmt.Errorf("%s write request: %w", method, err)
+		return codex.RPCMessage{}, fmt.Errorf("%s write request: %w", method, err)
 	}
 
 	select {
@@ -796,7 +820,7 @@ func (s *fakeServer) callAdapter(method string, params any, timeout time.Duratio
 		s.mu.Lock()
 		delete(s.pending, id)
 		s.mu.Unlock()
-		return appserver.RPCMessage{}, fmt.Errorf("%s response timeout", method)
+		return codex.RPCMessage{}, fmt.Errorf("%s response timeout", method)
 	}
 }
 

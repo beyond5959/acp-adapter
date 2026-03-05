@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/beyond5959/acp-adapter/pkg/acpadapter"
+	"github.com/beyond5959/acp-adapter/pkg/codexacp"
 )
 
 func TestEmbeddedInitializeNewPromptCancel(t *testing.T) {
@@ -17,7 +17,7 @@ func TestEmbeddedInitializeNewPromptCancel(t *testing.T) {
 	rootDir := repoRoot(t)
 	fakeServerBin := buildBinary(t, rootDir, "./testdata/fake_codex_app_server")
 
-	runtime := acpadapter.NewEmbeddedRuntime(acpadapter.RuntimeConfig{
+	runtime := codexacp.NewEmbeddedRuntime(codexacp.RuntimeConfig{
 		AppServerCommand: fakeServerBin,
 		AppServerArgs:    nil,
 		LogLevel:         "debug",
@@ -70,7 +70,7 @@ func TestEmbeddedInitializeNewPromptCancel(t *testing.T) {
 		promptDone <- embeddedCallResult{response: resp, err: err}
 	}()
 
-	if _, err := waitEmbeddedUpdate(updates, 4*time.Second, func(msg acpadapter.RPCMessage) bool {
+	if _, err := waitEmbeddedUpdate(updates, 4*time.Second, func(msg codexacp.RPCMessage) bool {
 		return msg.Method == "session/update"
 	}); err != nil {
 		t.Fatalf("wait first session/update: %v", err)
@@ -120,7 +120,7 @@ func TestEmbeddedPermissionRoundTrip(t *testing.T) {
 	rootDir := repoRoot(t)
 	fakeServerBin := buildBinary(t, rootDir, "./testdata/fake_codex_app_server")
 
-	runtime := acpadapter.NewEmbeddedRuntime(acpadapter.RuntimeConfig{
+	runtime := codexacp.NewEmbeddedRuntime(codexacp.RuntimeConfig{
 		AppServerCommand: fakeServerBin,
 		LogLevel:         "debug",
 		PatchApplyMode:   "appserver",
@@ -169,7 +169,7 @@ func TestEmbeddedPermissionRoundTrip(t *testing.T) {
 		promptDone <- embeddedCallResult{response: resp, err: err}
 	}()
 
-	permissionMsg, err := waitEmbeddedUpdate(updates, 5*time.Second, func(msg acpadapter.RPCMessage) bool {
+	permissionMsg, err := waitEmbeddedUpdate(updates, 5*time.Second, func(msg codexacp.RPCMessage) bool {
 		return msg.Method == "session/request_permission" && msg.ID != nil
 	})
 	if err != nil {
@@ -189,7 +189,7 @@ func TestEmbeddedPermissionRoundTrip(t *testing.T) {
 	if err := runtime.RespondPermission(
 		ctx,
 		*permissionMsg.ID,
-		acpadapter.PermissionDecision{Outcome: "approved"},
+		codexacp.PermissionDecision{Outcome: "approved"},
 	); err != nil {
 		t.Fatalf("respond permission: %v", err)
 	}
@@ -217,18 +217,18 @@ func TestEmbeddedPermissionRoundTrip(t *testing.T) {
 }
 
 type embeddedCallResult struct {
-	response acpadapter.RPCMessage
+	response codexacp.RPCMessage
 	err      error
 }
 
 func embeddedRequest(
 	t *testing.T,
 	ctx context.Context,
-	runtime *acpadapter.EmbeddedRuntime,
+	runtime *codexacp.EmbeddedRuntime,
 	id string,
 	method string,
 	params any,
-) acpadapter.RPCMessage {
+) codexacp.RPCMessage {
 	t.Helper()
 	response, err := runtime.ClientRequest(ctx, embeddedRPCRequest(id, method, params))
 	if err != nil {
@@ -237,9 +237,9 @@ func embeddedRequest(
 	return response
 }
 
-func embeddedRPCRequest(id string, method string, params any) acpadapter.RPCMessage {
+func embeddedRPCRequest(id string, method string, params any) codexacp.RPCMessage {
 	requestID := json.RawMessage(strconvQuote(id))
-	message := acpadapter.RPCMessage{
+	message := codexacp.RPCMessage{
 		JSONRPC: "2.0",
 		ID:      &requestID,
 		Method:  method,
@@ -252,22 +252,22 @@ func embeddedRPCRequest(id string, method string, params any) acpadapter.RPCMess
 }
 
 func waitEmbeddedUpdate(
-	updates <-chan acpadapter.RPCMessage,
+	updates <-chan codexacp.RPCMessage,
 	timeout time.Duration,
-	predicate func(acpadapter.RPCMessage) bool,
-) (acpadapter.RPCMessage, error) {
+	predicate func(codexacp.RPCMessage) bool,
+) (codexacp.RPCMessage, error) {
 	deadline := time.After(timeout)
 	for {
 		select {
 		case msg, ok := <-updates:
 			if !ok {
-				return acpadapter.RPCMessage{}, errors.New("updates channel closed")
+				return codexacp.RPCMessage{}, errors.New("updates channel closed")
 			}
 			if predicate(msg) {
 				return msg, nil
 			}
 		case <-deadline:
-			return acpadapter.RPCMessage{}, errors.New("timed out waiting embedded update")
+			return codexacp.RPCMessage{}, errors.New("timed out waiting embedded update")
 		}
 	}
 }

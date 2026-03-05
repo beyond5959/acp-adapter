@@ -6,12 +6,12 @@ test:
 	$(GO) test ./...
 
 schema:
-	mkdir -p internal/appserver/schema
-	codex app-server generate-json-schema --out internal/appserver/schema
+	mkdir -p internal/codex/schema
+	codex app-server generate-json-schema --out internal/codex/schema
 	$(MAKE) schema-check
 
 schema-check:
-	@files=$$(find internal/appserver/schema -type f ! -name README.md ! -name SHA256SUMS | sort); \
+	@files=$$(find internal/codex/schema -type f ! -name README.md ! -name SHA256SUMS | sort); \
 	if [ -z "$$files" ]; then \
 		echo "schema check failed: no generated schema files found"; \
 		exit 1; \
@@ -23,9 +23,9 @@ schema-check:
 		fi; \
 	done; \
 	if command -v shasum >/dev/null 2>&1; then \
-		echo "$$files" | xargs shasum -a 256 > internal/appserver/schema/SHA256SUMS; \
+		echo "$$files" | xargs shasum -a 256 > internal/codex/schema/SHA256SUMS; \
 	elif command -v sha256sum >/dev/null 2>&1; then \
-		echo "$$files" | xargs sha256sum > internal/appserver/schema/SHA256SUMS; \
+		echo "$$files" | xargs sha256sum > internal/codex/schema/SHA256SUMS; \
 	else \
 		echo "schema check failed: neither shasum nor sha256sum found"; \
 		exit 1; \

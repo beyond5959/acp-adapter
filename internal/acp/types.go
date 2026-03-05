@@ -109,7 +109,41 @@ type SessionNewParams struct {
 
 // SessionNewResult returns new session id.
 type SessionNewResult struct {
+	SessionID     string          `json:"sessionId"`
+	ConfigOptions []SessionConfig `json:"configOptions,omitempty"`
+}
+
+// SessionConfig describes one configurable session/runtime option.
+//
+// For model switching, the adapter exposes one config item:
+// id="model", category="model", value=<current model>, options=[...].
+type SessionConfig struct {
+	ID           string               `json:"id"`
+	Category     string               `json:"category,omitempty"`
+	Name         string               `json:"name,omitempty"`
+	Description  string               `json:"description,omitempty"`
+	Type         string               `json:"type"`
+	CurrentValue string               `json:"currentValue"`
+	Options      []SessionConfigValue `json:"options,omitempty"`
+}
+
+// SessionConfigValue is one selectable option value.
+type SessionConfigValue struct {
+	Value       string `json:"value"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// SessionSetConfigOptionParams updates one session config option.
+type SessionSetConfigOptionParams struct {
 	SessionID string `json:"sessionId"`
+	ConfigID  string `json:"configId"`
+	Value     string `json:"value"`
+}
+
+// SessionSetConfigOptionResult returns the latest config options snapshot.
+type SessionSetConfigOptionResult struct {
+	ConfigOptions []SessionConfig `json:"configOptions,omitempty"`
 }
 
 // SessionPromptParams starts one prompt-turn.
@@ -216,17 +250,18 @@ type TodoItem struct {
 
 // SessionUpdateParams is emitted via session/update notification.
 type SessionUpdateParams struct {
-	SessionID          string     `json:"sessionId"`
-	TurnID             string     `json:"turnId"`
-	Type               string     `json:"type"`
-	Phase              string     `json:"phase,omitempty"`
-	ItemID             string     `json:"itemId,omitempty"`
-	ItemType           string     `json:"itemType,omitempty"`
-	Delta              string     `json:"delta,omitempty"`
-	Status             string     `json:"status,omitempty"`
-	Message            string     `json:"message,omitempty"`
-	ToolCallID         string     `json:"toolCallId,omitempty"`
-	Approval           string     `json:"approval,omitempty"`
-	PermissionDecision string     `json:"permissionDecision,omitempty"`
-	Todo               []TodoItem `json:"todo,omitempty"`
+	SessionID          string          `json:"sessionId"`
+	TurnID             string          `json:"turnId"`
+	Type               string          `json:"type"`
+	Phase              string          `json:"phase,omitempty"`
+	ItemID             string          `json:"itemId,omitempty"`
+	ItemType           string          `json:"itemType,omitempty"`
+	Delta              string          `json:"delta,omitempty"`
+	Status             string          `json:"status,omitempty"`
+	Message            string          `json:"message,omitempty"`
+	ToolCallID         string          `json:"toolCallId,omitempty"`
+	Approval           string          `json:"approval,omitempty"`
+	PermissionDecision string          `json:"permissionDecision,omitempty"`
+	Todo               []TodoItem      `json:"todo,omitempty"`
+	ConfigOptions      []SessionConfig `json:"configOptions,omitempty"`
 }

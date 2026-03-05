@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/beyond5959/acp-adapter/internal/appserver"
 	"github.com/beyond5959/acp-adapter/internal/bridge"
+	"github.com/beyond5959/acp-adapter/internal/codex"
 )
 
 func TestServerStdioBaselineInitializeNewPrompt(t *testing.T) {
@@ -133,48 +133,48 @@ func TestServerStdioBaselineInitializeNewPrompt(t *testing.T) {
 
 type stdioMockAppClient struct{}
 
-func (m *stdioMockAppClient) ThreadStart(ctx context.Context, cwd string, options appserver.RunOptions) (string, error) {
+func (m *stdioMockAppClient) ThreadStart(ctx context.Context, cwd string, options codex.RunOptions) (string, error) {
 	return "thread-1", nil
 }
 
 func (m *stdioMockAppClient) TurnStart(
 	ctx context.Context,
 	threadID string,
-	input []appserver.UserInput,
-	options appserver.RunOptions,
-) (string, <-chan appserver.TurnEvent, error) {
-	events := make(chan appserver.TurnEvent, 5)
+	input []codex.UserInput,
+	options codex.RunOptions,
+) (string, <-chan codex.TurnEvent, error) {
+	events := make(chan codex.TurnEvent, 5)
 	turnID := "turn-1"
 	go func() {
 		defer close(events)
-		events <- appserver.TurnEvent{
-			Type:     appserver.TurnEventTypeStarted,
+		events <- codex.TurnEvent{
+			Type:     codex.TurnEventTypeStarted,
 			ThreadID: threadID,
 			TurnID:   turnID,
 		}
-		events <- appserver.TurnEvent{
-			Type:     appserver.TurnEventTypeItemStarted,
+		events <- codex.TurnEvent{
+			Type:     codex.TurnEventTypeItemStarted,
 			ThreadID: threadID,
 			TurnID:   turnID,
 			ItemID:   "item-1",
 			ItemType: "agent_message",
 		}
-		events <- appserver.TurnEvent{
-			Type:     appserver.TurnEventTypeAgentMessageDelta,
+		events <- codex.TurnEvent{
+			Type:     codex.TurnEventTypeAgentMessageDelta,
 			ThreadID: threadID,
 			TurnID:   turnID,
 			ItemID:   "item-1",
 			Delta:    "hello from mock",
 		}
-		events <- appserver.TurnEvent{
-			Type:     appserver.TurnEventTypeItemCompleted,
+		events <- codex.TurnEvent{
+			Type:     codex.TurnEventTypeItemCompleted,
 			ThreadID: threadID,
 			TurnID:   turnID,
 			ItemID:   "item-1",
 			ItemType: "agent_message",
 		}
-		events <- appserver.TurnEvent{
-			Type:       appserver.TurnEventTypeCompleted,
+		events <- codex.TurnEvent{
+			Type:       codex.TurnEventTypeCompleted,
 			ThreadID:   threadID,
 			TurnID:     turnID,
 			StopReason: "end_turn",
@@ -187,15 +187,15 @@ func (m *stdioMockAppClient) ReviewStart(
 	ctx context.Context,
 	threadID string,
 	instructions string,
-	options appserver.RunOptions,
-) (string, <-chan appserver.TurnEvent, error) {
+	options codex.RunOptions,
+) (string, <-chan codex.TurnEvent, error) {
 	return "", nil, errors.New("not implemented")
 }
 
 func (m *stdioMockAppClient) CompactStart(
 	ctx context.Context,
 	threadID string,
-) (string, <-chan appserver.TurnEvent, error) {
+) (string, <-chan codex.TurnEvent, error) {
 	return "", nil, errors.New("not implemented")
 }
 
@@ -203,27 +203,34 @@ func (m *stdioMockAppClient) TurnInterrupt(ctx context.Context, threadID, turnID
 	return nil
 }
 
+func (m *stdioMockAppClient) ModelsList(ctx context.Context) ([]codex.ModelOption, error) {
+	return []codex.ModelOption{
+		{ID: "gpt-5.1-codex", Name: "GPT-5.1 Codex", IsDefault: true},
+		{ID: "gpt-5", Name: "GPT-5"},
+	}, nil
+}
+
 func (m *stdioMockAppClient) ApprovalRespond(
 	ctx context.Context,
 	approvalID string,
-	decision appserver.ApprovalDecision,
+	decision codex.ApprovalDecision,
 ) error {
 	return nil
 }
 
-func (m *stdioMockAppClient) MCPServersList(ctx context.Context) ([]appserver.MCPServer, error) {
+func (m *stdioMockAppClient) MCPServersList(ctx context.Context) ([]codex.MCPServer, error) {
 	return nil, nil
 }
 
 func (m *stdioMockAppClient) MCPToolCall(
 	ctx context.Context,
-	params appserver.MCPToolCallParams,
-) (appserver.MCPToolCallResult, error) {
-	return appserver.MCPToolCallResult{}, nil
+	params codex.MCPToolCallParams,
+) (codex.MCPToolCallResult, error) {
+	return codex.MCPToolCallResult{}, nil
 }
 
-func (m *stdioMockAppClient) MCPOAuthLogin(ctx context.Context, server string) (appserver.MCPOAuthLoginResult, error) {
-	return appserver.MCPOAuthLoginResult{}, nil
+func (m *stdioMockAppClient) MCPOAuthLogin(ctx context.Context, server string) (codex.MCPOAuthLoginResult, error) {
+	return codex.MCPOAuthLoginResult{}, nil
 }
 
 func (m *stdioMockAppClient) Logout(ctx context.Context) error {

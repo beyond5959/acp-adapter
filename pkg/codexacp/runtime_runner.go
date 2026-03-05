@@ -1,4 +1,4 @@
-package acpadapter
+package codexacp
 
 import (
 	"context"
@@ -8,8 +8,8 @@ import (
 	"os"
 
 	"github.com/beyond5959/acp-adapter/internal/acp"
-	"github.com/beyond5959/acp-adapter/internal/appserver"
 	"github.com/beyond5959/acp-adapter/internal/bridge"
+	"github.com/beyond5959/acp-adapter/internal/codex"
 	"github.com/beyond5959/acp-adapter/internal/observability"
 )
 
@@ -49,8 +49,8 @@ func runRuntime(
 		return errors.New("acp transport is nil")
 	}
 
-	supervisor, err := appserver.NewSupervisor(ctx, appserver.SupervisorConfig{
-		Process: appserver.ProcessConfig{
+	supervisor, err := codex.NewSupervisor(ctx, codex.SupervisorConfig{
+		Process: codex.ProcessConfig{
 			Command: cfg.AppServerCommand,
 			Args:    append([]string(nil), cfg.AppServerArgs...),
 			Stderr:  stderr,

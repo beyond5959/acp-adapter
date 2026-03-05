@@ -60,6 +60,11 @@ func main() {
 		return
 	}
 
+	if strings.Contains(p, "profile probe") {
+		emitTextResponse(effSession, fmt.Sprintf("profile model=%s", *model))
+		return
+	}
+
 	emitTextResponse(effSession, "Hello from Claude! This is a streaming response.")
 }
 
