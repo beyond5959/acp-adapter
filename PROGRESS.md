@@ -6,7 +6,7 @@
 ## 项目概览
 - 项目：acp-adapter（基于 Codex App Server 的 ACP 适配器，同时支持 Claude Code CLI 子进程适配）
 - 当前阶段：Claude Adapter CLI 重构完成（C-R5 内部迭代）
-- 最近更新：2026-03-04
+- 最近更新：2026-03-05
 
 ## 关键链接/文档
 - docs/SPEC.md：技术方案（权威）
@@ -191,23 +191,31 @@
    - 增加 `protocolVersion=1`
    - 增加标准能力树 `agentCapabilities.promptCapabilities/mcpCapabilities/sessionCapabilities`
    - 增加 `agentInfo(name/version/title)`，并保留 legacy capabilities 字段兼容旧客户端
+12. 新增 Session Config Options（模型列表展示 + 模型切换）：
+   - `session/new` 返回 `configOptions`（当前实现：`model`，`type=select`，`currentValue` + `options`）
+   - 新增 `session/set_config_option`（当前支持 `configId=model`，严格校验 value 必须来自 options）
+   - 新增 `session/update` `config_options_update` 映射（扁平字段 + `update.sessionUpdate` 标准 envelope）
+   - codex 后端接入 `model/list`；claude 后端新增 `ModelsList`（来源：`CLAUDE_MODELS` + `--model` + profile models）
 
 ## 影响范围是什么
 1. `internal/acp`：slash 路由矩阵、inline MCP command 执行、auth gate、profile 解析与运行参数透传。
-2. `internal/appserver`：新增 `thread/compact/start`、`mcpServer/*`、`auth/logout` client/supervisor 方法。
+2. `internal/codex`：新增 `thread/compact/start`、`mcpServer/*`、`auth/logout` client/supervisor 方法。
 3. `internal/config`/`cmd`：新增 profiles 加载、初始 auth 模式识别、配置到 server options 的映射。
 4. `testdata/fake_codex_app_server`：新增 compact/mcp/oauth/logout 伪实现与 runtime options 回显（profile probe）。
 5. `test/integration`：新增 G2-G6、H1、I1-I3、MCP 覆盖与 J1 压力测试入口。
 6. `scripts`/`Makefile`：新增 `scripts/j1_stress.sh` 与 `make stress-j1`。
 7. `internal/bridge`：新增 active turn 替换能力，支持内部重试后把 cancel 目标切换到新 turnId。
-8. `internal/appserver`：logout 方法改为 `account/logout -> auth/logout` 兼容回退。
+8. `internal/codex`：logout 方法改为 `account/logout -> auth/logout` 兼容回退。
 9. 文档：新增并精简根目录 `README.md`（面向终端用户使用说明）。
 10. `internal/acp`：认证元数据输出与 `authenticate` 请求处理；增强重试窗口错误判定。
 11. `test/integration`：新增 `TestE2EAuthMethodsAndAuthenticateFlow`，覆盖 authMethods 字段与 `authenticate` 基本链路。
 12. `internal/acp`：`session/prompt` 支持 `prompt` 数组/对象输入；`session/update` 增加标准 `update.sessionUpdate` 映射。
-13. `internal/appserver`：兼容新版 `thread/start`、`turn/start` 与 `turn/completed` 返回结构。
+13. `internal/codex`：兼容新版 `thread/start`、`turn/start` 与 `turn/completed` 返回结构。
 14. `internal/acp`：`initialize` 输出补齐 ACP 标准字段（`protocolVersion`、标准 capability 结构、`agentInfo`）。
 15. `test/integration`：新增 `TestE2EInitializeIncludesACPStandardFields`，防止 `initialize` 协议字段回退。
+16. `internal/acp` / `internal/codex` / `internal/claude`：新增模型配置选项链路（model/list → configOptions → session/set_config_option）。
+17. `test/integration`：新增 codex/claude 的模型列表与模型切换 e2e 覆盖。
+18. `testdata/fake_codex_app_server` / `testdata/fake_claude_cli`：新增模型列表与模型探针回显，支持回归测试。
 
 ## 如何验证
 1. 执行：
@@ -237,6 +245,7 @@
      - `TestE2EAcceptanceG6LogoutRequiresReauth`
      - `TestE2EAcceptanceG6LogoutGuidanceWithAPIKeysAndRecoveryAfterRestart`
      - `TestE2EAcceptanceH1ProfilesAffectRuntime`
+     - `TestE2ESessionConfigOptionsModelListAndSwitch`
      - `TestE2EAcceptanceMCPListCallAndOAuth`
      - `TestE2EAcceptanceI1ToI3AuthMethods`
      - `TestE2EAuthRequiredWithoutConfiguredMethod`
@@ -251,6 +260,7 @@
      - `TestE2ERealCodexPromptInteractions`（含真实 prompt：`What is this project?`）
      - `TestE2ERealCodexContentBlocksMentionsImagesAndTODO`（`E2E_REAL_CODEX=1`）
      - `TestRPCReaderDetectsInvalidStdoutLine`
+     - `TestClaudeE2ESessionConfigOptionsModelListAndSwitch`
    - PR5 相关验收由 e2e 自动覆盖：G/H/I + MCP；J1 由脚本触发专项回归。
    - 测试中持续校验 adapter stdout 每行均为合法 JSON-RPC。
    - 真实 e2e 启用时会先执行 `make schema`（generate + schema-check + hash）再启动测试。
@@ -288,6 +298,14 @@
   - `test/integration/e2e_test.go` 改为构建 `./cmd/acp`（Codex 默认后端），并更新真实 e2e 提示文案为 `cmd/acp`。
   - `npm/scripts/build-binaries.mjs` 改为构建 `./cmd/acp`，保持产物文件名不变。
   - 更新 README / ACCEPTANCE / CLAUDE 文档中的启动与配置示例到 `cmd/acp --adapter codex|claude`。
+
+### 2026-03-05 — 新增 Session Config Options（模型列表展示 + 模型切换）
+- Done:
+  - `session/new` 返回 `configOptions`（`model`）。
+  - 新增 `session/set_config_option`（`configId=model`）并输出 `config_options_update`。
+  - codex 接入 `model/list`；claude 接入可配置模型列表（`CLAUDE_MODELS`/`--models` + default/profile）。
+  - 新增 e2e：`TestE2ESessionConfigOptionsModelListAndSwitch`、`TestClaudeE2ESessionConfigOptionsModelListAndSwitch`。
+  - `go test ./...` 全通过。
   - 更新 `docs/KNOWN_ISSUES.md`：记录入口迁移（KI-0034）并修正旧构建/安装命令。
 - Tests:
   - `go test ./...` 通过

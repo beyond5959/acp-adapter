@@ -44,6 +44,7 @@ Flags (--adapter codex):
 Flags (--adapter claude):
   --claude-bin            Path to claude binary (env: CLAUDE_BIN, default: claude)
   --model                 Default model (env: CLAUDE_MODEL, default: claude-opus-4-6)
+  --models                Comma-separated model list for picker UI (env: CLAUDE_MODELS)
   --max-turns             Max agentic turns per invocation (default: 10)
   --skip-perms            Pass --dangerously-skip-permissions to claude (default: true)
 `
@@ -80,6 +81,7 @@ func run(ctx context.Context, args []string) error {
 	// ---- claude-specific flags ----
 	claudeBin := fs.String("claude-bin", firstEnv("CLAUDE_BIN", "claude"), "path to claude binary")
 	model := fs.String("model", firstEnv("CLAUDE_MODEL", ""), "Claude default model")
+	models := fs.String("models", os.Getenv("CLAUDE_MODELS"), "Claude model list for picker UI")
 	maxTurns := fs.Int("max-turns", 10, "max agentic turns per invocation")
 	skipPerms := fs.Bool("skip-perms", parseBoolDefault(os.Getenv("CLAUDE_SKIP_PERMS"), true), "pass --dangerously-skip-permissions to claude")
 
@@ -108,6 +110,7 @@ func run(ctx context.Context, args []string) error {
 		return runClaudeAdapter(ctx, runClaudeParams{
 			claudeBin:      *claudeBin,
 			model:          *model,
+			models:         *models,
 			maxTurns:       *maxTurns,
 			skipPerms:      *skipPerms,
 			logLevel:       *logLevel,
@@ -166,6 +169,7 @@ func runCodexAdapter(ctx context.Context, p runCodexParams) error {
 type runClaudeParams struct {
 	claudeBin      string
 	model          string
+	models         string
 	maxTurns       int
 	skipPerms      bool
 	logLevel       string
@@ -179,18 +183,20 @@ type runClaudeParams struct {
 
 func runClaudeAdapter(ctx context.Context, p runClaudeParams) error {
 	profiles := loadProfiles(p.profilesFile, p.profilesJSON)
+	availableModels := collectClaudeModels(p.models, p.model, profiles)
 
 	cfg := claudeacp.RuntimeConfig{
-		ClaudeBin:      p.claudeBin,
-		DefaultModel:   p.model,
-		MaxTurns:       p.maxTurns,
-		SkipPerms:      p.skipPerms,
-		TraceJSON:      p.traceJSON,
-		TraceJSONFile:  p.traceJSONFile,
-		LogLevel:       p.logLevel,
-		PatchApplyMode: p.patchApplyMode,
-		Profiles:       mapClaudeProfiles(profiles),
-		DefaultProfile: p.defaultProfile,
+		ClaudeBin:       p.claudeBin,
+		DefaultModel:    p.model,
+		AvailableModels: availableModels,
+		MaxTurns:        p.maxTurns,
+		SkipPerms:       p.skipPerms,
+		TraceJSON:       p.traceJSON,
+		TraceJSONFile:   p.traceJSONFile,
+		LogLevel:        p.logLevel,
+		PatchApplyMode:  p.patchApplyMode,
+		Profiles:        mapClaudeProfiles(profiles),
+		DefaultProfile:  p.defaultProfile,
 	}
 	return claudeacp.RunStdio(ctx, cfg, os.Stdin, os.Stdout, os.Stderr)
 }
@@ -309,4 +315,33 @@ func parseBoolDefault(raw string, fallback bool) bool {
 		return false
 	}
 	return fallback
+}
+
+func collectClaudeModels(raw string, defaultModel string, profiles map[string]profileValues) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0, len(profiles)+4)
+
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+
+	for _, token := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == ' ' || r == '\n' || r == '\t'
+	}) {
+		add(token)
+	}
+	add(defaultModel)
+	for _, profile := range profiles {
+		add(profile.Model)
+	}
+
+	return out
 }

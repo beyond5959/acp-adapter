@@ -12,7 +12,7 @@
    - 不得直接解析 `codex` CLI 文本输出。必须通过子进程 `codex app-server`（stdio JSONL）通信。
 
 3. **Schema 驱动**
-   - `internal/appserver/schema/` 由 `make schema` 生成，不得手写并提交。
+   - `internal/codex/schema/` 由 `make schema` 生成，不得手写并提交。
    - 每次改动涉及 App Server 协议字段时，必须重新运行 `make schema`。
 
 4. **安全 fail-closed**
@@ -46,7 +46,7 @@
 
 - **Go 版本**：Go 1.24+
 - **Module 路径**：`github.com/beyond5959/acp-adapter`（所有内部导入必须用此前缀）
-- **目录分层**：`internal/acp`、`internal/appserver`、`internal/bridge`、`internal/config`、`internal/observability`，不得随意新增顶层目录
+- **目录分层**：`internal/acp`、`internal/codex`、`internal/bridge`、`internal/config`、`internal/observability`，不得随意新增顶层目录
 - **错误处理**：优先显式处理；不得吞错；对外错误必须带上下文（sessionId/threadId/turnId）
 - **日志**：结构化 JSON 写 stderr；不得用 `fmt.Println` 等打到 stdout
 
@@ -89,7 +89,7 @@ ACP Client (Zed/etc)
 
 - `pkg/codexacp`：独立模式（`RunStdio`）+ 嵌入模式（`EmbeddedRuntime`）
 - `internal/acp`：ACP server、传输层抽象（stdio / inproc）
-- `internal/appserver`：App Server 子进程生命周期、supervisor、client
+- `internal/codex`：App Server 子进程生命周期、supervisor、client
 - `internal/bridge`：ACP ↔ App Server 协议映射、session 状态机
 - `test/integration/`：端到端回归（fake harness + real codex 开关）
 - `testdata/fake_codex_app_server/`：测试替身（不得用于生产）

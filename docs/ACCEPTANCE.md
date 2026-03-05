@@ -30,7 +30,7 @@ B1. **App Server 初始化**
 
 B2. **Schema 锁定**
 - 操作：执行 `make schema`（或同等命令）。  
-- 预期：产物写入 `internal/appserver/schema/`；CI 检查 schema 与 codex 版本一致（至少校验文件存在+hash 变更可追踪）。
+- 预期：产物写入 `internal/codex/schema/`；CI 检查 schema 与 codex 版本一致（至少校验文件存在+hash 变更可追踪）。
 
 ## C. 内容能力
 C1. **@-mentions（文件引用）**

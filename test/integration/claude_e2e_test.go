@@ -174,6 +174,126 @@ func TestClaudeE2EBasicPromptAndCancel(t *testing.T) {
 	h.assertStdoutPureJSONRPC()
 }
 
+func TestClaudeE2ESessionConfigOptionsModelListAndSwitch(t *testing.T) {
+	claudeBin := buildFakeClaudeCLI(t)
+	h := startClaudeAdapter(
+		t,
+		claudeBin,
+		"CLAUDE_MODEL=claude-opus-4-6",
+		"CLAUDE_MODELS=claude-opus-4-6,claude-sonnet-4-5",
+	)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID     string                `json:"sessionId"`
+		ConfigOptions []sessionConfigOption `json:"configOptions"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+	if newResult.SessionID == "" {
+		t.Fatalf("session/new returned empty sessionId")
+	}
+
+	var modelConfig sessionConfigOption
+	found := false
+	for _, option := range newResult.ConfigOptions {
+		if option.ID == "model" {
+			modelConfig = option
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("session/new configOptions should include model")
+	}
+	if len(modelConfig.Options) < 2 {
+		t.Fatalf("model options should include configured CLAUDE_MODELS")
+	}
+
+	targetModel := "claude-sonnet-4-5"
+	h.sendRequest("3", "session/set_config_option", map[string]any{
+		"sessionId": newResult.SessionID,
+		"configId":  "model",
+		"value":     targetModel,
+	})
+
+	gotSetResp := false
+	sawConfigUpdate := false
+	for !gotSetResp {
+		msg := h.nextMessage(responseTimeout)
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.Type == "config_options_update" {
+				for _, option := range update.ConfigOptions {
+					if option.ID == "model" && option.CurrentValue == targetModel {
+						sawConfigUpdate = true
+						break
+					}
+				}
+			}
+			continue
+		}
+		if messageID(msg) != "3" {
+			continue
+		}
+		var setResult struct {
+			ConfigOptions []sessionConfigOption `json:"configOptions"`
+		}
+		unmarshalResult(t, msg, &setResult)
+		applied := false
+		for _, option := range setResult.ConfigOptions {
+			if option.ID == "model" && option.CurrentValue == targetModel {
+				applied = true
+				break
+			}
+		}
+		if !applied {
+			t.Fatalf("session/set_config_option should apply model=%q", targetModel)
+		}
+		gotSetResp = true
+	}
+	if !sawConfigUpdate {
+		t.Fatalf("session/set_config_option should emit config_options_update")
+	}
+
+	h.sendRequest("4", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "profile probe",
+	})
+
+	gotPromptResp := false
+	var deltas []string
+	for !gotPromptResp {
+		msg := h.nextMessage(responseTimeout)
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.Type == "message" && update.Delta != "" {
+				deltas = append(deltas, update.Delta)
+			}
+			continue
+		}
+		if messageID(msg) != "4" {
+			continue
+		}
+		var result struct {
+			StopReason string `json:"stopReason"`
+		}
+		unmarshalResult(t, msg, &result)
+		if result.StopReason != "end_turn" {
+			t.Fatalf("prompt expected stopReason=end_turn, got %q", result.StopReason)
+		}
+		gotPromptResp = true
+	}
+
+	output := strings.Join(deltas, "\n")
+	if !strings.Contains(strings.ReplaceAll(output, "\n", ""), "model="+targetModel) {
+		t.Fatalf("prompt should run with switched model=%q, output=%s", targetModel, output)
+	}
+}
+
 func TestClaudeE2ENoAuthRequiredWithCLI(t *testing.T) {
 	// In CLI mode auth is handled by the claude binary itself; no token needed in adapter.
 	claudeBin := buildFakeClaudeCLI(t)

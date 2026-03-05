@@ -1,4 +1,4 @@
-package appserver
+package codex
 
 import (
 	"context"
@@ -138,6 +138,20 @@ func (s *Supervisor) TurnInterrupt(ctx context.Context, threadID, turnID string)
 	return s.call(ctx, methodTurnInterrupt, func(client *Client) error {
 		return client.TurnInterrupt(ctx, threadID, turnID)
 	})
+}
+
+// ModelsList fetches selectable models from app-server.
+func (s *Supervisor) ModelsList(ctx context.Context) ([]ModelOption, error) {
+	var models []ModelOption
+	err := s.call(ctx, methodModelList, func(client *Client) error {
+		var callErr error
+		models, callErr = client.ModelsList(ctx)
+		return callErr
+	})
+	if err != nil {
+		return nil, err
+	}
+	return models, nil
 }
 
 // ApprovalRespond forwards one user decision back to app-server.

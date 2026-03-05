@@ -10,7 +10,7 @@
 2. **下游必须使用 Codex App Server（非直接解析 Codex CLI 文本输出）**  
    - 默认以子进程方式启动：`codex app-server`，通过 stdio JSONL/JSON-RPC 与之通信。
 3. **版本锁定与 Schema 驱动**  
-   - 必须提供脚本/Makefile 目标：用 `codex app-server generate-json-schema --out internal/appserver/schema` 生成并提交 schema 产物。  
+   - 必须提供脚本/Makefile 目标：用 `codex app-server generate-json-schema --out internal/codex/schema` 生成并提交 schema 产物。  
    - Go 类型优先通过 schema 生成（或至少进行 runtime 校验），避免手写漂移。
 4. **可验证、可回归**  
    - 每个 PR 必须保持 `go test ./...` 通过。  
@@ -18,7 +18,7 @@
 
 ## 1. 工程规范
 - Go 版本：**Go 1.24+**（如需调整，请同步更新 CI）。
-- 目录结构需保持清晰分层：`internal/acp`、`internal/appserver`、`internal/bridge`、`internal/config`、`internal/observability`。
+- 目录结构需保持清晰分层：`internal/acp`、`internal/codex`、`internal/bridge`、`internal/config`、`internal/observability`。
 - 代码风格：优先显式错误处理；避免“吞错”；对外错误应带上下文（sessionId/threadId/turnId）。
 - 并发：每个 session 同时只允许 1 个 active turn；`session/cancel` 必须快速生效且不泄漏 goroutine。
 

@@ -17,14 +17,15 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/beyond5959/acp-adapter/internal/appserver"
 	"github.com/beyond5959/acp-adapter/internal/bridge"
+	"github.com/beyond5959/acp-adapter/internal/codex"
 )
 
 const (
 	methodInitialize               = "initialize"
 	methodAuthenticate             = "authenticate"
 	methodSessionNew               = "session/new"
+	methodSessionSetConfigOption   = "session/set_config_option"
 	methodSessionPrompt            = "session/prompt"
 	methodSessionCancel            = "session/cancel"
 	methodSessionUpdate            = "session/update"
@@ -135,25 +136,26 @@ type slashCommand struct {
 }
 
 type appClient interface {
-	ThreadStart(ctx context.Context, cwd string, options appserver.RunOptions) (string, error)
+	ThreadStart(ctx context.Context, cwd string, options codex.RunOptions) (string, error)
 	TurnStart(
 		ctx context.Context,
 		threadID string,
-		input []appserver.UserInput,
-		options appserver.RunOptions,
-	) (string, <-chan appserver.TurnEvent, error)
+		input []codex.UserInput,
+		options codex.RunOptions,
+	) (string, <-chan codex.TurnEvent, error)
 	ReviewStart(
 		ctx context.Context,
 		threadID string,
 		instructions string,
-		options appserver.RunOptions,
-	) (string, <-chan appserver.TurnEvent, error)
-	CompactStart(ctx context.Context, threadID string) (string, <-chan appserver.TurnEvent, error)
+		options codex.RunOptions,
+	) (string, <-chan codex.TurnEvent, error)
+	CompactStart(ctx context.Context, threadID string) (string, <-chan codex.TurnEvent, error)
 	TurnInterrupt(ctx context.Context, threadID, turnID string) error
-	ApprovalRespond(ctx context.Context, approvalID string, decision appserver.ApprovalDecision) error
-	MCPServersList(ctx context.Context) ([]appserver.MCPServer, error)
-	MCPToolCall(ctx context.Context, params appserver.MCPToolCallParams) (appserver.MCPToolCallResult, error)
-	MCPOAuthLogin(ctx context.Context, server string) (appserver.MCPOAuthLoginResult, error)
+	ModelsList(ctx context.Context) ([]codex.ModelOption, error)
+	ApprovalRespond(ctx context.Context, approvalID string, decision codex.ApprovalDecision) error
+	MCPServersList(ctx context.Context) ([]codex.MCPServer, error)
+	MCPToolCall(ctx context.Context, params codex.MCPToolCallParams) (codex.MCPToolCallResult, error)
+	MCPOAuthLogin(ctx context.Context, server string) (codex.MCPOAuthLoginResult, error)
 	Logout(ctx context.Context) error
 }
 
@@ -182,6 +184,9 @@ type Server struct {
 	sessionConfigMu sync.Mutex
 	sessionConfigs  map[string]runtimeOptions
 
+	sessionConfigOptionsMu sync.Mutex
+	sessionConfigOptions   map[string][]SessionConfig
+
 	capabilitiesMu sync.RWMutex
 	capabilities   adapterCapabilities
 
@@ -208,18 +213,19 @@ func NewServer(
 	options.DefaultProfile = strings.TrimSpace(options.DefaultProfile)
 
 	return &Server{
-		codec:          codec,
-		app:            app,
-		sessions:       sessions,
-		logger:         logger,
-		options:        options,
-		pendingClient:  make(map[string]chan RPCMessage),
-		nextClientID:   0,
-		sessionConfigs: make(map[string]runtimeOptions),
-		sessionTodos:   make(map[string][]TodoItem),
-		authMode:       strings.TrimSpace(options.InitialAuthMode),
-		lastAuthMode:   strings.TrimSpace(options.InitialAuthMode),
-		authLoggedIn:   strings.TrimSpace(options.InitialAuthMode) != "",
+		codec:                codec,
+		app:                  app,
+		sessions:             sessions,
+		logger:               logger,
+		options:              options,
+		pendingClient:        make(map[string]chan RPCMessage),
+		nextClientID:         0,
+		sessionConfigs:       make(map[string]runtimeOptions),
+		sessionConfigOptions: make(map[string][]SessionConfig),
+		sessionTodos:         make(map[string][]TodoItem),
+		authMode:             strings.TrimSpace(options.InitialAuthMode),
+		lastAuthMode:         strings.TrimSpace(options.InitialAuthMode),
+		authLoggedIn:         strings.TrimSpace(options.InitialAuthMode) != "",
 	}
 }
 
@@ -276,6 +282,8 @@ func (s *Server) handleRequest(ctx context.Context, msg RPCMessage) {
 		s.handleAuthenticate(rawID, msg.Params)
 	case methodSessionNew:
 		s.handleSessionNew(ctx, rawID, msg.Params)
+	case methodSessionSetConfigOption:
+		s.handleSessionSetConfigOption(ctx, rawID, msg.Params)
 	case methodSessionPrompt:
 		s.handleSessionPrompt(ctx, rawID, msg.Params)
 	case methodSessionCancel:
@@ -415,10 +423,86 @@ func (s *Server) handleSessionNew(ctx context.Context, id json.RawMessage, param
 
 	sessionID := s.sessions.Create(threadID)
 	s.setSessionConfig(sessionID, options)
+	configOptions := s.buildSessionConfigOptions(ctx, options)
+	s.setSessionConfigOptions(sessionID, configOptions)
 	s.sessionTodosMu.Lock()
 	s.sessionTodos[sessionID] = nil
 	s.sessionTodosMu.Unlock()
-	_ = s.codec.WriteResult(id, SessionNewResult{SessionID: sessionID})
+	_ = s.codec.WriteResult(id, SessionNewResult{
+		SessionID:     sessionID,
+		ConfigOptions: configOptions,
+	})
+}
+
+func (s *Server) handleSessionSetConfigOption(ctx context.Context, id json.RawMessage, paramsRaw json.RawMessage) {
+	var params SessionSetConfigOptionParams
+	if err := decodeParams(paramsRaw, &params); err != nil {
+		s.writeInvalidParams(id, map[string]any{"error": err.Error()})
+		return
+	}
+	params.SessionID = strings.TrimSpace(params.SessionID)
+	params.ConfigID = strings.TrimSpace(params.ConfigID)
+	params.Value = strings.TrimSpace(params.Value)
+	if params.SessionID == "" {
+		s.writeInvalidParams(id, map[string]any{"sessionId": "required"})
+		return
+	}
+	if params.ConfigID == "" {
+		s.writeInvalidParams(id, map[string]any{"configId": "required"})
+		return
+	}
+	if params.Value == "" {
+		s.writeInvalidParams(id, map[string]any{"value": "required"})
+		return
+	}
+
+	if _, err := s.sessions.ThreadID(params.SessionID); err != nil {
+		s.writeInternalError(id, "unknown session", map[string]any{
+			"error":     err.Error(),
+			"sessionId": params.SessionID,
+		})
+		return
+	}
+
+	options := s.getSessionConfig(params.SessionID)
+	configOptions := s.getSessionConfigOptions(params.SessionID)
+	if len(configOptions) == 0 {
+		configOptions = s.buildSessionConfigOptions(ctx, options)
+	}
+
+	switch params.ConfigID {
+	case "model":
+		applied := false
+		configOptions, applied = applyConfigOptionValue(configOptions, "model", params.Value)
+		if !applied {
+			s.writeInvalidParams(id, map[string]any{
+				"value": "must be one of model options",
+			})
+			return
+		}
+		options.Model = params.Value
+	default:
+		s.writeInvalidParams(id, map[string]any{
+			"configId": "unsupported config option",
+			"allowed":  []string{"model"},
+		})
+		return
+	}
+
+	s.setSessionConfig(params.SessionID, options)
+	s.setSessionConfigOptions(params.SessionID, configOptions)
+
+	s.emitUpdates([]SessionUpdateParams{
+		{
+			SessionID:     params.SessionID,
+			Type:          "config_options_update",
+			ConfigOptions: configOptions,
+		},
+	})
+
+	_ = s.codec.WriteResult(id, SessionSetConfigOptionResult{
+		ConfigOptions: configOptions,
+	})
 }
 
 func (s *Server) handleSessionPrompt(ctx context.Context, id json.RawMessage, paramsRaw json.RawMessage) {
@@ -534,7 +618,7 @@ func (s *Server) handleSessionPrompt(ctx context.Context, id json.RawMessage, pa
 				s.writePromptResult(id, lifecycle.fallbackStopReason())
 				return
 			}
-			if event.Type == appserver.TurnEventTypeError {
+			if event.Type == codex.TurnEventTypeError {
 				if s.options.RetryTurnOnCrash && !retried && retrySafe && isRetryableTurnError(event.Message) {
 					retried = true
 					lifecycle.resetForRetry()
@@ -626,7 +710,7 @@ func (s *Server) handleSessionPrompt(ctx context.Context, id json.RawMessage, pa
 					return
 				}
 			}
-			if event.Type == appserver.TurnEventTypeApprovalRequired {
+			if event.Type == codex.TurnEventTypeApprovalRequired {
 				retrySafe = false
 				updates, done, stopReason := s.handleApprovalEvent(turnCtx, lifecycle, event)
 				s.emitUpdates(updates)
@@ -636,7 +720,7 @@ func (s *Server) handleSessionPrompt(ctx context.Context, id json.RawMessage, pa
 				}
 				continue
 			}
-			if event.Type != appserver.TurnEventTypeStarted {
+			if event.Type != codex.TurnEventTypeStarted {
 				retrySafe = false
 			}
 
@@ -655,9 +739,9 @@ func (s *Server) startPromptTurn(
 	ctx context.Context,
 	threadID string,
 	command slashCommand,
-	preparedInput []appserver.UserInput,
+	preparedInput []codex.UserInput,
 	options runtimeOptions,
-) (string, string, <-chan appserver.TurnEvent, error) {
+) (string, string, <-chan codex.TurnEvent, error) {
 	method := "turn/start"
 	switch command.kind {
 	case slashCommandReview:
@@ -793,7 +877,7 @@ func shouldRetryAfterSupervisorRestart(err error) bool {
 func (s *Server) handleApprovalEvent(
 	ctx context.Context,
 	lifecycle *turnLifecycle,
-	event appserver.TurnEvent,
+	event codex.TurnEvent,
 ) ([]SessionUpdateParams, bool, string) {
 	if event.Approval.ApprovalID == "" {
 		return []SessionUpdateParams{
@@ -829,11 +913,11 @@ func (s *Server) handleApprovalEvent(
 	}
 
 	mode := normalizePatchApplyMode(s.options.PatchApplyMode)
-	if mode == patchApplyModeACPFS && event.Approval.Kind == appserver.ApprovalKindFile && decision == permissionOutcomeApproved {
+	if mode == patchApplyModeACPFS && event.Approval.Kind == codex.ApprovalKindFile && decision == permissionOutcomeApproved {
 		if err := s.applyPatchViaACPFS(ctx, lifecycle.sessionID, lifecycle.turnID, event.Approval); err != nil {
 			toolStatus = "failed"
 			toolMessage = fmt.Sprintf("permission approved but ACP fs apply failed: %v", err)
-			respondDecision = appserver.ApprovalDecisionDeclined
+			respondDecision = codex.ApprovalDecisionDeclined
 			updates = append(updates, SessionUpdateParams{
 				SessionID: lifecycle.sessionID,
 				TurnID:    lifecycle.turnID,
@@ -950,6 +1034,9 @@ func buildSessionUpdatePayload(update SessionUpdateParams) map[string]any {
 	if len(update.Todo) > 0 {
 		payload["todo"] = update.Todo
 	}
+	if len(update.ConfigOptions) > 0 {
+		payload["configOptions"] = update.ConfigOptions
+	}
 
 	if mapped := mapACPUpdateForClient(update); mapped != nil {
 		payload["update"] = mapped
@@ -982,6 +1069,14 @@ func mapACPUpdateForClient(update SessionUpdateParams) map[string]any {
 			mapped["title"] = update.Message
 		}
 		return mapped
+	case "config_options_update":
+		mapped := map[string]any{
+			"sessionUpdate": "config_options_update",
+		}
+		if len(update.ConfigOptions) > 0 {
+			mapped["configOptions"] = update.ConfigOptions
+		}
+		return mapped
 	default:
 		text := strings.TrimSpace(update.Delta)
 		if text == "" {
@@ -1010,7 +1105,7 @@ func (s *Server) requestPermission(
 	ctx context.Context,
 	sessionID string,
 	turnID string,
-	approval appserver.ApprovalRequest,
+	approval codex.ApprovalRequest,
 ) (permissionOutcome, error) {
 	callCtx, cancel := context.WithTimeout(ctx, defaultPermissionTimeout)
 	defer cancel()
@@ -1041,7 +1136,7 @@ func (s *Server) applyPatchViaACPFS(
 	ctx context.Context,
 	sessionID string,
 	turnID string,
-	approval appserver.ApprovalRequest,
+	approval codex.ApprovalRequest,
 ) error {
 	path := approval.WritePath
 	if path == "" && len(approval.Files) > 0 {
@@ -1250,7 +1345,7 @@ func (s *Server) prepareTurnInput(
 	sessionID string,
 	params SessionPromptParams,
 	paramsRaw json.RawMessage,
-) ([]appserver.UserInput, []string, string, error) {
+) ([]codex.UserInput, []string, string, error) {
 	promptText := strings.TrimSpace(params.Prompt)
 	if promptText == "" {
 		promptText = strings.TrimSpace(extractTextPrompt(params.Content))
@@ -1259,7 +1354,7 @@ func (s *Server) prepareTurnInput(
 		promptText = strings.TrimSpace(fallbackPrompt(paramsRaw))
 	}
 
-	input := make([]appserver.UserInput, 0, len(params.Content)+len(params.Resources)+1)
+	input := make([]codex.UserInput, 0, len(params.Content)+len(params.Resources)+1)
 	warnings := make([]string, 0, 4)
 	hasPromptTextBlock := false
 
@@ -1272,7 +1367,7 @@ func (s *Server) prepareTurnInput(
 				continue
 			}
 			hasPromptTextBlock = true
-			input = append(input, appserver.UserInput{Type: "text", Text: text})
+			input = append(input, codex.UserInput{Type: "text", Text: text})
 		case "image":
 			imageInput, err := buildImageInput(block)
 			if err != nil {
@@ -1288,7 +1383,7 @@ func (s *Server) prepareTurnInput(
 			// Unknown block types degrade to text when text payload exists.
 			if text := strings.TrimSpace(block.Text); text != "" {
 				hasPromptTextBlock = true
-				input = append(input, appserver.UserInput{Type: "text", Text: text})
+				input = append(input, codex.UserInput{Type: "text", Text: text})
 			}
 		}
 	}
@@ -1300,7 +1395,7 @@ func (s *Server) prepareTurnInput(
 	}
 
 	if strings.TrimSpace(promptText) != "" && !hasPromptTextBlock {
-		input = append([]appserver.UserInput{{Type: "text", Text: promptText}}, input...)
+		input = append([]codex.UserInput{{Type: "text", Text: promptText}}, input...)
 	}
 
 	if len(input) == 0 {
@@ -1329,7 +1424,7 @@ func extractTextPrompt(content []PromptContentBlock) string {
 	return strings.Join(parts, "\n")
 }
 
-func extractTextFromInput(input []appserver.UserInput) string {
+func extractTextFromInput(input []codex.UserInput) string {
 	parts := make([]string, 0, len(input))
 	for _, item := range input {
 		if strings.ToLower(strings.TrimSpace(item.Type)) != "text" {
@@ -1383,7 +1478,7 @@ func (s *Server) resourceToInputs(
 	ctx context.Context,
 	sessionID string,
 	resource PromptResource,
-) ([]appserver.UserInput, []string) {
+) ([]codex.UserInput, []string) {
 	var warnings []string
 	path := strings.TrimSpace(resource.Path)
 	if path == "" {
@@ -1401,13 +1496,13 @@ func (s *Server) resourceToInputs(
 		}
 	}
 
-	input := make([]appserver.UserInput, 0, 2)
+	input := make([]codex.UserInput, 0, 2)
 	if path != "" || strings.TrimSpace(resource.URI) != "" {
 		mentionPath := path
 		if mentionPath == "" {
 			mentionPath = strings.TrimSpace(resource.URI)
 		}
-		input = append(input, appserver.UserInput{
+		input = append(input, codex.UserInput{
 			Type: "mention",
 			Name: name,
 			Path: mentionPath,
@@ -1446,7 +1541,7 @@ func (s *Server) resourceToInputs(
 				fmt.Sprintf("mention %s text exceeded %d bytes and was truncated", name, defaultMentionTextLimit),
 			)
 		}
-		input = append(input, appserver.UserInput{
+		input = append(input, codex.UserInput{
 			Type: "text",
 			Text: formatMentionContext(resource, name, path, truncatedText, truncated),
 		})
@@ -1487,30 +1582,30 @@ func formatMentionContext(
 	return builder.String()
 }
 
-func buildImageInput(block PromptContentBlock) (appserver.UserInput, error) {
+func buildImageInput(block PromptContentBlock) (codex.UserInput, error) {
 	if path := strings.TrimSpace(block.Path); path != "" {
-		return appserver.UserInput{Type: "localImage", Path: path}, nil
+		return codex.UserInput{Type: "localImage", Path: path}, nil
 	}
 
 	if data := strings.TrimSpace(block.Data); data != "" {
 		mime := normalizeImageMimeType(block.MimeType)
 		if mime == "" {
-			return appserver.UserInput{}, fmt.Errorf("image block requires mimeType")
+			return codex.UserInput{}, fmt.Errorf("image block requires mimeType")
 		}
 		if !isAllowedImageMimeType(mime) {
-			return appserver.UserInput{}, fmt.Errorf("unsupported image mimeType: %s", mime)
+			return codex.UserInput{}, fmt.Errorf("unsupported image mimeType: %s", mime)
 		}
 		decoded, err := decodeBase64Payload(data)
 		if err != nil {
-			return appserver.UserInput{}, fmt.Errorf("invalid image base64 payload: %w", err)
+			return codex.UserInput{}, fmt.Errorf("invalid image base64 payload: %w", err)
 		}
 		if len(decoded) > defaultImageSizeLimit {
-			return appserver.UserInput{}, fmt.Errorf(
+			return codex.UserInput{}, fmt.Errorf(
 				"image payload exceeds %d bytes limit",
 				defaultImageSizeLimit,
 			)
 		}
-		return appserver.UserInput{
+		return codex.UserInput{
 			Type: "image",
 			URL:  fmt.Sprintf("data:%s;base64,%s", mime, sanitizeBase64(data)),
 		}, nil
@@ -1518,38 +1613,38 @@ func buildImageInput(block PromptContentBlock) (appserver.UserInput, error) {
 
 	uri := strings.TrimSpace(block.URI)
 	if uri == "" {
-		return appserver.UserInput{}, fmt.Errorf("image block requires data, uri, or path")
+		return codex.UserInput{}, fmt.Errorf("image block requires data, uri, or path")
 	}
 	if strings.HasPrefix(strings.ToLower(uri), "data:") {
 		mime, payload, err := splitDataImageURI(uri)
 		if err != nil {
-			return appserver.UserInput{}, err
+			return codex.UserInput{}, err
 		}
 		if !isAllowedImageMimeType(mime) {
-			return appserver.UserInput{}, fmt.Errorf("unsupported image mimeType: %s", mime)
+			return codex.UserInput{}, fmt.Errorf("unsupported image mimeType: %s", mime)
 		}
 		decoded, err := decodeBase64Payload(payload)
 		if err != nil {
-			return appserver.UserInput{}, fmt.Errorf("invalid image data URI payload: %w", err)
+			return codex.UserInput{}, fmt.Errorf("invalid image data URI payload: %w", err)
 		}
 		if len(decoded) > defaultImageSizeLimit {
-			return appserver.UserInput{}, fmt.Errorf(
+			return codex.UserInput{}, fmt.Errorf(
 				"image payload exceeds %d bytes limit",
 				defaultImageSizeLimit,
 			)
 		}
-		return appserver.UserInput{
+		return codex.UserInput{
 			Type: "image",
 			URL:  uri,
 		}, nil
 	}
 	if strings.HasPrefix(strings.ToLower(uri), "http://") || strings.HasPrefix(strings.ToLower(uri), "https://") {
-		return appserver.UserInput{
+		return codex.UserInput{
 			Type: "image",
 			URL:  uri,
 		}, nil
 	}
-	return appserver.UserInput{
+	return codex.UserInput{
 		Type: "localImage",
 		Path: uri,
 	}, nil
@@ -1898,6 +1993,170 @@ func (s *Server) getSessionConfig(sessionID string) runtimeOptions {
 	return s.sessionConfigs[sessionID]
 }
 
+func (s *Server) setSessionConfigOptions(sessionID string, options []SessionConfig) {
+	s.sessionConfigOptionsMu.Lock()
+	s.sessionConfigOptions[sessionID] = cloneSessionConfigs(options)
+	s.sessionConfigOptionsMu.Unlock()
+}
+
+func (s *Server) getSessionConfigOptions(sessionID string) []SessionConfig {
+	s.sessionConfigOptionsMu.Lock()
+	defer s.sessionConfigOptionsMu.Unlock()
+	return cloneSessionConfigs(s.sessionConfigOptions[sessionID])
+}
+
+func cloneSessionConfigs(options []SessionConfig) []SessionConfig {
+	if len(options) == 0 {
+		return nil
+	}
+	out := make([]SessionConfig, len(options))
+	for i, option := range options {
+		out[i] = option
+		out[i].Options = cloneSessionConfigValues(option.Options)
+	}
+	return out
+}
+
+func cloneSessionConfigValues(values []SessionConfigValue) []SessionConfigValue {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]SessionConfigValue, len(values))
+	copy(out, values)
+	return out
+}
+
+func (s *Server) buildSessionConfigOptions(ctx context.Context, current runtimeOptions) []SessionConfig {
+	modelOption := s.buildModelSessionConfig(ctx, strings.TrimSpace(current.Model))
+	if modelOption.ID == "" {
+		return nil
+	}
+	return []SessionConfig{modelOption}
+}
+
+func (s *Server) buildModelSessionConfig(ctx context.Context, currentModel string) SessionConfig {
+	type candidate struct {
+		value       string
+		name        string
+		description string
+		isDefault   bool
+	}
+
+	values := make([]candidate, 0, 16)
+	seen := make(map[string]struct{})
+	add := func(value string, name string, description string, isDefault bool) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			if isDefault {
+				for i := range values {
+					if values[i].value == value {
+						values[i].isDefault = true
+						break
+					}
+				}
+			}
+			return
+		}
+		seen[value] = struct{}{}
+		if strings.TrimSpace(name) == "" {
+			name = value
+		}
+		values = append(values, candidate{
+			value:       value,
+			name:        strings.TrimSpace(name),
+			description: strings.TrimSpace(description),
+			isDefault:   isDefault,
+		})
+	}
+
+	if models, err := s.app.ModelsList(ctx); err != nil {
+		s.logger.Warn("failed to load model list", slog.String("error", err.Error()))
+	} else {
+		for _, model := range models {
+			if model.Hidden {
+				continue
+			}
+			add(model.ID, model.Name, model.Description, model.IsDefault)
+		}
+	}
+
+	for _, profile := range s.options.Profiles {
+		add(profile.Model, profile.Model, "from adapter profile", false)
+	}
+
+	selected := strings.TrimSpace(currentModel)
+	if selected == "" {
+		for _, value := range values {
+			if value.isDefault {
+				selected = value.value
+				break
+			}
+		}
+	}
+	if selected == "" && len(values) > 0 {
+		selected = values[0].value
+	}
+	if selected == "" {
+		return SessionConfig{}
+	}
+	add(selected, selected, "", false)
+
+	options := make([]SessionConfigValue, 0, len(values))
+	for _, value := range values {
+		options = append(options, SessionConfigValue{
+			Value:       value.value,
+			Name:        value.name,
+			Description: value.description,
+		})
+	}
+
+	return SessionConfig{
+		ID:           "model",
+		Category:     "model",
+		Name:         "Model",
+		Description:  "Model used for this session",
+		Type:         "select",
+		CurrentValue: selected,
+		Options:      options,
+	}
+}
+
+func applyConfigOptionValue(options []SessionConfig, configID string, value string) ([]SessionConfig, bool) {
+	configs := cloneSessionConfigs(options)
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return configs, false
+	}
+
+	index := -1
+	for i := range configs {
+		if strings.TrimSpace(configs[i].ID) == configID {
+			index = i
+			break
+		}
+	}
+	if index == -1 {
+		return configs, false
+	}
+
+	hasValue := false
+	for _, option := range configs[index].Options {
+		if strings.TrimSpace(option.Value) == value {
+			hasValue = true
+			break
+		}
+	}
+	if !hasValue {
+		return configs, false
+	}
+
+	configs[index].CurrentValue = value
+	return configs, true
+}
+
 func (s *Server) resolveRuntimeOptions(requested runtimeOptions, base runtimeOptions) (runtimeOptions, error) {
 	resolved := base
 	if isRuntimeOptionsEmpty(resolved) && strings.TrimSpace(s.options.DefaultProfile) != "" {
@@ -1957,8 +2216,8 @@ func isRuntimeOptionsEmpty(options runtimeOptions) bool {
 		strings.TrimSpace(options.SystemInstructions) == ""
 }
 
-func toRunOptions(options runtimeOptions) appserver.RunOptions {
-	return appserver.RunOptions{
+func toRunOptions(options runtimeOptions) codex.RunOptions {
+	return codex.RunOptions{
 		Model:              options.Model,
 		ApprovalPolicy:     options.ApprovalPolicy,
 		Sandbox:            options.Sandbox,
@@ -2244,15 +2503,15 @@ func (s *Server) handleMCPCallSlash(
 ) {
 	s.runInlineCommand(ctx, id, sessionID, "mcp-call", func(turnCtx context.Context, lifecycle *turnLifecycle) (string, error) {
 		toolCallID := fmt.Sprintf("mcp-tool-%d", atomic.AddUint64(&s.nextInlineID, 1))
-		approval := appserver.ApprovalRequest{
+		approval := codex.ApprovalRequest{
 			TurnID:     lifecycle.turnID,
 			ToolCallID: toolCallID,
-			Kind:       appserver.ApprovalKindMCP,
+			Kind:       codex.ApprovalKindMCP,
 			MCPServer:  command.argOne,
 			MCPTool:    command.argTwo,
 			Message:    "permission required before MCP side effect call",
 		}
-		event := appserver.TurnEvent{Approval: approval}
+		event := codex.TurnEvent{Approval: approval}
 		s.emitUpdates(lifecycle.toolCallInProgressUpdates(event))
 
 		decision, err := s.requestPermission(turnCtx, sessionID, lifecycle.turnID, approval)
@@ -2269,7 +2528,7 @@ func (s *Server) handleMCPCallSlash(
 		toolStatus := "failed"
 		toolMessage := fmt.Sprintf("permission %s", decision)
 		if decision == permissionOutcomeApproved {
-			result, callErr := s.app.MCPToolCall(turnCtx, appserver.MCPToolCallParams{
+			result, callErr := s.app.MCPToolCall(turnCtx, codex.MCPToolCallParams{
 				Server:    command.argOne,
 				Tool:      command.argTwo,
 				Arguments: command.argTail,
@@ -2368,7 +2627,7 @@ func (t *turnLifecycle) cancelledUpdate() []SessionUpdateParams {
 	}
 }
 
-func (t *turnLifecycle) toolCallInProgressUpdates(event appserver.TurnEvent) []SessionUpdateParams {
+func (t *turnLifecycle) toolCallInProgressUpdates(event codex.TurnEvent) []SessionUpdateParams {
 	t.phase = turnPhaseStreaming
 	return []SessionUpdateParams{
 		{
@@ -2385,7 +2644,7 @@ func (t *turnLifecycle) toolCallInProgressUpdates(event appserver.TurnEvent) []S
 }
 
 func (t *turnLifecycle) toolCallOutcomeUpdate(
-	event appserver.TurnEvent,
+	event codex.TurnEvent,
 	outcome permissionOutcome,
 	status string,
 	message string,
@@ -2403,9 +2662,9 @@ func (t *turnLifecycle) toolCallOutcomeUpdate(
 	}
 }
 
-func (t *turnLifecycle) apply(event appserver.TurnEvent) ([]SessionUpdateParams, bool, string) {
+func (t *turnLifecycle) apply(event codex.TurnEvent) ([]SessionUpdateParams, bool, string) {
 	switch event.Type {
-	case appserver.TurnEventTypeStarted:
+	case codex.TurnEventTypeStarted:
 		t.phase = turnPhaseStarted
 		return []SessionUpdateParams{
 			{
@@ -2416,7 +2675,7 @@ func (t *turnLifecycle) apply(event appserver.TurnEvent) ([]SessionUpdateParams,
 				Status:    "turn_started",
 			},
 		}, false, ""
-	case appserver.TurnEventTypeUpdate, appserver.TurnEventTypeAgentMessageDelta:
+	case codex.TurnEventTypeUpdate, codex.TurnEventTypeAgentMessageDelta:
 		t.phase = turnPhaseStreaming
 		t.messageBuffer.WriteString(event.Delta)
 		update := SessionUpdateParams{
@@ -2431,7 +2690,7 @@ func (t *turnLifecycle) apply(event appserver.TurnEvent) ([]SessionUpdateParams,
 			update.Todo = todos
 		}
 		return []SessionUpdateParams{update}, false, ""
-	case appserver.TurnEventTypeItemStarted:
+	case codex.TurnEventTypeItemStarted:
 		t.phase = turnPhaseStreaming
 		return []SessionUpdateParams{
 			{
@@ -2444,7 +2703,7 @@ func (t *turnLifecycle) apply(event appserver.TurnEvent) ([]SessionUpdateParams,
 				Status:    "item_started",
 			},
 		}, false, ""
-	case appserver.TurnEventTypeItemCompleted:
+	case codex.TurnEventTypeItemCompleted:
 		t.phase = turnPhaseStreaming
 		return []SessionUpdateParams{
 			{
@@ -2457,7 +2716,7 @@ func (t *turnLifecycle) apply(event appserver.TurnEvent) ([]SessionUpdateParams,
 				Status:    "item_completed",
 			},
 		}, false, ""
-	case appserver.TurnEventTypeReviewModeEntered:
+	case codex.TurnEventTypeReviewModeEntered:
 		t.phase = turnPhaseStreaming
 		return []SessionUpdateParams{
 			{
@@ -2468,7 +2727,7 @@ func (t *turnLifecycle) apply(event appserver.TurnEvent) ([]SessionUpdateParams,
 				Status:    "review_mode_entered",
 			},
 		}, false, ""
-	case appserver.TurnEventTypeReviewModeExited:
+	case codex.TurnEventTypeReviewModeExited:
 		t.phase = turnPhaseStreaming
 		return []SessionUpdateParams{
 			{
@@ -2479,7 +2738,7 @@ func (t *turnLifecycle) apply(event appserver.TurnEvent) ([]SessionUpdateParams,
 				Status:    "review_mode_exited",
 			},
 		}, false, ""
-	case appserver.TurnEventTypeCompleted:
+	case codex.TurnEventTypeCompleted:
 		stopReason := normalizeStopReason(event.StopReason)
 		if t.cancelRequested {
 			stopReason = "cancelled"
@@ -2501,7 +2760,7 @@ func (t *turnLifecycle) apply(event appserver.TurnEvent) ([]SessionUpdateParams,
 				Status:    "turn_completed",
 			},
 		}, true, stopReason
-	case appserver.TurnEventTypeError:
+	case codex.TurnEventTypeError:
 		t.phase = turnPhaseError
 		return []SessionUpdateParams{
 			{
@@ -2558,22 +2817,22 @@ func normalizePermissionOutcome(result SessionRequestPermissionResult) permissio
 	return permissionOutcomeCancelled
 }
 
-func mapDecisionToAppServer(outcome permissionOutcome) appserver.ApprovalDecision {
+func mapDecisionToAppServer(outcome permissionOutcome) codex.ApprovalDecision {
 	switch outcome {
 	case permissionOutcomeApproved:
-		return appserver.ApprovalDecisionApproved
+		return codex.ApprovalDecisionApproved
 	case permissionOutcomeDeclined:
-		return appserver.ApprovalDecisionDeclined
+		return codex.ApprovalDecisionDeclined
 	default:
-		return appserver.ApprovalDecisionCancelled
+		return codex.ApprovalDecisionCancelled
 	}
 }
 
-func textTurnInput(text string) []appserver.UserInput {
+func textTurnInput(text string) []codex.UserInput {
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
-	return []appserver.UserInput{
+	return []codex.UserInput{
 		{
 			Type: "text",
 			Text: text,

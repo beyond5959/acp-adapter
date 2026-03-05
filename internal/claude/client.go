@@ -11,7 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/beyond5959/acp-adapter/internal/appserver"
+	"github.com/beyond5959/acp-adapter/internal/codex"
 )
 
 // session holds per-thread state for the claude CLI adapter.
@@ -66,8 +66,8 @@ func (ss *sessionStore) Get(threadID string) (*session, bool) {
 
 // turnRegistry tracks active subprocess handles for cancellation.
 type turnRegistry struct {
-	mu    sync.Mutex
-	cmds  map[string]*exec.Cmd
+	mu   sync.Mutex
+	cmds map[string]*exec.Cmd
 }
 
 func newTurnRegistry() *turnRegistry {
@@ -112,6 +112,7 @@ func NewClient(cfg Config) *Client {
 	if cfg.DefaultModel == "" {
 		cfg.DefaultModel = DefaultModel
 	}
+	cfg.AvailableModels = uniqueNonEmpty(append(cfg.AvailableModels, cfg.DefaultModel))
 	if cfg.MaxTurns <= 0 {
 		cfg.MaxTurns = DefaultMaxTurns
 	}
@@ -127,7 +128,7 @@ func (c *Client) genID(prefix string) string {
 }
 
 // ThreadStart creates a new conversation thread.
-func (c *Client) ThreadStart(_ context.Context, cwd string, _ appserver.RunOptions) (string, error) {
+func (c *Client) ThreadStart(_ context.Context, cwd string, _ codex.RunOptions) (string, error) {
 	if c.loggedOut.Load() {
 		return "", fmt.Errorf("claudecli: not authenticated — run 'claude auth login' or set CLAUDE_BIN")
 	}
@@ -140,9 +141,9 @@ func (c *Client) ThreadStart(_ context.Context, cwd string, _ appserver.RunOptio
 func (c *Client) TurnStart(
 	ctx context.Context,
 	threadID string,
-	input []appserver.UserInput,
-	options appserver.RunOptions,
-) (string, <-chan appserver.TurnEvent, error) {
+	input []codex.UserInput,
+	options codex.RunOptions,
+) (string, <-chan codex.TurnEvent, error) {
 	if c.loggedOut.Load() {
 		return "", nil, fmt.Errorf("claudecli: not authenticated")
 	}
@@ -178,7 +179,7 @@ func (c *Client) TurnStart(
 
 	c.turns.register(turnID, cmd)
 
-	out := make(chan appserver.TurnEvent, 64)
+	out := make(chan codex.TurnEvent, 64)
 	go func() {
 		defer c.turns.remove(turnID)
 		streamToEvents(ctx, stdout, threadID, turnID, out)
@@ -193,8 +194,8 @@ func (c *Client) ReviewStart(
 	ctx context.Context,
 	threadID string,
 	instructions string,
-	options appserver.RunOptions,
-) (string, <-chan appserver.TurnEvent, error) {
+	options codex.RunOptions,
+) (string, <-chan codex.TurnEvent, error) {
 	if c.loggedOut.Load() {
 		return "", nil, fmt.Errorf("claudecli: not authenticated")
 	}
@@ -230,18 +231,18 @@ func (c *Client) ReviewStart(
 
 	c.turns.register(turnID, cmd)
 
-	outWrapped := make(chan appserver.TurnEvent, 64)
+	outWrapped := make(chan codex.TurnEvent, 64)
 	go func() {
 		defer c.turns.remove(turnID)
 		defer close(outWrapped)
 
-		outWrapped <- appserver.TurnEvent{
-			Type:     appserver.TurnEventTypeReviewModeEntered,
+		outWrapped <- codex.TurnEvent{
+			Type:     codex.TurnEventTypeReviewModeEntered,
 			ThreadID: threadID,
 			TurnID:   turnID,
 		}
 
-		inner := make(chan appserver.TurnEvent, 64)
+		inner := make(chan codex.TurnEvent, 64)
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
@@ -252,8 +253,8 @@ func (c *Client) ReviewStart(
 		streamToEvents(ctx, stdout, threadID, turnID, inner)
 		<-done
 
-		outWrapped <- appserver.TurnEvent{
-			Type:     appserver.TurnEventTypeReviewModeExited,
+		outWrapped <- codex.TurnEvent{
+			Type:     codex.TurnEventTypeReviewModeExited,
 			ThreadID: threadID,
 			TurnID:   turnID,
 		}
@@ -264,7 +265,7 @@ func (c *Client) ReviewStart(
 }
 
 // CompactStart compresses the thread history by running a summarisation prompt.
-func (c *Client) CompactStart(ctx context.Context, threadID string) (string, <-chan appserver.TurnEvent, error) {
+func (c *Client) CompactStart(ctx context.Context, threadID string) (string, <-chan codex.TurnEvent, error) {
 	if c.loggedOut.Load() {
 		return "", nil, fmt.Errorf("claudecli: not authenticated")
 	}
@@ -295,7 +296,7 @@ func (c *Client) CompactStart(ctx context.Context, threadID string) (string, <-c
 
 	c.turns.register(turnID, cmd)
 
-	out := make(chan appserver.TurnEvent, 64)
+	out := make(chan codex.TurnEvent, 64)
 	go func() {
 		defer c.turns.remove(turnID)
 		// After compact, reset turnCount so next real turn uses --session-id fresh.
@@ -313,24 +314,41 @@ func (c *Client) TurnInterrupt(_ context.Context, _, turnID string) error {
 	return nil
 }
 
+// ModelsList returns configured Claude models for ACP model picker UI.
+func (c *Client) ModelsList(_ context.Context) ([]codex.ModelOption, error) {
+	models := uniqueNonEmpty(append([]string(nil), c.cfg.AvailableModels...))
+	if len(models) == 0 {
+		models = []string{c.cfg.DefaultModel}
+	}
+	out := make([]codex.ModelOption, 0, len(models))
+	for _, model := range models {
+		out = append(out, codex.ModelOption{
+			ID:        model,
+			Name:      model,
+			IsDefault: model == c.cfg.DefaultModel,
+		})
+	}
+	return out, nil
+}
+
 // ApprovalRespond is a no-op: the claude CLI handles tool approval internally.
-func (c *Client) ApprovalRespond(_ context.Context, _ string, _ appserver.ApprovalDecision) error {
+func (c *Client) ApprovalRespond(_ context.Context, _ string, _ codex.ApprovalDecision) error {
 	return nil
 }
 
 // MCPServersList returns empty; MCP is managed by claude CLI itself.
-func (c *Client) MCPServersList(_ context.Context) ([]appserver.MCPServer, error) {
-	return []appserver.MCPServer{}, nil
+func (c *Client) MCPServersList(_ context.Context) ([]codex.MCPServer, error) {
+	return []codex.MCPServer{}, nil
 }
 
 // MCPToolCall is not supported in CLI mode.
-func (c *Client) MCPToolCall(_ context.Context, _ appserver.MCPToolCallParams) (appserver.MCPToolCallResult, error) {
-	return appserver.MCPToolCallResult{}, fmt.Errorf("claudecli: MCP tool call routing not supported in CLI mode")
+func (c *Client) MCPToolCall(_ context.Context, _ codex.MCPToolCallParams) (codex.MCPToolCallResult, error) {
+	return codex.MCPToolCallResult{}, fmt.Errorf("claudecli: MCP tool call routing not supported in CLI mode")
 }
 
 // MCPOAuthLogin is not applicable in CLI mode.
-func (c *Client) MCPOAuthLogin(_ context.Context, _ string) (appserver.MCPOAuthLoginResult, error) {
-	return appserver.MCPOAuthLoginResult{
+func (c *Client) MCPOAuthLogin(_ context.Context, _ string) (codex.MCPOAuthLoginResult, error) {
+	return codex.MCPOAuthLoginResult{
 		Status:  "not_supported",
 		Message: "Claude CLI mode does not support MCP OAuth routing; configure via claude CLI settings",
 	}, nil
@@ -417,7 +435,7 @@ func resolveModel(sessionModel, defaultModel string) string {
 	return defaultModel
 }
 
-func buildPrompt(inputs []appserver.UserInput) string {
+func buildPrompt(inputs []codex.UserInput) string {
 	var sb strings.Builder
 	for _, inp := range inputs {
 		switch inp.Type {
@@ -473,14 +491,15 @@ The summary will replace the full history to reduce context length.`
 
 // Compile-time interface check.
 var _ interface {
-	ThreadStart(ctx context.Context, cwd string, options appserver.RunOptions) (string, error)
-	TurnStart(ctx context.Context, threadID string, input []appserver.UserInput, options appserver.RunOptions) (string, <-chan appserver.TurnEvent, error)
-	ReviewStart(ctx context.Context, threadID string, instructions string, options appserver.RunOptions) (string, <-chan appserver.TurnEvent, error)
-	CompactStart(ctx context.Context, threadID string) (string, <-chan appserver.TurnEvent, error)
+	ThreadStart(ctx context.Context, cwd string, options codex.RunOptions) (string, error)
+	TurnStart(ctx context.Context, threadID string, input []codex.UserInput, options codex.RunOptions) (string, <-chan codex.TurnEvent, error)
+	ReviewStart(ctx context.Context, threadID string, instructions string, options codex.RunOptions) (string, <-chan codex.TurnEvent, error)
+	CompactStart(ctx context.Context, threadID string) (string, <-chan codex.TurnEvent, error)
 	TurnInterrupt(ctx context.Context, threadID, turnID string) error
-	ApprovalRespond(ctx context.Context, approvalID string, decision appserver.ApprovalDecision) error
-	MCPServersList(ctx context.Context) ([]appserver.MCPServer, error)
-	MCPToolCall(ctx context.Context, params appserver.MCPToolCallParams) (appserver.MCPToolCallResult, error)
-	MCPOAuthLogin(ctx context.Context, server string) (appserver.MCPOAuthLoginResult, error)
+	ModelsList(ctx context.Context) ([]codex.ModelOption, error)
+	ApprovalRespond(ctx context.Context, approvalID string, decision codex.ApprovalDecision) error
+	MCPServersList(ctx context.Context) ([]codex.MCPServer, error)
+	MCPToolCall(ctx context.Context, params codex.MCPToolCallParams) (codex.MCPToolCallResult, error)
+	MCPOAuthLogin(ctx context.Context, server string) (codex.MCPOAuthLoginResult, error)
 	Logout(ctx context.Context) error
 } = (*Client)(nil)

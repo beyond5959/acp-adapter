@@ -1,4 +1,4 @@
-package appserver
+package codex
 
 import "encoding/json"
 
@@ -45,6 +45,15 @@ type RunOptions struct {
 	Sandbox            string `json:"sandbox,omitempty"`
 	Personality        string `json:"personality,omitempty"`
 	SystemInstructions string `json:"systemInstructions,omitempty"`
+}
+
+// ModelOption is one selectable model exposed by the downstream backend.
+type ModelOption struct {
+	ID          string
+	Name        string
+	Description string
+	Hidden      bool
+	IsDefault   bool
 }
 
 // UserInput is one structured item inside turn/start input.
@@ -116,6 +125,26 @@ type CompactStartResult struct {
 type TurnInterruptParams struct {
 	ThreadID string `json:"threadId"`
 	TurnID   string `json:"turnId"`
+}
+
+// ModelListParams requests available model list from app-server.
+type ModelListParams struct {
+	IncludeHidden *bool `json:"includeHidden,omitempty"`
+}
+
+// ModelListResult carries available models.
+type ModelListResult struct {
+	Data []ModelListItem `json:"data"`
+}
+
+// ModelListItem is one app-server model/list entry.
+type ModelListItem struct {
+	ID          string `json:"id,omitempty"`
+	Model       string `json:"model,omitempty"`
+	DisplayName string `json:"displayName,omitempty"`
+	Description string `json:"description,omitempty"`
+	Hidden      bool   `json:"hidden,omitempty"`
+	IsDefault   bool   `json:"isDefault,omitempty"`
 }
 
 // TurnStartedNotification notifies that one turn has entered running state.
@@ -315,6 +344,7 @@ const (
 	methodTurnStart     = "turn/start"
 	methodReviewStart   = "review/start"
 	methodTurnInterrupt = "turn/interrupt"
+	methodModelList     = "model/list"
 	methodApprovalReq   = "approval/request"
 	methodMCPServerList = "mcpServer/list"
 	methodMCPServerCall = "mcpServer/call"

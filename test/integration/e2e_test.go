@@ -42,24 +42,41 @@ type rpcError struct {
 }
 
 type sessionUpdateParams struct {
-	SessionID          string     `json:"sessionId"`
-	TurnID             string     `json:"turnId"`
-	Type               string     `json:"type"`
-	Phase              string     `json:"phase,omitempty"`
-	ItemID             string     `json:"itemId,omitempty"`
-	ItemType           string     `json:"itemType,omitempty"`
-	Delta              string     `json:"delta,omitempty"`
-	Status             string     `json:"status,omitempty"`
-	Message            string     `json:"message,omitempty"`
-	ToolCallID         string     `json:"toolCallId,omitempty"`
-	Approval           string     `json:"approval,omitempty"`
-	PermissionDecision string     `json:"permissionDecision,omitempty"`
-	Todo               []todoItem `json:"todo,omitempty"`
+	SessionID          string                `json:"sessionId"`
+	TurnID             string                `json:"turnId"`
+	Type               string                `json:"type"`
+	Phase              string                `json:"phase,omitempty"`
+	ItemID             string                `json:"itemId,omitempty"`
+	ItemType           string                `json:"itemType,omitempty"`
+	Delta              string                `json:"delta,omitempty"`
+	Status             string                `json:"status,omitempty"`
+	Message            string                `json:"message,omitempty"`
+	ToolCallID         string                `json:"toolCallId,omitempty"`
+	Approval           string                `json:"approval,omitempty"`
+	PermissionDecision string                `json:"permissionDecision,omitempty"`
+	Todo               []todoItem            `json:"todo,omitempty"`
+	ConfigOptions      []sessionConfigOption `json:"configOptions,omitempty"`
 }
 
 type todoItem struct {
 	Text string `json:"text"`
 	Done bool   `json:"done"`
+}
+
+type sessionConfigOption struct {
+	ID           string               `json:"id"`
+	Category     string               `json:"category,omitempty"`
+	Name         string               `json:"name,omitempty"`
+	Description  string               `json:"description,omitempty"`
+	Type         string               `json:"type,omitempty"`
+	CurrentValue string               `json:"currentValue,omitempty"`
+	Options      []sessionConfigValue `json:"options,omitempty"`
+}
+
+type sessionConfigValue struct {
+	Value       string `json:"value"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 type sessionRequestPermissionParams struct {
@@ -2119,6 +2136,137 @@ func TestE2EAcceptanceH1ProfilesAffectRuntime(t *testing.T) {
 	}
 	if safeOutput == fastOutput {
 		t.Fatalf("expected profile-specific runtime behavior to differ")
+	}
+}
+
+func TestE2ESessionConfigOptionsModelListAndSwitch(t *testing.T) {
+	profilesJSON := `[{"name":"alt","model":"gpt-alt-profile"}]`
+	h := startAdapter(t, "CODEX_ACP_PROFILES_JSON="+profilesJSON)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID     string                `json:"sessionId"`
+		ConfigOptions []sessionConfigOption `json:"configOptions"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+	if newResult.SessionID == "" {
+		t.Fatalf("session/new returned empty sessionId")
+	}
+	if len(newResult.ConfigOptions) == 0 {
+		t.Fatalf("session/new expected configOptions")
+	}
+
+	var modelConfig sessionConfigOption
+	foundModelConfig := false
+	for _, option := range newResult.ConfigOptions {
+		if option.ID == "model" {
+			modelConfig = option
+			foundModelConfig = true
+			break
+		}
+	}
+	if !foundModelConfig {
+		t.Fatalf("session/new configOptions should include model")
+	}
+	if len(modelConfig.Options) == 0 {
+		t.Fatalf("model configOptions should include selectable models")
+	}
+	if strings.TrimSpace(modelConfig.CurrentValue) == "" {
+		t.Fatalf("model configOptions should include current value")
+	}
+
+	targetModel := ""
+	for _, option := range modelConfig.Options {
+		if strings.TrimSpace(option.Value) != "" && option.Value != modelConfig.CurrentValue {
+			targetModel = option.Value
+			break
+		}
+	}
+	if targetModel == "" {
+		targetModel = modelConfig.CurrentValue
+	}
+
+	h.sendRequest("3", "session/set_config_option", map[string]any{
+		"sessionId": newResult.SessionID,
+		"configId":  "model",
+		"value":     targetModel,
+	})
+
+	gotSetResp := false
+	sawConfigUpdate := false
+	for !gotSetResp {
+		msg := h.nextMessage(responseTimeout)
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.Type == "config_options_update" {
+				for _, option := range update.ConfigOptions {
+					if option.ID == "model" && option.CurrentValue == targetModel {
+						sawConfigUpdate = true
+						break
+					}
+				}
+			}
+			continue
+		}
+		if messageID(msg) != "3" {
+			continue
+		}
+		var setResult struct {
+			ConfigOptions []sessionConfigOption `json:"configOptions"`
+		}
+		unmarshalResult(t, msg, &setResult)
+		applied := false
+		for _, option := range setResult.ConfigOptions {
+			if option.ID == "model" && option.CurrentValue == targetModel {
+				applied = true
+				break
+			}
+		}
+		if !applied {
+			t.Fatalf("session/set_config_option should apply target model=%q", targetModel)
+		}
+		gotSetResp = true
+	}
+	if !sawConfigUpdate {
+		t.Fatalf("session/set_config_option should emit config_options_update")
+	}
+
+	h.sendRequest("4", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "profile probe",
+	})
+
+	gotPromptResp := false
+	var deltas []string
+	for !gotPromptResp {
+		msg := h.nextMessage(responseTimeout)
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.Type == "message" && update.Delta != "" {
+				deltas = append(deltas, update.Delta)
+			}
+			continue
+		}
+		if messageID(msg) != "4" {
+			continue
+		}
+		var result struct {
+			StopReason string `json:"stopReason"`
+		}
+		unmarshalResult(t, msg, &result)
+		if result.StopReason != "end_turn" {
+			t.Fatalf("prompt expected stopReason=end_turn, got %q", result.StopReason)
+		}
+		gotPromptResp = true
+	}
+
+	output := strings.Join(deltas, "\n")
+	if !strings.Contains(strings.ReplaceAll(output, "\n", ""), "model="+targetModel) {
+		t.Fatalf("prompt should run with switched model=%q, output=%s", targetModel, output)
 	}
 }
 

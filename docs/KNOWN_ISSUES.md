@@ -18,7 +18,7 @@
 - KI-0012：`/logout` 后缺少同进程重新登录入口
 - KI-0013：profiles 配置目前仅支持 JSON（未实现 toml）
 - KI-0014：J1 压测默认不在 `go test ./...` 中执行
-- KI-0015：MCP/compact/auth 方法名对真实 app-server 版本敏感
+- KI-0015：MCP/compact/auth/model-list 方法名对真实 app-server 版本敏感
 - KI-0016：真实 codex e2e 依赖本机 codex 命令与认证态
 - KI-0017：trace-json 脱敏规则为启发式，可能存在漏网字段
 - KI-0018：mentions/images 输入有大小与能力门槛
@@ -38,6 +38,7 @@
 - KI-0032：Claude 适配器 --dangerously-skip-permissions 默认开启
 - KI-0033：项目重命名后的兼容路径变更（module/import/cmd/npm）
 - KI-0034：`cmd/acp-adapter` 入口已移除（统一为 `cmd/acp`）
+- KI-0035：Claude 模型列表依赖本地配置（非动态探测）
 
 ---
 
@@ -91,7 +92,7 @@
 - 影响：
   - 在真实 codex app-server 新字段/兼容字段出现时，可能出现映射遗漏。
 - Workaround：
-  - 通过 `appserver/client` 对未知 notifications 保持忽略且不崩溃。
+  - 通过 `codex/client` 对未知 notifications 保持忽略且不崩溃。
   - 在真实环境补充集成回归并同步 schema。
 - 后续计划：
   - PR4 开始增加真实 app-server 的回归脚本与录制样例（脱敏）。
@@ -155,9 +156,9 @@
 - 后续计划：
   - 在 CI 增加定时/夜间压力作业，独立于常规 PR 快速回归。
 
-## KI-0015：MCP/compact/auth 方法名对真实 app-server 版本敏感
+## KI-0015：MCP/compact/auth/model-list 方法名对真实 app-server 版本敏感
 - 现象：
-  - 当前实现依赖 `thread/compact/start`、`mcpServer/*`、`account/logout|auth/logout` 方法名。
+  - 当前实现依赖 `thread/compact/start`、`mcpServer/*`、`account/logout|auth/logout`、`model/list` 方法名。
   - 已新增 real 存在性回归：`TestE2ERealCodexAppServer_MCPListAndOptionalCall`、`TestE2ERealCodexAppServer_CompactProducesVisibleUpdates`；当 endpoint 不兼容时会暴露为 `method not found` 或兼容降级。
 - 影响：
   - 若真实 app-server 不同版本方法名/参数变更，PR5 相关能力会出现 `method not found` 或参数不兼容。
@@ -422,3 +423,18 @@
   - 或在受信任的 CI/自动化环境中维持默认（skip）以减少交互。
 - 后续计划：
   - 评估将 tool approval 事件从 `claude -p` 的 stream-json 输出中解析并桥接到 ACP `session/request_permission`，恢复 approval 往返语义。
+
+## KI-0035：Claude 模型列表依赖本地配置（非动态探测）
+- 现象：
+  - Claude 适配器的 `Session Config Options` 模型列表来源于本地配置聚合（`CLAUDE_MODELS` / `--models` / `--model` / profiles）。
+  - 当前未接入 Claude CLI 的“官方模型目录”查询 API（CLI 侧目前也无稳定 JSON-RPC 端点可复用）。
+- 影响：
+  - 若配置缺失，模型列表可能只包含单个默认模型。
+  - 若配置与实际 CLI 支持模型不一致，`session/set_config_option` 可选项可能包含不可用模型，随后 turn 执行会失败。
+- 复现：
+  - 不设置 `CLAUDE_MODELS` 且无 profile model，仅设置 `--model` 启动，`session/new.configOptions` 只返回一个 model 选项。
+- Workaround：
+  - 显式设置 `CLAUDE_MODELS`（或 `--models`）并保持与本机 Claude CLI 实际可用模型一致。
+  - 通过 profile 配置补充团队标准模型列表，统一客户端展示。
+- 后续计划：
+  - 若 Claude CLI 未来提供稳定模型列表接口，切换到动态探测并保留本地配置作为兜底。

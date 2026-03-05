@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/beyond5959/acp-adapter/internal/appserver"
+	"github.com/beyond5959/acp-adapter/internal/codex"
 )
 
 // streamLine is the top-level JSON object emitted by claude --output-format stream-json --verbose.
@@ -34,8 +34,8 @@ type contentBlock struct {
 
 // streamEvent wraps inner event from type=stream_event lines.
 type streamEvent struct {
-	Type  string        `json:"type"`
-	Delta *streamDelta  `json:"delta"`
+	Type  string       `json:"type"`
+	Delta *streamDelta `json:"delta"`
 }
 
 type streamDelta struct {
@@ -49,17 +49,17 @@ func streamToEvents(
 	ctx context.Context,
 	r io.Reader,
 	threadID, turnID string,
-	out chan<- appserver.TurnEvent,
+	out chan<- codex.TurnEvent,
 ) {
 	defer close(out)
 
-	out <- appserver.TurnEvent{
-		Type:     appserver.TurnEventTypeStarted,
+	out <- codex.TurnEvent{
+		Type:     codex.TurnEventTypeStarted,
 		ThreadID: threadID,
 		TurnID:   turnID,
 	}
-	out <- appserver.TurnEvent{
-		Type:     appserver.TurnEventTypeItemStarted,
+	out <- codex.TurnEvent{
+		Type:     codex.TurnEventTypeItemStarted,
 		ThreadID: threadID,
 		TurnID:   turnID,
 		ItemID:   turnID + "-msg",
@@ -99,8 +99,8 @@ func streamToEvents(
 			if ev.Type == "content_block_delta" && ev.Delta != nil &&
 				ev.Delta.Type == "text_delta" && ev.Delta.Text != "" {
 				streamedDeltas = true
-				out <- appserver.TurnEvent{
-					Type:     appserver.TurnEventTypeAgentMessageDelta,
+				out <- codex.TurnEvent{
+					Type:     codex.TurnEventTypeAgentMessageDelta,
 					ThreadID: threadID,
 					TurnID:   turnID,
 					ItemID:   turnID + "-msg",
@@ -116,8 +116,8 @@ func streamToEvents(
 				if !streamedDeltas {
 					for _, cb := range sl.Message.Content {
 						if cb.Type == "text" && cb.Text != "" {
-							out <- appserver.TurnEvent{
-								Type:     appserver.TurnEventTypeAgentMessageDelta,
+							out <- codex.TurnEvent{
+								Type:     codex.TurnEventTypeAgentMessageDelta,
 								ThreadID: threadID,
 								TurnID:   turnID,
 								ItemID:   turnID + "-msg",
@@ -133,14 +133,14 @@ func streamToEvents(
 
 		case "result":
 			if sl.IsError {
-				out <- appserver.TurnEvent{
-					Type:     appserver.TurnEventTypeError,
+				out <- codex.TurnEvent{
+					Type:     codex.TurnEventTypeError,
 					ThreadID: threadID,
 					TurnID:   turnID,
 					Message:  fmt.Sprintf("claude cli error: %s", sl.Result),
 				}
-				out <- appserver.TurnEvent{
-					Type:       appserver.TurnEventTypeCompleted,
+				out <- codex.TurnEvent{
+					Type:       codex.TurnEventTypeCompleted,
 					ThreadID:   threadID,
 					TurnID:     turnID,
 					StopReason: "cancelled",
@@ -166,14 +166,14 @@ func streamToEvents(
 			emitCancelled(out, threadID, turnID)
 			return
 		}
-		out <- appserver.TurnEvent{
-			Type:     appserver.TurnEventTypeError,
+		out <- codex.TurnEvent{
+			Type:     codex.TurnEventTypeError,
 			ThreadID: threadID,
 			TurnID:   turnID,
 			Message:  err.Error(),
 		}
-		out <- appserver.TurnEvent{
-			Type:       appserver.TurnEventTypeCompleted,
+		out <- codex.TurnEvent{
+			Type:       codex.TurnEventTypeCompleted,
 			ThreadID:   threadID,
 			TurnID:     turnID,
 			StopReason: "cancelled",
@@ -191,24 +191,24 @@ done:
 		stopReason = "end_turn"
 	}
 
-	out <- appserver.TurnEvent{
-		Type:     appserver.TurnEventTypeItemCompleted,
+	out <- codex.TurnEvent{
+		Type:     codex.TurnEventTypeItemCompleted,
 		ThreadID: threadID,
 		TurnID:   turnID,
 		ItemID:   turnID + "-msg",
 		ItemType: "agent_message",
 	}
-	out <- appserver.TurnEvent{
-		Type:       appserver.TurnEventTypeCompleted,
+	out <- codex.TurnEvent{
+		Type:       codex.TurnEventTypeCompleted,
 		ThreadID:   threadID,
 		TurnID:     turnID,
 		StopReason: mapStopReason(stopReason),
 	}
 }
 
-func emitCancelled(out chan<- appserver.TurnEvent, threadID, turnID string) {
-	out <- appserver.TurnEvent{
-		Type:       appserver.TurnEventTypeCompleted,
+func emitCancelled(out chan<- codex.TurnEvent, threadID, turnID string) {
+	out <- codex.TurnEvent{
+		Type:       codex.TurnEventTypeCompleted,
 		ThreadID:   threadID,
 		TurnID:     turnID,
 		StopReason: "cancelled",

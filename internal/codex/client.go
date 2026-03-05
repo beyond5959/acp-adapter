@@ -1,4 +1,4 @@
-package appserver
+package codex
 
 import (
 	"context"
@@ -183,6 +183,43 @@ func (c *Client) TurnInterrupt(ctx context.Context, threadID, turnID string) err
 	}
 	var result map[string]any
 	return c.call(ctx, methodTurnInterrupt, params, &result)
+}
+
+// ModelsList fetches selectable models from app-server.
+func (c *Client) ModelsList(ctx context.Context) ([]ModelOption, error) {
+	includeHidden := false
+	var result ModelListResult
+	if err := c.call(ctx, methodModelList, ModelListParams{
+		IncludeHidden: &includeHidden,
+	}, &result); err != nil {
+		return nil, err
+	}
+
+	out := make([]ModelOption, 0, len(result.Data))
+	for _, item := range result.Data {
+		modelID := strings.TrimSpace(item.Model)
+		if modelID == "" {
+			modelID = strings.TrimSpace(item.ID)
+		}
+		if modelID == "" {
+			continue
+		}
+		name := strings.TrimSpace(item.DisplayName)
+		if name == "" {
+			name = modelID
+		}
+		out = append(out, ModelOption{
+			ID:          modelID,
+			Name:        name,
+			Description: strings.TrimSpace(item.Description),
+			Hidden:      item.Hidden,
+			IsDefault:   item.IsDefault,
+		})
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("model/list returned no usable models")
+	}
+	return out, nil
 }
 
 // MCPServersList fetches available MCP servers.
