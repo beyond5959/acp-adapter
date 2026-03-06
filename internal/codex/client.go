@@ -18,8 +18,9 @@ const turnStreamBufferSize = 32
 var errClientClosed = errors.New("app-server client is closed")
 
 type pendingApproval struct {
-	requestID json.RawMessage
-	turnID    string
+	requestID     json.RawMessage
+	turnID        string
+	requestMethod string
 }
 
 // Client is a minimal JSON-RPC client for codex app-server.
@@ -316,7 +317,7 @@ func (c *Client) ApprovalRespond(ctx context.Context, approvalID string, decisio
 	default:
 	}
 
-	resultRaw, err := json.Marshal(ApprovalDecisionResult{Outcome: string(decision)})
+	resultRaw, err := approvalResponsePayload(approval.requestMethod, decision)
 	if err != nil {
 		return fmt.Errorf("encode approval response: %w", err)
 	}
@@ -325,6 +326,43 @@ func (c *Client) ApprovalRespond(ctx context.Context, approvalID string, decisio
 		ID:      cloneRawMessage(approval.requestID),
 		Result:  resultRaw,
 	})
+}
+
+func approvalResponsePayload(method string, decision ApprovalDecision) (json.RawMessage, error) {
+	switch method {
+	case methodItemCommandExecutionRequestApproval, methodItemFileChangeRequestApproval:
+		return json.Marshal(map[string]string{
+			"decision": mapDecisionToItemApproval(decision),
+		})
+	case methodExecCommandApproval, methodApplyPatchApproval:
+		return json.Marshal(map[string]string{
+			"decision": mapDecisionToLegacyApproval(decision),
+		})
+	default:
+		return json.Marshal(ApprovalDecisionResult{Outcome: string(decision)})
+	}
+}
+
+func mapDecisionToItemApproval(decision ApprovalDecision) string {
+	switch decision {
+	case ApprovalDecisionApproved:
+		return "accept"
+	case ApprovalDecisionDeclined:
+		return "decline"
+	default:
+		return "cancel"
+	}
+}
+
+func mapDecisionToLegacyApproval(decision ApprovalDecision) string {
+	switch decision {
+	case ApprovalDecisionApproved:
+		return "approved"
+	case ApprovalDecisionDeclined:
+		return "denied"
+	default:
+		return "abort"
+	}
 }
 
 // Close shuts down request waiters and underlying process.
@@ -472,30 +510,143 @@ func (c *Client) handleServerRequest(msg RPCMessage) {
 			c.writeServerErrorResponse(*msg.ID, -32602, "invalid approval/request params")
 			return
 		}
-		if approval.TurnID == "" {
+		if strings.TrimSpace(approval.TurnID) == "" {
 			c.writeServerErrorResponse(*msg.ID, -32602, "approval/request requires turnId")
 			return
 		}
-
-		if approval.ApprovalID == "" {
-			approval.ApprovalID = normalizeID(*msg.ID)
+		c.registerApprovalRequest(*msg.ID, msg.Method, approval)
+	case methodItemCommandExecutionRequestApproval:
+		var params CommandExecutionRequestApprovalParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			c.writeServerErrorResponse(*msg.ID, -32602, "invalid item/commandExecution/requestApproval params")
+			return
 		}
-		c.mu.Lock()
-		c.approvals[approval.ApprovalID] = pendingApproval{
-			requestID: *cloneRawMessage(*msg.ID),
-			turnID:    approval.TurnID,
+		approval := approvalFromCommandExecution(params)
+		if approval.TurnID == "" {
+			c.writeServerErrorResponse(*msg.ID, -32602, "item/commandExecution/requestApproval requires turnId")
+			return
 		}
-		c.mu.Unlock()
-
-		c.pushTurnEvent(approval.TurnID, TurnEvent{
-			Type:     TurnEventTypeApprovalRequired,
-			ThreadID: approval.ThreadID,
-			TurnID:   approval.TurnID,
-			Approval: approval,
-		}, false)
+		c.registerApprovalRequest(*msg.ID, msg.Method, approval)
+	case methodItemFileChangeRequestApproval:
+		var params FileChangeRequestApprovalParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			c.writeServerErrorResponse(*msg.ID, -32602, "invalid item/fileChange/requestApproval params")
+			return
+		}
+		approval := approvalFromFileChange(params)
+		if approval.TurnID == "" {
+			c.writeServerErrorResponse(*msg.ID, -32602, "item/fileChange/requestApproval requires turnId")
+			return
+		}
+		c.registerApprovalRequest(*msg.ID, msg.Method, approval)
+	case methodExecCommandApproval:
+		var params ExecCommandApprovalParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			c.writeServerErrorResponse(*msg.ID, -32602, "invalid execCommandApproval params")
+			return
+		}
+		c.writeServerErrorResponse(*msg.ID, -32000, "execCommandApproval is not supported")
+	case methodApplyPatchApproval:
+		var params ApplyPatchApprovalParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			c.writeServerErrorResponse(*msg.ID, -32602, "invalid applyPatchApproval params")
+			return
+		}
+		c.writeServerErrorResponse(*msg.ID, -32000, "applyPatchApproval is not supported")
+	case methodItemToolRequestUserInput:
+		c.writeServerErrorResponse(*msg.ID, -32000, "item/tool/requestUserInput is not supported")
+	case methodItemToolCall:
+		c.writeServerErrorResponse(*msg.ID, -32000, "item/tool/call is not supported")
+	case methodAccountChatgptAuthTokensRefresh:
+		var params ChatgptAuthTokensRefreshParams
+		if len(msg.Params) > 0 {
+			if err := json.Unmarshal(msg.Params, &params); err != nil {
+				c.writeServerErrorResponse(*msg.ID, -32602, "invalid account/chatgptAuthTokens/refresh params")
+				return
+			}
+		}
+		c.writeServerErrorResponse(
+			*msg.ID,
+			-32000,
+			"account/chatgptAuthTokens/refresh is not supported by acp-adapter",
+		)
 	default:
 		c.writeServerErrorResponse(*msg.ID, -32601, "method not found")
 	}
+}
+
+func (c *Client) registerApprovalRequest(
+	requestID json.RawMessage,
+	requestMethod string,
+	approval ApprovalRequest,
+) {
+	approval.TurnID = strings.TrimSpace(approval.TurnID)
+	approval.ThreadID = strings.TrimSpace(approval.ThreadID)
+	approval.ApprovalID = strings.TrimSpace(approval.ApprovalID)
+	approval.ToolCallID = strings.TrimSpace(approval.ToolCallID)
+	approval.Command = strings.TrimSpace(approval.Command)
+	approval.Message = strings.TrimSpace(approval.Message)
+	approval.Host = strings.TrimSpace(approval.Host)
+	approval.Protocol = strings.TrimSpace(approval.Protocol)
+
+	if approval.ApprovalID == "" {
+		approval.ApprovalID = normalizeID(requestID)
+	}
+	if approval.ToolCallID == "" {
+		approval.ToolCallID = approval.ApprovalID
+	}
+
+	c.mu.Lock()
+	c.approvals[approval.ApprovalID] = pendingApproval{
+		requestID:     *cloneRawMessage(requestID),
+		turnID:        approval.TurnID,
+		requestMethod: requestMethod,
+	}
+	c.mu.Unlock()
+
+	c.pushTurnEvent(approval.TurnID, TurnEvent{
+		Type:     TurnEventTypeApprovalRequired,
+		ThreadID: approval.ThreadID,
+		TurnID:   approval.TurnID,
+		Approval: approval,
+	}, false)
+}
+
+func approvalFromCommandExecution(params CommandExecutionRequestApprovalParams) ApprovalRequest {
+	approval := ApprovalRequest{
+		ThreadID:   strings.TrimSpace(params.ThreadID),
+		TurnID:     strings.TrimSpace(params.TurnID),
+		ApprovalID: strings.TrimSpace(params.ApprovalID),
+		ToolCallID: strings.TrimSpace(params.ItemID),
+		Kind:       ApprovalKindCommand,
+		Command:    strings.TrimSpace(params.Command),
+		Message:    strings.TrimSpace(params.Reason),
+	}
+	if params.NetworkApprovalContext != nil {
+		host := strings.TrimSpace(params.NetworkApprovalContext.Host)
+		protocol := strings.TrimSpace(params.NetworkApprovalContext.Protocol)
+		if host != "" || protocol != "" {
+			approval.Kind = ApprovalKindNetwork
+			approval.Host = host
+			approval.Protocol = protocol
+		}
+	}
+	return approval
+}
+
+func approvalFromFileChange(params FileChangeRequestApprovalParams) ApprovalRequest {
+	approval := ApprovalRequest{
+		ThreadID:   strings.TrimSpace(params.ThreadID),
+		TurnID:     strings.TrimSpace(params.TurnID),
+		ApprovalID: strings.TrimSpace(params.ApprovalID),
+		ToolCallID: strings.TrimSpace(params.ItemID),
+		Kind:       ApprovalKindFile,
+		Message:    strings.TrimSpace(params.Reason),
+	}
+	if grantRoot := strings.TrimSpace(params.GrantRoot); grantRoot != "" {
+		approval.Files = []string{grantRoot}
+	}
+	return approval
 }
 
 func (c *Client) handleNotification(msg RPCMessage) {

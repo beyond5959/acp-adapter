@@ -171,6 +171,115 @@ func TestRunStdio_ProfileMappingWithFakeAppServer(t *testing.T) {
 	}
 }
 
+func TestRunStdio_CommandApprovalRequestCompatibility(t *testing.T) {
+	t.Parallel()
+
+	rootDir := repoRoot(t)
+	fakeServerBin := buildBinary(t, rootDir, "./testdata/fake_codex_app_server")
+
+	stdinReader, stdinWriter := io.Pipe()
+	stdoutReader, stdoutWriter := io.Pipe()
+	defer func() {
+		_ = stdinWriter.Close()
+		_ = stdoutWriter.Close()
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- RunStdio(ctx, RuntimeConfig{
+			AppServerCommand: fakeServerBin,
+			AppServerArgs:    nil,
+			LogLevel:         "debug",
+			PatchApplyMode:   "appserver",
+			RetryTurnOnCrash: true,
+			InitialAuthMode:  "chatgpt_subscription",
+		}, stdinReader, stdoutWriter, io.Discard)
+	}()
+
+	msgCh := make(chan testRPCMessage, 64)
+	readErrCh := make(chan error, 1)
+	go scanRPCLines(stdoutReader, msgCh, readErrCh)
+
+	writeRPCRequest(t, stdinWriter, "1", "initialize", map[string]any{
+		"protocolVersion": 1,
+		"clientInfo": map[string]any{
+			"name":    "pkg-test",
+			"version": "1.0.0",
+		},
+	})
+	initMsg := readRPCMessage(t, msgCh, readErrCh, 3*time.Second)
+	if initMsg.Error != nil {
+		t.Fatalf("initialize failed: code=%d message=%s", initMsg.Error.Code, initMsg.Error.Message)
+	}
+
+	writeRPCRequest(t, stdinWriter, "2", "session/new", map[string]any{"cwd": rootDir})
+	newMsg := readRPCMessage(t, msgCh, readErrCh, 3*time.Second)
+	if newMsg.Error != nil {
+		t.Fatalf("session/new failed: code=%d message=%s", newMsg.Error.Code, newMsg.Error.Message)
+	}
+	var newResult testSessionNewResult
+	if err := json.Unmarshal(newMsg.Result, &newResult); err != nil {
+		t.Fatalf("decode session/new result: %v", err)
+	}
+	if strings.TrimSpace(newResult.SessionID) == "" {
+		t.Fatalf("session/new returned empty sessionId")
+	}
+
+	writeRPCRequest(t, stdinWriter, "3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "approval command",
+	})
+
+	sawPermissionRequest := false
+	for {
+		msg := readRPCMessage(t, msgCh, readErrCh, 5*time.Second)
+		if msg.Method == "session/request_permission" && msg.ID != nil {
+			sawPermissionRequest = true
+			writeRPCResult(t, stdinWriter, msg.ID, map[string]any{
+				"outcome": "approved",
+			})
+			continue
+		}
+		if msg.Method == "session/update" {
+			continue
+		}
+		if messageID(msg.ID) != "3" {
+			continue
+		}
+		if msg.Error != nil {
+			t.Fatalf("session/prompt failed: code=%d message=%s", msg.Error.Code, msg.Error.Message)
+		}
+
+		var promptResult testSessionPromptResult
+		if err := json.Unmarshal(msg.Result, &promptResult); err != nil {
+			t.Fatalf("decode session/prompt result: %v", err)
+		}
+		if promptResult.StopReason != "end_turn" {
+			t.Fatalf("session/prompt stopReason=%q, want end_turn", promptResult.StopReason)
+		}
+		break
+	}
+
+	if !sawPermissionRequest {
+		t.Fatalf("expected session/request_permission during approval turn")
+	}
+
+	_ = stdinWriter.Close()
+	cancel()
+
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("RunStdio returned error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("RunStdio did not stop in time")
+	}
+}
+
 func scanRPCLines(reader io.Reader, msgCh chan<- testRPCMessage, errCh chan<- error) {
 	defer close(msgCh)
 	scanner := bufio.NewScanner(reader)
@@ -226,6 +335,26 @@ func writeRPCRequest(t *testing.T, writer io.Writer, id, method string, params a
 	}
 	if _, err := writer.Write(append(data, '\n')); err != nil {
 		t.Fatalf("write %s request: %v", method, err)
+	}
+}
+
+func writeRPCResult(t *testing.T, writer io.Writer, id *json.RawMessage, result any) {
+	t.Helper()
+	if id == nil {
+		t.Fatalf("write rpc result requires id")
+	}
+
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      json.RawMessage(*id),
+		"result":  result,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal rpc result: %v", err)
+	}
+	if _, err := writer.Write(append(data, '\n')); err != nil {
+		t.Fatalf("write rpc result: %v", err)
 	}
 }
 

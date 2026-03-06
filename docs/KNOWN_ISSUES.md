@@ -40,6 +40,7 @@
 - KI-0034：`cmd/acp-adapter` 入口已移除（统一为 `cmd/acp`）
 - KI-0035：Claude 模型列表依赖本地配置（非动态探测）
 - KI-0036：`thought_level` 候选值在旧 codex 版本上可能退化为 fallback 列表
+- KI-0037：部分新版 app-server server request 仍未桥接（显式 `-32000` fail-closed）
 
 ---
 
@@ -454,3 +455,22 @@
   - 在出现后端参数错误时，切回 `medium` 或模型默认 effort 再重试。
 - 后续计划：
   - 在 adapter 中增加 downstream capability 探测与值白名单回写，进一步减少 fallback 与真实能力不一致的窗口。
+
+## KI-0037：部分新版 app-server server request 仍未桥接（显式 `-32000` fail-closed）
+- 现象：
+  - 已兼容新版 `item/commandExecution/requestApproval` 与 `item/fileChange/requestApproval`，但以下 server request 目前仍未实现完整桥接：
+    - `item/tool/requestUserInput`
+    - `item/tool/call`
+    - `account/chatgptAuthTokens/refresh`
+    - legacy `execCommandApproval` / `applyPatchApproval`
+  - 当前行为为显式返回 `-32000`（fail-closed），不再返回 `-32601 method not found`。
+- 影响：
+  - 相关请求在真实链路会被拒绝，可能导致对应 turn 失败或进入降级路径。
+  - 错误可读性提升，但功能能力仍受限。
+- 复现：
+  - 连接会触发上述 server request 的 codex app-server 版本，观察 adapter 对该请求回 `-32000`。
+- Workaround：
+  - 优先使用当前已覆盖的 command/file approval 路径。
+  - 对 `chatgptAuthTokens/refresh` 场景，使用 managed auth（由 codex 自管刷新）或在宿主侧避免 external-auth-only 配置。
+- 后续计划：
+  - 逐项补齐 `item/tool/*` 与 chatgpt token refresh 桥接能力，并补充端到端验收用例。

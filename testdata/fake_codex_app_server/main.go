@@ -783,24 +783,47 @@ func (s *fakeServer) shouldCrashDuringTurn() bool {
 }
 
 func (s *fakeServer) requestApproval(approval codex.ApprovalRequest) (codex.ApprovalDecision, error) {
-	resp, err := s.callAdapter(methodApprovalRequest, approval, 3*time.Second)
+	method := methodApprovalRequest
+	params := any(approval)
+	switch approval.Kind {
+	case codex.ApprovalKindCommand:
+		req := codex.CommandExecutionRequestApprovalParams{
+			ThreadID:   approval.ThreadID,
+			TurnID:     approval.TurnID,
+			ItemID:     approval.ToolCallID,
+			ApprovalID: approval.ApprovalID,
+			Command:    approval.Command,
+			Reason:     approval.Message,
+		}
+		method = methodItemCommandExecutionRequestApproval
+		params = req
+	}
+
+	resp, err := s.callAdapter(method, params, 3*time.Second)
 	if err != nil {
 		return "", err
 	}
 	if resp.Error != nil {
-		return "", fmt.Errorf("approval/request failed code=%d message=%s", resp.Error.Code, resp.Error.Message)
+		return "", fmt.Errorf("%s failed code=%d message=%s", method, resp.Error.Code, resp.Error.Message)
 	}
 
-	var result codex.ApprovalDecisionResult
+	var result struct {
+		Outcome  string `json:"outcome"`
+		Decision string `json:"decision"`
+	}
 	if len(resp.Result) > 0 {
 		if err := json.Unmarshal(resp.Result, &result); err != nil {
 			return "", fmt.Errorf("decode approval decision: %w", err)
 		}
 	}
-	switch result.Outcome {
-	case string(codex.ApprovalDecisionApproved):
+	decision := strings.TrimSpace(strings.ToLower(result.Outcome))
+	if decision == "" {
+		decision = strings.TrimSpace(strings.ToLower(result.Decision))
+	}
+	switch decision {
+	case "approved", "approve", "accept", "acceptforsession", "approved_for_session":
 		return codex.ApprovalDecisionApproved, nil
-	case string(codex.ApprovalDecisionDeclined):
+	case "declined", "decline", "denied":
 		return codex.ApprovalDecisionDeclined, nil
 	default:
 		return codex.ApprovalDecisionCancelled, nil
@@ -868,3 +891,4 @@ func normalizeID(raw json.RawMessage) string {
 }
 
 const methodApprovalRequest = "approval/request"
+const methodItemCommandExecutionRequestApproval = "item/commandExecution/requestApproval"

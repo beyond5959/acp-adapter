@@ -41,6 +41,7 @@
 - ADR-0035：移除 `cmd/acp-adapter`，统一 `cmd/acp` 单入口
 - ADR-0036：Session Config Options（model 列表 + `session/set_config_option`）
 - ADR-0037：Session Config Options 扩展（`thought_level` + downstream effort 映射）
+- ADR-0038：Codex app-server server-request 兼容（新版 approval 方法与 fail-closed 回退）
 
 ---
 
@@ -865,3 +866,36 @@
   - `go test ./...`
   - `TestE2ESessionConfigOptionsModelListAndSwitch`（新增 thought_level 断言）
   - `TestClaudeE2ESessionConfigOptionsModelListAndSwitch`（新增 thought_level 断言）
+
+### ADR-0038：Codex app-server server-request 兼容（新版 approval 方法与 fail-closed 回退）
+- 日期：2026-03-06
+- 状态：Accepted
+- 背景：
+  - 新版 codex app-server 会向 client 发送 `item/commandExecution/requestApproval` 与 `item/fileChange/requestApproval`。
+  - 旧实现仅支持 `approval/request`，导致 app-server 侧出现 `-32601 method not found`，并在审批链路上中断。
+- 决策：
+  - 在 `internal/codex/client` 增加新版 server request 解析与事件桥接：
+    - `item/commandExecution/requestApproval` → `TurnEventTypeApprovalRequired`
+    - `item/fileChange/requestApproval` → `TurnEventTypeApprovalRequired`
+  - 审批回写按请求形态选择 payload：
+    - 新版：`{"decision":"accept|decline|cancel"}`
+    - 旧版：`{"outcome":"approved|declined|cancelled"}`
+  - 对尚未实现的 server request（`item/tool/requestUserInput`、`item/tool/call`、`account/chatgptAuthTokens/refresh`、legacy `execCommandApproval`/`applyPatchApproval`）采用显式 fail-closed（`-32000`）而非 `method not found`。
+  - fake app-server 默认将 command approval 切换到新版方法，用于持续回归覆盖；file/network/mcp 维持现有路径避免影响 review/patch 验收基线。
+- 备选方案：
+  - 方案A：继续仅支持 `approval/request`，由上层规避新版 app-server（拒绝）。
+  - 方案B：对未知请求统一 `-32601`（拒绝，错误信号不准确且排障成本高）。
+  - 方案C：实现新版 approval 兼容，同时对未实现请求显式 fail-closed（采用）。
+- 取舍（Pros/Cons）：
+  - Pros：消除误导性的 `method not found`；command approval 与新版 app-server 兼容；权限链路保持默认拒绝策略。
+  - Cons：`item/tool/*` 与 chatgpt token refresh 仍未实现，仅提供明确错误回退；legacy approval 请求仍不走完整桥接。
+- 影响范围（文件/模块）：
+  - `internal/codex/types.go`
+  - `internal/codex/client.go`
+  - `internal/codex/client_server_request_test.go`
+  - `pkg/codexacp/runtime_test.go`
+  - `testdata/fake_codex_app_server/main.go`
+- 验证方式（测试/验收项）：
+  - `go test ./...`
+  - `TestRunStdio_CommandApprovalRequestCompatibility`
+  - `TestE2EAcceptanceD1ToD5ApprovalsBridge`（回归不退化）
