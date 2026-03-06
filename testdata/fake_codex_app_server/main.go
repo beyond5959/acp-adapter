@@ -122,6 +122,9 @@ func (s *fakeServer) handle(msg codex.RPCMessage) {
 		})
 
 		effective := s.effectiveRunOptions(params.ThreadID, params.RunOptions)
+		if value := strings.TrimSpace(params.Effort); value != "" {
+			effective.Effort = value
+		}
 		go s.runTurn(params.ThreadID, turnID, params.Input, effective, control)
 	case "review/start":
 		var params codex.ReviewStartParams
@@ -208,23 +211,39 @@ func (s *fakeServer) handle(msg codex.RPCMessage) {
 		s.writeResult(msg.ID, codex.ModelListResult{
 			Data: []codex.ModelListItem{
 				{
-					ID:          "gpt-5.1-codex",
-					Model:       "gpt-5.1-codex",
-					DisplayName: "GPT-5.1 Codex",
-					Description: "default coding model",
-					IsDefault:   true,
+					ID:                     "gpt-5.1-codex",
+					Model:                  "gpt-5.1-codex",
+					DisplayName:            "GPT-5.1 Codex",
+					Description:            "default coding model",
+					IsDefault:              true,
+					DefaultReasoningEffort: "medium",
+					SupportedReasoningEfforts: []codex.ModelReasoningEffortListEntry{
+						{ReasoningEffort: "low", Description: "faster response"},
+						{ReasoningEffort: "medium", Description: "balanced quality and latency"},
+						{ReasoningEffort: "high", Description: "deeper reasoning"},
+					},
 				},
 				{
-					ID:          "gpt-5-codex",
-					Model:       "gpt-5-codex",
-					DisplayName: "GPT-5 Codex",
-					Description: "balanced coding model",
+					ID:                     "gpt-5-codex",
+					Model:                  "gpt-5-codex",
+					DisplayName:            "GPT-5 Codex",
+					Description:            "balanced coding model",
+					DefaultReasoningEffort: "low",
+					SupportedReasoningEfforts: []codex.ModelReasoningEffortListEntry{
+						{ReasoningEffort: "low", Description: "default"},
+						{ReasoningEffort: "medium", Description: "higher quality"},
+					},
 				},
 				{
-					ID:          "gpt-4.1",
-					Model:       "gpt-4.1",
-					DisplayName: "GPT-4.1",
-					Description: "fast fallback model",
+					ID:                     "gpt-4.1",
+					Model:                  "gpt-4.1",
+					DisplayName:            "GPT-4.1",
+					Description:            "fast fallback model",
+					DefaultReasoningEffort: "minimal",
+					SupportedReasoningEfforts: []codex.ModelReasoningEffortListEntry{
+						{ReasoningEffort: "minimal", Description: "minimal reasoning"},
+						{ReasoningEffort: "low", Description: "slightly deeper reasoning"},
+					},
 				},
 			},
 		})
@@ -285,6 +304,9 @@ func (s *fakeServer) effectiveRunOptions(threadID string, turnOptions codex.RunO
 	}
 	if strings.TrimSpace(turnOptions.SystemInstructions) != "" {
 		base.SystemInstructions = turnOptions.SystemInstructions
+	}
+	if strings.TrimSpace(turnOptions.Effort) != "" {
+		base.Effort = turnOptions.Effort
 	}
 	return base
 }
@@ -427,8 +449,9 @@ func (s *fakeServer) runTurn(
 			turnID,
 			itemID,
 			fmt.Sprintf(
-				"profile model=%s approval=%s sandbox=%s personality=%s system=%s",
+				"profile model=%s thought=%s approval=%s sandbox=%s personality=%s system=%s",
 				options.Model,
+				options.Effort,
 				options.ApprovalPolicy,
 				options.Sandbox,
 				options.Personality,

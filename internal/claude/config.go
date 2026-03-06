@@ -8,6 +8,8 @@ import (
 const (
 	// DefaultModel is the default Claude model used when none is specified.
 	DefaultModel = "claude-opus-4-6"
+	// DefaultEffort is the default Claude reasoning effort when none is specified.
+	DefaultEffort = "medium"
 	// DefaultMaxTurns is the default --max-turns for claude -p.
 	DefaultMaxTurns = 10
 )
@@ -20,6 +22,10 @@ type Config struct {
 	DefaultModel string
 	// AvailableModels are surfaced to ACP model picker UI.
 	AvailableModels []string
+	// DefaultEffort is used when the session/turn does not specify an effort.
+	DefaultEffort string
+	// AvailableEfforts are surfaced to ACP thought_level picker UI.
+	AvailableEfforts []string
 	// MaxTurns limits the number of agentic turns per invocation.
 	MaxTurns int
 	// SkipPerms enables --dangerously-skip-permissions.
@@ -48,22 +54,37 @@ func ConfigFromEnv() Config {
 	if model == "" {
 		model = DefaultModel
 	}
+	effort := os.Getenv("CLAUDE_EFFORT")
+	if effort == "" {
+		effort = DefaultEffort
+	}
 	return Config{
 		ClaudeBin:       bin,
 		DefaultModel:    model,
 		AvailableModels: parseModelsEnv(os.Getenv("CLAUDE_MODELS"), model),
-		MaxTurns:        DefaultMaxTurns,
-		SkipPerms:       true,
+		DefaultEffort:   effort,
+		AvailableEfforts: parseEffortsEnv(
+			os.Getenv("CLAUDE_EFFORTS"),
+			effort,
+		),
+		MaxTurns:  DefaultMaxTurns,
+		SkipPerms: true,
 	}
 }
 
 func parseModelsEnv(raw string, fallback string) []string {
-	items := splitModelList(raw)
+	items := splitCSVLikeList(raw)
 	items = append(items, strings.TrimSpace(fallback))
 	return uniqueNonEmpty(items)
 }
 
-func splitModelList(raw string) []string {
+func parseEffortsEnv(raw string, fallback string) []string {
+	items := splitCSVLikeList(raw)
+	items = append(items, strings.TrimSpace(fallback))
+	return uniqueNonEmpty(items)
+}
+
+func splitCSVLikeList(raw string) []string {
 	if strings.TrimSpace(raw) == "" {
 		return nil
 	}

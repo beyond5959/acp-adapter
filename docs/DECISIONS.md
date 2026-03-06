@@ -40,6 +40,7 @@
 - ADR-0034：项目统一命名为 acp-adapter（module/import/cmd/npm）
 - ADR-0035：移除 `cmd/acp-adapter`，统一 `cmd/acp` 单入口
 - ADR-0036：Session Config Options（model 列表 + `session/set_config_option`）
+- ADR-0037：Session Config Options 扩展（`thought_level` + downstream effort 映射）
 
 ---
 
@@ -827,3 +828,40 @@
   - `TestE2ESessionConfigOptionsModelListAndSwitch`
   - `TestClaudeE2ESessionConfigOptionsModelListAndSwitch`
 
+### ADR-0037：Session Config Options 扩展（`thought_level` + downstream effort 映射）
+- 日期：2026-03-05
+- 状态：Accepted
+- 背景：
+  - 现有配置项仅支持 `model`，客户端无法展示/切换 reasoning 强度。
+  - ACP 侧需要通过 `thought_level` 暴露 reasoning 配置；codex app-server 侧需要把该值传入 `turn/start.effort`；claude CLI 侧需要映射到 `--effort`。
+- 决策：
+  - 在 `session/new.configOptions` 增加 `id=thought_level`（`type=select`），并在 `session/set_config_option` 支持 `configId=thought_level`。
+  - `model` 与 `thought_level` 做联动：切换模型后，根据该模型可用 reasoning 列表刷新 thought options；若当前值不再可用，回落到模型默认值。
+  - Codex `model/list` 解析 `defaultReasoningEffort/supportedReasoningEfforts`，并把最终 `thought_level` 映射到 `turn/start.effort`。
+  - Claude 模式新增 effort 列表配置（`CLAUDE_EFFORT`/`CLAUDE_EFFORTS` 与 `--effort`/`--efforts`），turn 执行时传递 `--effort`。
+  - 兼容策略：当下游未返回 reasoning 元数据时，adapter 提供内置 fallback effort 列表，保证客户端仍有可切换选项。
+- 备选方案：
+  - 方案A：仅支持 codex 后端的 thought_level，claude 继续固定 effort。
+  - 方案B：只透传 `thought_level` 字符串，不校验 options，也不做模型联动刷新。
+  - 方案C：统一 codex/claude 行为，严格校验 options，并在模型切换时联动刷新。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：客户端可统一展示 reasoning 下拉；模型与 reasoning 配置一致性更好；两后端行为更接近 ACP 标准预期。
+  - Cons：claude effort 列表仍依赖本地配置；旧 codex 版本缺少 reasoning 元数据时会使用 fallback 列表，可能与真实后端不完全一致。
+- 影响范围（文件/模块）：
+  - `internal/acp/types.go`
+  - `internal/acp/server.go`
+  - `internal/codex/types.go`
+  - `internal/codex/client.go`
+  - `internal/claude/config.go`
+  - `internal/claude/client.go`
+  - `pkg/codexacp/runtime.go`
+  - `pkg/claudeacp/runtime.go`
+  - `cmd/acp/main.go`
+  - `testdata/fake_codex_app_server/main.go`
+  - `testdata/fake_claude_cli/main.go`
+  - `test/integration/e2e_test.go`
+  - `test/integration/claude_e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `go test ./...`
+  - `TestE2ESessionConfigOptionsModelListAndSwitch`（新增 thought_level 断言）
+  - `TestClaudeE2ESessionConfigOptionsModelListAndSwitch`（新增 thought_level 断言）

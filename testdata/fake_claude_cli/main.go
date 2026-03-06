@@ -23,6 +23,7 @@ func main() {
 	sessionID := fs.String("session-id", "", "session id")
 	resumeID := fs.String("resume", "", "resume session id")
 	model := fs.String("model", "claude-opus-4-6", "model")
+	effort := fs.String("effort", "medium", "reasoning effort")
 	_ = fs.Int("max-turns", 10, "max turns")
 	_ = fs.String("allowedTools", "", "allowed tools")
 	_ = fs.String("append-system-prompt", "", "append system prompt")
@@ -45,6 +46,7 @@ func main() {
 
 	_ = *outputFormat
 	_ = *model
+	_ = *effort
 
 	p := strings.ToLower(*prompt)
 
@@ -61,7 +63,7 @@ func main() {
 	}
 
 	if strings.Contains(p, "profile probe") {
-		emitTextResponse(effSession, fmt.Sprintf("profile model=%s", *model))
+		emitTextResponse(effSession, fmt.Sprintf("profile model=%s effort=%s", *model, *effort))
 		return
 	}
 

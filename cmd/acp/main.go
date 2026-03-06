@@ -45,6 +45,8 @@ Flags (--adapter claude):
   --claude-bin            Path to claude binary (env: CLAUDE_BIN, default: claude)
   --model                 Default model (env: CLAUDE_MODEL, default: claude-opus-4-6)
   --models                Comma-separated model list for picker UI (env: CLAUDE_MODELS)
+  --effort                Default reasoning effort (env: CLAUDE_EFFORT, default: medium)
+  --efforts               Comma-separated effort list for picker UI (env: CLAUDE_EFFORTS)
   --max-turns             Max agentic turns per invocation (default: 10)
   --skip-perms            Pass --dangerously-skip-permissions to claude (default: true)
 `
@@ -82,6 +84,8 @@ func run(ctx context.Context, args []string) error {
 	claudeBin := fs.String("claude-bin", firstEnv("CLAUDE_BIN", "claude"), "path to claude binary")
 	model := fs.String("model", firstEnv("CLAUDE_MODEL", ""), "Claude default model")
 	models := fs.String("models", os.Getenv("CLAUDE_MODELS"), "Claude model list for picker UI")
+	effort := fs.String("effort", firstEnv("CLAUDE_EFFORT", "medium"), "Claude default reasoning effort")
+	efforts := fs.String("efforts", os.Getenv("CLAUDE_EFFORTS"), "Claude effort list for picker UI")
 	maxTurns := fs.Int("max-turns", 10, "max agentic turns per invocation")
 	skipPerms := fs.Bool("skip-perms", parseBoolDefault(os.Getenv("CLAUDE_SKIP_PERMS"), true), "pass --dangerously-skip-permissions to claude")
 
@@ -111,6 +115,8 @@ func run(ctx context.Context, args []string) error {
 			claudeBin:      *claudeBin,
 			model:          *model,
 			models:         *models,
+			effort:         *effort,
+			efforts:        *efforts,
 			maxTurns:       *maxTurns,
 			skipPerms:      *skipPerms,
 			logLevel:       *logLevel,
@@ -170,6 +176,8 @@ type runClaudeParams struct {
 	claudeBin      string
 	model          string
 	models         string
+	effort         string
+	efforts        string
 	maxTurns       int
 	skipPerms      bool
 	logLevel       string
@@ -184,19 +192,22 @@ type runClaudeParams struct {
 func runClaudeAdapter(ctx context.Context, p runClaudeParams) error {
 	profiles := loadProfiles(p.profilesFile, p.profilesJSON)
 	availableModels := collectClaudeModels(p.models, p.model, profiles)
+	availableEfforts := collectClaudeEfforts(p.efforts, p.effort, profiles)
 
 	cfg := claudeacp.RuntimeConfig{
-		ClaudeBin:       p.claudeBin,
-		DefaultModel:    p.model,
-		AvailableModels: availableModels,
-		MaxTurns:        p.maxTurns,
-		SkipPerms:       p.skipPerms,
-		TraceJSON:       p.traceJSON,
-		TraceJSONFile:   p.traceJSONFile,
-		LogLevel:        p.logLevel,
-		PatchApplyMode:  p.patchApplyMode,
-		Profiles:        mapClaudeProfiles(profiles),
-		DefaultProfile:  p.defaultProfile,
+		ClaudeBin:        p.claudeBin,
+		DefaultModel:     p.model,
+		AvailableModels:  availableModels,
+		DefaultEffort:    p.effort,
+		AvailableEfforts: availableEfforts,
+		MaxTurns:         p.maxTurns,
+		SkipPerms:        p.skipPerms,
+		TraceJSON:        p.traceJSON,
+		TraceJSONFile:    p.traceJSONFile,
+		LogLevel:         p.logLevel,
+		PatchApplyMode:   p.patchApplyMode,
+		Profiles:         mapClaudeProfiles(profiles),
+		DefaultProfile:   p.defaultProfile,
 	}
 	return claudeacp.RunStdio(ctx, cfg, os.Stdin, os.Stdout, os.Stderr)
 }
@@ -206,6 +217,7 @@ func runClaudeAdapter(ctx context.Context, p runClaudeParams) error {
 type profileEntry struct {
 	Name               string `json:"name"`
 	Model              string `json:"model,omitempty"`
+	ThoughtLevel       string `json:"thoughtLevel,omitempty"`
 	ApprovalPolicy     string `json:"approvalPolicy,omitempty"`
 	Sandbox            string `json:"sandbox,omitempty"`
 	Personality        string `json:"personality,omitempty"`
@@ -214,6 +226,7 @@ type profileEntry struct {
 
 type profileValues struct {
 	Model              string
+	ThoughtLevel       string
 	ApprovalPolicy     string
 	Sandbox            string
 	Personality        string
@@ -256,6 +269,7 @@ func mergeProfiles(dst map[string]profileValues, data []byte) {
 			}
 			dst[e.Name] = profileValues{
 				Model:              e.Model,
+				ThoughtLevel:       e.ThoughtLevel,
 				ApprovalPolicy:     e.ApprovalPolicy,
 				Sandbox:            e.Sandbox,
 				Personality:        e.Personality,
@@ -270,6 +284,7 @@ func mapCodexProfiles(profiles map[string]profileValues) map[string]codexacp.Pro
 	for name, p := range profiles {
 		out[name] = codexacp.ProfileConfig{
 			Model:              p.Model,
+			ThoughtLevel:       p.ThoughtLevel,
 			ApprovalPolicy:     p.ApprovalPolicy,
 			Sandbox:            p.Sandbox,
 			Personality:        p.Personality,
@@ -284,6 +299,7 @@ func mapClaudeProfiles(profiles map[string]profileValues) map[string]claudeacp.P
 	for name, p := range profiles {
 		out[name] = claudeacp.ProfileConfig{
 			Model:              p.Model,
+			ThoughtLevel:       p.ThoughtLevel,
 			ApprovalPolicy:     p.ApprovalPolicy,
 			Sandbox:            p.Sandbox,
 			Personality:        p.Personality,
@@ -341,6 +357,35 @@ func collectClaudeModels(raw string, defaultModel string, profiles map[string]pr
 	add(defaultModel)
 	for _, profile := range profiles {
 		add(profile.Model)
+	}
+
+	return out
+}
+
+func collectClaudeEfforts(raw string, defaultEffort string, profiles map[string]profileValues) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0, len(profiles)+4)
+
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+
+	for _, token := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == ' ' || r == '\n' || r == '\t'
+	}) {
+		add(token)
+	}
+	add(defaultEffort)
+	for _, profile := range profiles {
+		add(profile.ThoughtLevel)
 	}
 
 	return out

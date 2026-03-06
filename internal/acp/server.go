@@ -43,6 +43,11 @@ const (
 	rpcErrInternal       = -32000
 )
 
+const (
+	configIDModel        = "model"
+	configIDThoughtLevel = "thought_level"
+)
+
 var (
 	todoChecklistPattern = regexp.MustCompile(`(?m)^\s*(?:[-*]|\d+\.)\s+\[([ xX])\]\s+(.+?)\s*$`)
 	allowedImageMimeType = map[string]struct{}{
@@ -105,6 +110,7 @@ type turnLifecycle struct {
 type runtimeOptions struct {
 	Profile            string
 	Model              string
+	ThoughtLevel       string
 	ApprovalPolicy     string
 	Sandbox            string
 	Personality        string
@@ -405,6 +411,7 @@ func (s *Server) handleSessionNew(ctx context.Context, id json.RawMessage, param
 	options, err := s.resolveRuntimeOptions(runtimeOptions{
 		Profile:            params.Profile,
 		Model:              params.Model,
+		ThoughtLevel:       params.ThoughtLevel,
 		ApprovalPolicy:     params.ApprovalPolicy,
 		Sandbox:            params.Sandbox,
 		Personality:        params.Personality,
@@ -465,15 +472,12 @@ func (s *Server) handleSessionSetConfigOption(ctx context.Context, id json.RawMe
 	}
 
 	options := s.getSessionConfig(params.SessionID)
-	configOptions := s.getSessionConfigOptions(params.SessionID)
-	if len(configOptions) == 0 {
-		configOptions = s.buildSessionConfigOptions(ctx, options)
-	}
+	configOptions := s.buildSessionConfigOptions(ctx, options)
 
 	switch params.ConfigID {
-	case "model":
+	case configIDModel:
 		applied := false
-		configOptions, applied = applyConfigOptionValue(configOptions, "model", params.Value)
+		configOptions, applied = applyConfigOptionValue(configOptions, configIDModel, params.Value)
 		if !applied {
 			s.writeInvalidParams(id, map[string]any{
 				"value": "must be one of model options",
@@ -481,10 +485,22 @@ func (s *Server) handleSessionSetConfigOption(ctx context.Context, id json.RawMe
 			return
 		}
 		options.Model = params.Value
+		configOptions = s.buildSessionConfigOptions(ctx, options)
+		options.ThoughtLevel = configOptionCurrentValue(configOptions, configIDThoughtLevel)
+	case configIDThoughtLevel:
+		applied := false
+		configOptions, applied = applyConfigOptionValue(configOptions, configIDThoughtLevel, params.Value)
+		if !applied {
+			s.writeInvalidParams(id, map[string]any{
+				"value": "must be one of thought_level options",
+			})
+			return
+		}
+		options.ThoughtLevel = params.Value
 	default:
 		s.writeInvalidParams(id, map[string]any{
 			"configId": "unsupported config option",
-			"allowed":  []string{"model"},
+			"allowed":  []string{configIDModel, configIDThoughtLevel},
 		})
 		return
 	}
@@ -544,6 +560,7 @@ func (s *Server) handleSessionPrompt(ctx context.Context, id json.RawMessage, pa
 	resolvedOptions, err := s.resolveRuntimeOptions(runtimeOptions{
 		Profile:            params.Profile,
 		Model:              params.Model,
+		ThoughtLevel:       params.ThoughtLevel,
 		ApprovalPolicy:     params.ApprovalPolicy,
 		Sandbox:            params.Sandbox,
 		Personality:        params.Personality,
@@ -2027,14 +2044,6 @@ func cloneSessionConfigValues(values []SessionConfigValue) []SessionConfigValue 
 }
 
 func (s *Server) buildSessionConfigOptions(ctx context.Context, current runtimeOptions) []SessionConfig {
-	modelOption := s.buildModelSessionConfig(ctx, strings.TrimSpace(current.Model))
-	if modelOption.ID == "" {
-		return nil
-	}
-	return []SessionConfig{modelOption}
-}
-
-func (s *Server) buildModelSessionConfig(ctx context.Context, currentModel string) SessionConfig {
 	type candidate struct {
 		value       string
 		name        string
@@ -2042,6 +2051,8 @@ func (s *Server) buildModelSessionConfig(ctx context.Context, currentModel strin
 		isDefault   bool
 	}
 
+	effortOptionsByModel := make(map[string][]SessionConfigValue)
+	defaultEffortByModel := make(map[string]string)
 	values := make([]candidate, 0, 16)
 	seen := make(map[string]struct{})
 	add := func(value string, name string, description string, isDefault bool) {
@@ -2080,6 +2091,30 @@ func (s *Server) buildModelSessionConfig(ctx context.Context, currentModel strin
 				continue
 			}
 			add(model.ID, model.Name, model.Description, model.IsDefault)
+
+			efforts := make([]SessionConfigValue, 0, len(model.SupportedReasoningEfforts))
+			effortSeen := make(map[string]struct{})
+			for _, effort := range model.SupportedReasoningEfforts {
+				value := strings.TrimSpace(effort.Value)
+				if value == "" {
+					continue
+				}
+				if _, ok := effortSeen[value]; ok {
+					continue
+				}
+				effortSeen[value] = struct{}{}
+				efforts = append(efforts, SessionConfigValue{
+					Value:       value,
+					Name:        thoughtLevelDisplayName(value),
+					Description: strings.TrimSpace(effort.Description),
+				})
+			}
+			if len(efforts) > 0 {
+				effortOptionsByModel[model.ID] = efforts
+			}
+			if value := strings.TrimSpace(model.DefaultReasoningEffort); value != "" {
+				defaultEffortByModel[model.ID] = value
+			}
 		}
 	}
 
@@ -2087,7 +2122,7 @@ func (s *Server) buildModelSessionConfig(ctx context.Context, currentModel strin
 		add(profile.Model, profile.Model, "from adapter profile", false)
 	}
 
-	selected := strings.TrimSpace(currentModel)
+	selected := strings.TrimSpace(current.Model)
 	if selected == "" {
 		for _, value := range values {
 			if value.isDefault {
@@ -2100,27 +2135,140 @@ func (s *Server) buildModelSessionConfig(ctx context.Context, currentModel strin
 		selected = values[0].value
 	}
 	if selected == "" {
-		return SessionConfig{}
+		return nil
 	}
 	add(selected, selected, "", false)
 
-	options := make([]SessionConfigValue, 0, len(values))
+	modelOptions := make([]SessionConfigValue, 0, len(values))
 	for _, value := range values {
-		options = append(options, SessionConfigValue{
+		modelOptions = append(modelOptions, SessionConfigValue{
 			Value:       value.value,
 			Name:        value.name,
 			Description: value.description,
 		})
 	}
 
-	return SessionConfig{
-		ID:           "model",
+	configOptions := []SessionConfig{{
+		ID:           configIDModel,
 		Category:     "model",
 		Name:         "Model",
 		Description:  "Model used for this session",
 		Type:         "select",
 		CurrentValue: selected,
+		Options:      modelOptions,
+	}}
+
+	thoughtOption := buildThoughtLevelSessionConfig(
+		strings.TrimSpace(current.ThoughtLevel),
+		selected,
+		effortOptionsByModel,
+		defaultEffortByModel,
+	)
+	if thoughtOption.ID != "" {
+		configOptions = append(configOptions, thoughtOption)
+	}
+	return configOptions
+}
+
+func buildThoughtLevelSessionConfig(
+	currentThoughtLevel string,
+	selectedModel string,
+	effortOptionsByModel map[string][]SessionConfigValue,
+	defaultEffortByModel map[string]string,
+) SessionConfig {
+	options := cloneSessionConfigValues(effortOptionsByModel[selectedModel])
+	if len(options) == 0 {
+		options = defaultThoughtLevelOptions()
+	}
+
+	defaultEffort := strings.TrimSpace(defaultEffortByModel[selectedModel])
+	if defaultEffort != "" {
+		options = appendThoughtLevelIfMissing(options, defaultEffort, "model default reasoning effort")
+	}
+
+	selected := strings.TrimSpace(currentThoughtLevel)
+	if selected != "" && !sessionConfigValueExists(options, selected) {
+		selected = ""
+	}
+	if selected == "" {
+		selected = defaultEffort
+	}
+	if selected == "" && len(options) > 0 {
+		selected = strings.TrimSpace(options[0].Value)
+	}
+	if selected == "" {
+		return SessionConfig{}
+	}
+
+	return SessionConfig{
+		ID:           configIDThoughtLevel,
+		Category:     "reasoning",
+		Name:         "Thought level",
+		Description:  "Reasoning effort used for this session",
+		Type:         "select",
+		CurrentValue: selected,
 		Options:      options,
+	}
+}
+
+func defaultThoughtLevelOptions() []SessionConfigValue {
+	values := []string{"none", "minimal", "low", "medium", "high", "xhigh"}
+	options := make([]SessionConfigValue, 0, len(values))
+	for _, value := range values {
+		options = append(options, SessionConfigValue{
+			Value: value,
+			Name:  thoughtLevelDisplayName(value),
+		})
+	}
+	return options
+}
+
+func appendThoughtLevelIfMissing(options []SessionConfigValue, value string, description string) []SessionConfigValue {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return options
+	}
+	for _, option := range options {
+		if strings.TrimSpace(option.Value) == value {
+			return options
+		}
+	}
+	return append(options, SessionConfigValue{
+		Value:       value,
+		Name:        thoughtLevelDisplayName(value),
+		Description: strings.TrimSpace(description),
+	})
+}
+
+func sessionConfigValueExists(options []SessionConfigValue, value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for _, option := range options {
+		if strings.TrimSpace(option.Value) == value {
+			return true
+		}
+	}
+	return false
+}
+
+func thoughtLevelDisplayName(value string) string {
+	switch strings.TrimSpace(value) {
+	case "none":
+		return "None"
+	case "minimal":
+		return "Minimal"
+	case "low":
+		return "Low"
+	case "medium":
+		return "Medium"
+	case "high":
+		return "High"
+	case "xhigh":
+		return "Extra High"
+	default:
+		return strings.TrimSpace(value)
 	}
 }
 
@@ -2157,6 +2305,15 @@ func applyConfigOptionValue(options []SessionConfig, configID string, value stri
 	return configs, true
 }
 
+func configOptionCurrentValue(options []SessionConfig, configID string) string {
+	for _, option := range options {
+		if strings.TrimSpace(option.ID) == configID {
+			return strings.TrimSpace(option.CurrentValue)
+		}
+	}
+	return ""
+}
+
 func (s *Server) resolveRuntimeOptions(requested runtimeOptions, base runtimeOptions) (runtimeOptions, error) {
 	resolved := base
 	if isRuntimeOptionsEmpty(resolved) && strings.TrimSpace(s.options.DefaultProfile) != "" {
@@ -2167,6 +2324,7 @@ func (s *Server) resolveRuntimeOptions(requested runtimeOptions, base runtimeOpt
 		resolved = runtimeOptions{
 			Profile:            s.options.DefaultProfile,
 			Model:              profile.Model,
+			ThoughtLevel:       profile.ThoughtLevel,
 			ApprovalPolicy:     profile.ApprovalPolicy,
 			Sandbox:            profile.Sandbox,
 			Personality:        profile.Personality,
@@ -2182,6 +2340,7 @@ func (s *Server) resolveRuntimeOptions(requested runtimeOptions, base runtimeOpt
 		resolved = runtimeOptions{
 			Profile:            profileName,
 			Model:              profile.Model,
+			ThoughtLevel:       profile.ThoughtLevel,
 			ApprovalPolicy:     profile.ApprovalPolicy,
 			Sandbox:            profile.Sandbox,
 			Personality:        profile.Personality,
@@ -2191,6 +2350,9 @@ func (s *Server) resolveRuntimeOptions(requested runtimeOptions, base runtimeOpt
 
 	if value := strings.TrimSpace(requested.Model); value != "" {
 		resolved.Model = value
+	}
+	if value := strings.TrimSpace(requested.ThoughtLevel); value != "" {
+		resolved.ThoughtLevel = value
 	}
 	if value := strings.TrimSpace(requested.ApprovalPolicy); value != "" {
 		resolved.ApprovalPolicy = value
@@ -2210,6 +2372,7 @@ func (s *Server) resolveRuntimeOptions(requested runtimeOptions, base runtimeOpt
 func isRuntimeOptionsEmpty(options runtimeOptions) bool {
 	return strings.TrimSpace(options.Profile) == "" &&
 		strings.TrimSpace(options.Model) == "" &&
+		strings.TrimSpace(options.ThoughtLevel) == "" &&
 		strings.TrimSpace(options.ApprovalPolicy) == "" &&
 		strings.TrimSpace(options.Sandbox) == "" &&
 		strings.TrimSpace(options.Personality) == "" &&
@@ -2219,6 +2382,7 @@ func isRuntimeOptionsEmpty(options runtimeOptions) bool {
 func toRunOptions(options runtimeOptions) codex.RunOptions {
 	return codex.RunOptions{
 		Model:              options.Model,
+		Effort:             options.ThoughtLevel,
 		ApprovalPolicy:     options.ApprovalPolicy,
 		Sandbox:            options.Sandbox,
 		Personality:        options.Personality,

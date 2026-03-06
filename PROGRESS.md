@@ -196,6 +196,11 @@
    - 新增 `session/set_config_option`（当前支持 `configId=model`，严格校验 value 必须来自 options）
    - 新增 `session/update` `config_options_update` 映射（扁平字段 + `update.sessionUpdate` 标准 envelope）
    - codex 后端接入 `model/list`；claude 后端新增 `ModelsList`（来源：`CLAUDE_MODELS` + `--model` + profile models）
+13. 新增 reasoning 展示与切换（ACP `thought_level`）：
+   - `session/new` 返回 `thought_level` 配置项，并随 `model` 变更动态刷新候选值与默认值
+   - `session/set_config_option` 新增 `configId=thought_level` 校验与持久化
+   - codex 后端：`model/list` 解析 `defaultReasoningEffort/supportedReasoningEfforts`，`turn/start` 发送 `effort`
+   - claude 后端：`ModelsList` 暴露 effort 候选并在 turn 命令行传递 `--effort`
 
 ## 影响范围是什么
 1. `internal/acp`：slash 路由矩阵、inline MCP command 执行、auth gate、profile 解析与运行参数透传。
@@ -216,6 +221,7 @@
 16. `internal/acp` / `internal/codex` / `internal/claude`：新增模型配置选项链路（model/list → configOptions → session/set_config_option）。
 17. `test/integration`：新增 codex/claude 的模型列表与模型切换 e2e 覆盖。
 18. `testdata/fake_codex_app_server` / `testdata/fake_claude_cli`：新增模型列表与模型探针回显，支持回归测试。
+19. `internal/acp` / `internal/codex` / `internal/claude` / `cmd/acp`：新增 thought_level 配置链路（reasoning 列表展示 + effort 切换落地）。
 
 ## 如何验证
 1. 执行：
@@ -261,6 +267,7 @@
      - `TestE2ERealCodexContentBlocksMentionsImagesAndTODO`（`E2E_REAL_CODEX=1`）
      - `TestRPCReaderDetectsInvalidStdoutLine`
      - `TestClaudeE2ESessionConfigOptionsModelListAndSwitch`
+   - `Session Config Options` 用例新增覆盖 `thought_level`（展示 + 切换 + prompt 生效）。
    - PR5 相关验收由 e2e 自动覆盖：G/H/I + MCP；J1 由脚本触发专项回归。
    - 测试中持续校验 adapter stdout 每行均为合法 JSON-RPC。
    - 真实 e2e 启用时会先执行 `make schema`（generate + schema-check + hash）再启动测试。
@@ -299,11 +306,12 @@
   - `npm/scripts/build-binaries.mjs` 改为构建 `./cmd/acp`，保持产物文件名不变。
   - 更新 README / ACCEPTANCE / CLAUDE 文档中的启动与配置示例到 `cmd/acp --adapter codex|claude`。
 
-### 2026-03-05 — 新增 Session Config Options（模型列表展示 + 模型切换）
+### 2026-03-05 — 新增 Session Config Options（模型 + reasoning/thought_level）
 - Done:
-  - `session/new` 返回 `configOptions`（`model`）。
-  - 新增 `session/set_config_option`（`configId=model`）并输出 `config_options_update`。
-  - codex 接入 `model/list`；claude 接入可配置模型列表（`CLAUDE_MODELS`/`--models` + default/profile）。
+  - `session/new` 返回 `configOptions`（`model` + `thought_level`）。
+  - 新增 `session/set_config_option`（`configId=model|thought_level`）并输出 `config_options_update`。
+  - codex 接入 `model/list` 的 reasoning 元数据并把 `thought_level` 映射到 `turn/start.effort`。
+  - claude 接入可配置模型列表与 effort 列表（`CLAUDE_MODELS`/`--models` + `CLAUDE_EFFORTS`/`--efforts`），并传递 `--effort`。
   - 新增 e2e：`TestE2ESessionConfigOptionsModelListAndSwitch`、`TestClaudeE2ESessionConfigOptionsModelListAndSwitch`。
   - `go test ./...` 全通过。
   - 更新 `docs/KNOWN_ISSUES.md`：记录入口迁移（KI-0034）并修正旧构建/安装命令。

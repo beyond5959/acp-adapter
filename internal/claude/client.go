@@ -113,6 +113,10 @@ func NewClient(cfg Config) *Client {
 		cfg.DefaultModel = DefaultModel
 	}
 	cfg.AvailableModels = uniqueNonEmpty(append(cfg.AvailableModels, cfg.DefaultModel))
+	if cfg.DefaultEffort == "" {
+		cfg.DefaultEffort = DefaultEffort
+	}
+	cfg.AvailableEfforts = uniqueNonEmpty(append(cfg.AvailableEfforts, cfg.DefaultEffort))
 	if cfg.MaxTurns <= 0 {
 		cfg.MaxTurns = DefaultMaxTurns
 	}
@@ -160,7 +164,7 @@ func (c *Client) TurnStart(
 		system = options.Personality
 	}
 
-	cmd, err := c.buildCmd(ctx, sess, options.Model, system, prompt, "")
+	cmd, err := c.buildCmd(ctx, sess, options.Model, options.Effort, system, prompt)
 	if err != nil {
 		return "", nil, fmt.Errorf("claudecli: build cmd: %w", err)
 	}
@@ -212,7 +216,7 @@ func (c *Client) ReviewStart(
 		system = options.SystemInstructions + "\n\n" + reviewSystemPrompt
 	}
 
-	cmd, err := c.buildCmd(ctx, sess, options.Model, system, prompt, "")
+	cmd, err := c.buildCmd(ctx, sess, options.Model, options.Effort, system, prompt)
 	if err != nil {
 		return "", nil, fmt.Errorf("claudecli: build review cmd: %w", err)
 	}
@@ -276,8 +280,14 @@ func (c *Client) CompactStart(ctx context.Context, threadID string) (string, <-c
 
 	turnID := c.genID("compact-turn")
 
-	cmd, err := c.buildCmd(ctx, sess, "", compactSystemPrompt,
-		"Please summarize the conversation history concisely.", "")
+	cmd, err := c.buildCmd(
+		ctx,
+		sess,
+		"",
+		"",
+		compactSystemPrompt,
+		"Please summarize the conversation history concisely.",
+	)
 	if err != nil {
 		return "", nil, fmt.Errorf("claudecli: build compact cmd: %w", err)
 	}
@@ -320,12 +330,26 @@ func (c *Client) ModelsList(_ context.Context) ([]codex.ModelOption, error) {
 	if len(models) == 0 {
 		models = []string{c.cfg.DefaultModel}
 	}
+	efforts := uniqueNonEmpty(append([]string(nil), c.cfg.AvailableEfforts...))
+	if len(efforts) == 0 {
+		efforts = []string{c.cfg.DefaultEffort}
+	}
+	supportedEfforts := make([]codex.ReasoningEffortOption, 0, len(efforts))
+	for _, effort := range efforts {
+		supportedEfforts = append(supportedEfforts, codex.ReasoningEffortOption{
+			Value:       effort,
+			Description: "claude --effort option",
+		})
+	}
+
 	out := make([]codex.ModelOption, 0, len(models))
 	for _, model := range models {
 		out = append(out, codex.ModelOption{
-			ID:        model,
-			Name:      model,
-			IsDefault: model == c.cfg.DefaultModel,
+			ID:                        model,
+			Name:                      model,
+			IsDefault:                 model == c.cfg.DefaultModel,
+			DefaultReasoningEffort:    c.cfg.DefaultEffort,
+			SupportedReasoningEfforts: supportedEfforts,
 		})
 	}
 	return out, nil
@@ -366,7 +390,10 @@ func (c *Client) Logout(_ context.Context) error {
 func (c *Client) buildCmd(
 	ctx context.Context,
 	sess *session,
-	model, systemPrompt, prompt, _ string,
+	model string,
+	effort string,
+	systemPrompt string,
+	prompt string,
 ) (*exec.Cmd, error) {
 	sess.mu.Lock()
 	cwd := sess.cwd
@@ -389,6 +416,9 @@ func (c *Client) buildCmd(
 	m := resolveModel(model, c.cfg.DefaultModel)
 	if m != "" {
 		args = append(args, "--model", m)
+	}
+	if e := resolveEffort(effort, c.cfg.DefaultEffort); e != "" {
+		args = append(args, "--effort", e)
 	}
 
 	if c.cfg.MaxTurns > 0 {
@@ -433,6 +463,13 @@ func resolveModel(sessionModel, defaultModel string) string {
 		return sessionModel
 	}
 	return defaultModel
+}
+
+func resolveEffort(sessionEffort, defaultEffort string) string {
+	if sessionEffort != "" {
+		return sessionEffort
+	}
+	return defaultEffort
 }
 
 func buildPrompt(inputs []codex.UserInput) string {
