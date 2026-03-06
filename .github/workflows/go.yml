@@ -6,12 +6,15 @@ name: Go
 on:
   push:
     branches: [ "master" ]
+    tags: [ "v*" ]
   pull_request:
     branches: [ "master" ]
 
-jobs:
+permissions:
+  contents: write
 
-  build:
+jobs:
+  build-and-test:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -26,3 +29,162 @@ jobs:
 
     - name: Test
       run: go test -v ./...
+
+  release:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    strategy:
+      matrix:
+        include:
+          # Linux AMD64
+          - os: linux
+            arch: amd64
+            goarch: amd64
+            goos: linux
+            target: x86_64-linux
+            ext: tar.gz
+          # Linux ARM64
+          - os: linux
+            arch: arm64
+            goarch: arm64
+            goos: linux
+            target: aarch64-linux
+            ext: tar.gz
+          # Darwin AMD64
+          - os: darwin
+            arch: amd64
+            goarch: amd64
+            goos: darwin
+            target: x86_64-darwin
+            ext: tar.gz
+          # Darwin ARM64
+          - os: darwin
+            arch: arm64
+            goarch: arm64
+            goos: darwin
+            target: aarch64-darwin
+            ext: tar.gz
+          # Windows AMD64
+          - os: windows
+            arch: amd64
+            goarch: amd64
+            goos: windows
+            target: x86_64-windows
+            ext: zip
+          # Windows ARM64
+          - os: windows
+            arch: arm64
+            goarch: arm64
+            goos: windows
+            target: aarch64-windows
+            ext: zip
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.24'
+
+    - name: Build binary
+      env:
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+        CGO_ENABLED: 0
+      run: |
+        VERSION=${GITHUB_REF#refs/tags/}
+        BINARY_NAME=acp-adapter
+        if [ "${{ matrix.goos }}" = "windows" ]; then
+          BINARY_NAME=${BINARY_NAME}.exe
+        fi
+        go build -ldflags "-s -w -X main.version=${VERSION}" -o dist/${BINARY_NAME} ./cmd/acp
+
+    - name: Create archive
+      run: |
+        VERSION=${GITHUB_REF#refs/tags/}
+        ARCHIVE_NAME="acp-adapter-${VERSION}-${{ matrix.target }}"
+        mkdir -p "dist/${ARCHIVE_NAME}"
+        
+        if [ "${{ matrix.goos }}" = "windows" ]; then
+          cp dist/acp-adapter.exe "dist/${ARCHIVE_NAME}/" 2>/dev/null || cp dist/acp-adapter "dist/${ARCHIVE_NAME}/acp-adapter.exe"
+          cp README.md LICENSE "dist/${ARCHIVE_NAME}/" 2>/dev/null || true
+          cd dist && zip -r "${ARCHIVE_NAME}.zip" "${ARCHIVE_NAME}"
+          echo "ASSET_PATH=dist/${ARCHIVE_NAME}.zip" >> $GITHUB_ENV
+          echo "ASSET_NAME=${ARCHIVE_NAME}.zip" >> $GITHUB_ENV
+        else
+          cp dist/acp-adapter "dist/${ARCHIVE_NAME}/"
+          cp README.md LICENSE "dist/${ARCHIVE_NAME}/" 2>/dev/null || true
+          cd dist && tar czf "${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
+          echo "ASSET_PATH=dist/${ARCHIVE_NAME}.tar.gz" >> $GITHUB_ENV
+          echo "ASSET_NAME=${ARCHIVE_NAME}.tar.gz" >> $GITHUB_ENV
+        fi
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.ASSET_NAME }}
+        path: ${{ env.ASSET_PATH }}
+
+  build-source:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Create source archives
+      run: |
+        VERSION=${GITHUB_REF#refs/tags/}
+        ARCHIVE_PREFIX="acp-adapter-${VERSION}"
+        
+        # Create tarball
+        git archive --format=tar.gz --prefix="${ARCHIVE_PREFIX}/" -o "${ARCHIVE_PREFIX}.tar.gz" HEAD
+        
+        # Create zip
+        git archive --format=zip --prefix="${ARCHIVE_PREFIX}/" -o "${ARCHIVE_PREFIX}.zip" HEAD
+        
+        echo "TAR_GZ=${ARCHIVE_PREFIX}.tar.gz" >> $GITHUB_ENV
+        echo "ZIP=${ARCHIVE_PREFIX}.zip" >> $GITHUB_ENV
+
+    - name: Upload source tarball
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.TAR_GZ }}
+        path: ${{ env.TAR_GZ }}
+
+    - name: Upload source zip
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.ZIP }}
+        path: ${{ env.ZIP }}
+
+  github-release:
+    needs: [release, build-source]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+        merge-multiple: true
+
+    - name: List artifacts
+      run: ls -la artifacts/
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: artifacts/*
+        generate_release_notes: true
+        draft: false
+        prerelease: ${{ contains(github.ref, '-alpha') || contains(github.ref, '-beta') || contains(github.ref, '-rc') }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
