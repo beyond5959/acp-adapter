@@ -458,19 +458,36 @@
 
 ## KI-0037：部分新版 app-server server request 仍未桥接（显式 `-32000` fail-closed）
 - 现象：
-  - 已兼容新版 `item/commandExecution/requestApproval` 与 `item/fileChange/requestApproval`，但以下 server request 目前仍未实现完整桥接：
-    - `item/tool/requestUserInput`
-    - `item/tool/call`
+  - 已兼容：
+    - `item/commandExecution/requestApproval`
+    - `item/fileChange/requestApproval`
+    - `item/tool/requestUserInput`（兼容回包）
+    - `item/tool/call`（兼容失败回包）
+  - 但以下 server request 仍未实现完整桥接：
     - `account/chatgptAuthTokens/refresh`
     - legacy `execCommandApproval` / `applyPatchApproval`
-  - 当前行为为显式返回 `-32000`（fail-closed），不再返回 `-32601 method not found`。
+  - 对未实现项当前仍为显式 `-32000`（fail-closed），不再返回 `-32601 method not found`。
 - 影响：
-  - 相关请求在真实链路会被拒绝，可能导致对应 turn 失败或进入降级路径。
-  - 错误可读性提升，但功能能力仍受限。
+  - `requestUserInput`/`tool/call` 不再 hard-fail，但仍是兼容策略（非完整交互式能力）。
+  - 未实现项在真实链路仍会被拒绝，可能导致 turn 失败或降级。
 - 复现：
-  - 连接会触发上述 server request 的 codex app-server 版本，观察 adapter 对该请求回 `-32000`。
+  - 连接触发 `account/chatgptAuthTokens/refresh` 或 legacy approval request 的 app-server 版本。
 - Workaround：
-  - 优先使用当前已覆盖的 command/file approval 路径。
+  - 优先使用当前已覆盖的 command/file/tool 兼容路径。
   - 对 `chatgptAuthTokens/refresh` 场景，使用 managed auth（由 codex 自管刷新）或在宿主侧避免 external-auth-only 配置。
 - 后续计划：
-  - 逐项补齐 `item/tool/*` 与 chatgpt token refresh 桥接能力，并补充端到端验收用例。
+  - 逐项补齐 `chatgptAuthTokens/refresh` 与 legacy approval 桥接能力，并补充端到端验收用例。
+
+## KI-0038：`item/tool/requestUserInput` 目前为兼容自动选项，不是完整交互输入
+- 现象：
+  - 当前对 `item/tool/requestUserInput` 使用兼容回包：每题默认选择首个 option label。
+  - 尚未支持多选策略、自由文本输入、secret 输入等完整交互能力。
+- 影响：
+  - 可避免 hard error，但答案语义可能与真实用户意图不一致。
+- 复现：
+  - 触发包含复杂问题（多选/自由输入）的 `requestUserInput` 请求，观察回包为默认首选项。
+- Workaround：
+  - 优先在不依赖复杂交互问题的 MCP/tool 场景使用该链路。
+  - 对关键操作，使用原生 codex app 交互界面执行。
+- 后续计划：
+  - 在 ACP/hub 侧补齐通用 user-input 请求桥接与 UI 交互闭环。
