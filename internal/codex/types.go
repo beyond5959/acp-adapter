@@ -336,6 +336,62 @@ type ChatgptAuthTokensRefreshParams struct {
 	Reason            string `json:"reason"`
 }
 
+// ToolRequestUserInputParams are server params for request_user_input.
+type ToolRequestUserInputParams struct {
+	ItemID    string                         `json:"itemId"`
+	Questions []ToolRequestUserInputQuestion `json:"questions"`
+	ThreadID  string                         `json:"threadId"`
+	TurnID    string                         `json:"turnId"`
+}
+
+// ToolRequestUserInputQuestion is one question presented to the user.
+type ToolRequestUserInputQuestion struct {
+	Header   string                       `json:"header"`
+	ID       string                       `json:"id"`
+	IsOther  bool                         `json:"isOther,omitempty"`
+	IsSecret bool                         `json:"isSecret,omitempty"`
+	Options  []ToolRequestUserInputOption `json:"options,omitempty"`
+	Question string                       `json:"question"`
+}
+
+// ToolRequestUserInputOption is one selectable option for a question.
+type ToolRequestUserInputOption struct {
+	Description string `json:"description"`
+	Label       string `json:"label"`
+}
+
+// ToolRequestUserInputResponse returns chosen answers by question id.
+type ToolRequestUserInputResponse struct {
+	Answers map[string]ToolRequestUserInputAnswer `json:"answers"`
+}
+
+// ToolRequestUserInputAnswer is one selected answer set.
+type ToolRequestUserInputAnswer struct {
+	Answers []string `json:"answers"`
+}
+
+// DynamicToolCallParams are server params for client-side dynamic tool invocation.
+type DynamicToolCallParams struct {
+	Arguments json.RawMessage `json:"arguments"`
+	CallID    string          `json:"callId"`
+	ThreadID  string          `json:"threadId"`
+	Tool      string          `json:"tool"`
+	TurnID    string          `json:"turnId"`
+}
+
+// DynamicToolCallResponse returns one dynamic tool invocation result.
+type DynamicToolCallResponse struct {
+	ContentItems []DynamicToolCallOutputContentItem `json:"contentItems"`
+	Success      bool                               `json:"success"`
+}
+
+// DynamicToolCallOutputContentItem carries text or image output for one dynamic tool call.
+type DynamicToolCallOutputContentItem struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"imageUrl,omitempty"`
+}
+
 // MCPServer describes one MCP server capability snapshot.
 type MCPServer struct {
 	Name          string   `json:"name"`

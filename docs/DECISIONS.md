@@ -899,3 +899,24 @@
   - `go test ./...`
   - `TestRunStdio_CommandApprovalRequestCompatibility`
   - `TestE2EAcceptanceD1ToD5ApprovalsBridge`（回归不退化）
+
+### ADR-0039：Tool server-request 兼容回包（`requestUserInput`/`tool/call`）
+- 日期：2026-03-06
+- 状态：Accepted
+- 背景：
+  - codex app-server 在 MCP/tool 流程中会发送 `item/tool/requestUserInput` 与 `item/tool/call`。
+  - 旧实现对两者返回 `-32000 not supported`，直接导致流程中断。
+- 决策：
+  - `item/tool/requestUserInput`：返回 schema-compatible `answers`（每题默认选择首个 option label）。
+  - `item/tool/call`：返回 schema-compatible 失败结果（`success=false` + 文本 content item），避免 method-level RPC failure。
+- 备选方案：
+  - 继续 `-32000`（拒绝，用户侧硬失败）。
+  - 一次性实现完整交互式 question UI + 动态工具执行（拒绝，超出热修范围）。
+- 取舍（Pros/Cons）：
+  - Pros：消除当前 hard failure，MCP/tool 链路可继续。
+  - Cons：仍是兼容回退，不等于完整交互式 user-input 能力。
+- 影响范围（文件/模块）：
+  - `internal/codex/types.go`
+  - `internal/codex/client.go`
+- 验证方式（测试/验收项）：
+  - `go test ./...`

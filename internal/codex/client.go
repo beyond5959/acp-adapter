@@ -554,9 +554,20 @@ func (c *Client) handleServerRequest(msg RPCMessage) {
 		}
 		c.writeServerErrorResponse(*msg.ID, -32000, "applyPatchApproval is not supported")
 	case methodItemToolRequestUserInput:
-		c.writeServerErrorResponse(*msg.ID, -32000, "item/tool/requestUserInput is not supported")
+		var params ToolRequestUserInputParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			c.writeServerErrorResponse(*msg.ID, -32602, "invalid item/tool/requestUserInput params")
+			return
+		}
+		response := autoSelectToolRequestUserInput(params)
+		c.writeServerResult(*msg.ID, response)
 	case methodItemToolCall:
-		c.writeServerErrorResponse(*msg.ID, -32000, "item/tool/call is not supported")
+		var params DynamicToolCallParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			c.writeServerErrorResponse(*msg.ID, -32602, "invalid item/tool/call params")
+			return
+		}
+		c.writeServerResult(*msg.ID, unsupportedDynamicToolCall(params.Tool))
 	case methodAccountChatgptAuthTokensRefresh:
 		var params ChatgptAuthTokensRefreshParams
 		if len(msg.Params) > 0 {
@@ -647,6 +658,43 @@ func approvalFromFileChange(params FileChangeRequestApprovalParams) ApprovalRequ
 		approval.Files = []string{grantRoot}
 	}
 	return approval
+}
+
+func autoSelectToolRequestUserInput(params ToolRequestUserInputParams) ToolRequestUserInputResponse {
+	answers := make(map[string]ToolRequestUserInputAnswer, len(params.Questions))
+	for _, question := range params.Questions {
+		questionID := strings.TrimSpace(question.ID)
+		if questionID == "" {
+			continue
+		}
+		if len(question.Options) == 0 {
+			continue
+		}
+		label := strings.TrimSpace(question.Options[0].Label)
+		if label == "" {
+			continue
+		}
+		answers[questionID] = ToolRequestUserInputAnswer{
+			Answers: []string{label},
+		}
+	}
+	return ToolRequestUserInputResponse{Answers: answers}
+}
+
+func unsupportedDynamicToolCall(tool string) DynamicToolCallResponse {
+	tool = strings.TrimSpace(tool)
+	if tool == "" {
+		tool = "unknown_tool"
+	}
+	return DynamicToolCallResponse{
+		Success: false,
+		ContentItems: []DynamicToolCallOutputContentItem{
+			{
+				Type: "inputText",
+				Text: fmt.Sprintf("dynamic tool call %q is not supported by acp-adapter", tool),
+			},
+		},
+	}
 }
 
 func (c *Client) handleNotification(msg RPCMessage) {
@@ -836,6 +884,22 @@ func (c *Client) writeServerErrorResponse(id json.RawMessage, code int, message 
 		},
 	}); err != nil {
 		c.logger.Warn("failed to write app-server request error", slog.String("error", err.Error()))
+	}
+}
+
+func (c *Client) writeServerResult(id json.RawMessage, result any) {
+	resultRaw, err := json.Marshal(result)
+	if err != nil {
+		c.logger.Warn("failed to encode app-server request result", slog.String("error", err.Error()))
+		c.writeServerErrorResponse(id, -32000, "failed to encode request result")
+		return
+	}
+	if err := c.codec.WriteMessage(RPCMessage{
+		JSONRPC: "2.0",
+		ID:      cloneRawMessage(id),
+		Result:  resultRaw,
+	}); err != nil {
+		c.logger.Warn("failed to write app-server request result", slog.String("error", err.Error()))
 	}
 }
 

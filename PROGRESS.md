@@ -636,3 +636,14 @@
     - `TestE2EAcceptanceA1ToA5AndB1`
     - `TestE2EAuthMethodsAndAuthenticateFlow`
   - `go test ./...` 通过（偶发 integration 超时重跑后可过）
+
+### 2026-03-06 — Tool server-request 兼容修复（`item/tool/requestUserInput` + `item/tool/call`）
+- A. 范围与目标:
+  - 修复 MCP/tool 流程触发 `item/tool/requestUserInput` 时返回 `-32000` 导致中断的问题。
+  - 避免 `item/tool/call` 使用 method error 硬中断。
+- B. 实现:
+  - `internal/codex/client` 对 `item/tool/requestUserInput` 返回 schema-compatible `answers`（按 question 默认取首个 option label）。
+  - `item/tool/call` 返回 `DynamicToolCallResponse{success:false}` 结构化失败结果，不再返回 RPC method error。
+  - `internal/codex/types` 新增 `ToolRequestUserInput*` 与 `DynamicToolCall*` 类型。
+- C. 验证:
+  - `go test ./...` 通过。
