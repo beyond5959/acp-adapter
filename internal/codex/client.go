@@ -109,6 +109,7 @@ func (c *Client) TurnStart(
 	params := TurnStartParams{
 		ThreadID:   threadID,
 		Input:      input,
+		Effort:     options.Effort,
 		RunOptions: options,
 	}
 	var result TurnStartResult
@@ -208,12 +209,38 @@ func (c *Client) ModelsList(ctx context.Context) ([]ModelOption, error) {
 		if name == "" {
 			name = modelID
 		}
+		defaultEffort := strings.TrimSpace(item.DefaultReasoningEffort)
+		efforts := make([]ReasoningEffortOption, 0, len(item.SupportedReasoningEfforts))
+		seenEffort := make(map[string]struct{})
+		for _, option := range item.SupportedReasoningEfforts {
+			value := strings.TrimSpace(option.ReasoningEffort)
+			if value == "" {
+				continue
+			}
+			if _, ok := seenEffort[value]; ok {
+				continue
+			}
+			seenEffort[value] = struct{}{}
+			efforts = append(efforts, ReasoningEffortOption{
+				Value:       value,
+				Description: strings.TrimSpace(option.Description),
+			})
+		}
+		if defaultEffort != "" {
+			if _, ok := seenEffort[defaultEffort]; !ok {
+				efforts = append(efforts, ReasoningEffortOption{
+					Value: defaultEffort,
+				})
+			}
+		}
 		out = append(out, ModelOption{
-			ID:          modelID,
-			Name:        name,
-			Description: strings.TrimSpace(item.Description),
-			Hidden:      item.Hidden,
-			IsDefault:   item.IsDefault,
+			ID:                        modelID,
+			Name:                      name,
+			Description:               strings.TrimSpace(item.Description),
+			Hidden:                    item.Hidden,
+			IsDefault:                 item.IsDefault,
+			DefaultReasoningEffort:    defaultEffort,
+			SupportedReasoningEfforts: efforts,
 		})
 	}
 	if len(out) == 0 {

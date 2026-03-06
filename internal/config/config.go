@@ -11,6 +11,7 @@ import (
 // ProfileConfig describes one named prompt/runtime profile.
 type ProfileConfig struct {
 	Model              string `json:"model,omitempty"`
+	ThoughtLevel       string `json:"thoughtLevel,omitempty"`
 	ApprovalPolicy     string `json:"approvalPolicy,omitempty"`
 	Sandbox            string `json:"sandbox,omitempty"`
 	Personality        string `json:"personality,omitempty"`
@@ -20,6 +21,7 @@ type ProfileConfig struct {
 type profileConfigEntry struct {
 	Name               string `json:"name"`
 	Model              string `json:"model,omitempty"`
+	ThoughtLevel       string `json:"thoughtLevel,omitempty"`
 	ApprovalPolicy     string `json:"approvalPolicy,omitempty"`
 	Sandbox            string `json:"sandbox,omitempty"`
 	Personality        string `json:"personality,omitempty"`
@@ -162,6 +164,7 @@ func parseProfilesJSON(data []byte) (map[string]ProfileConfig, error) {
 		}
 		out[name] = ProfileConfig{
 			Model:              entry.Model,
+			ThoughtLevel:       entry.ThoughtLevel,
 			ApprovalPolicy:     entry.ApprovalPolicy,
 			Sandbox:            entry.Sandbox,
 			Personality:        entry.Personality,

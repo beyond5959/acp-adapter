@@ -21,6 +21,7 @@ const (
 // ProfileConfig defines one named runtime profile.
 type ProfileConfig struct {
 	Model              string
+	ThoughtLevel       string
 	ApprovalPolicy     string
 	Sandbox            string
 	Personality        string
@@ -110,6 +111,7 @@ func toACPProfiles(profiles map[string]ProfileConfig) map[string]acp.ProfileConf
 	for name, profile := range profiles {
 		out[name] = acp.ProfileConfig{
 			Model:              profile.Model,
+			ThoughtLevel:       profile.ThoughtLevel,
 			ApprovalPolicy:     profile.ApprovalPolicy,
 			Sandbox:            profile.Sandbox,
 			Personality:        profile.Personality,

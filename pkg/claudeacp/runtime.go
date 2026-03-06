@@ -19,6 +19,7 @@ const (
 // ProfileConfig defines one named runtime profile (mirrors codexacp.ProfileConfig).
 type ProfileConfig struct {
 	Model              string
+	ThoughtLevel       string
 	ApprovalPolicy     string
 	Sandbox            string
 	Personality        string
@@ -32,9 +33,13 @@ type RuntimeConfig struct {
 	DefaultModel string
 	// AvailableModels are exposed to ACP model picker UI.
 	AvailableModels []string
-	MaxTurns        int
-	SkipPerms       bool
-	AllowedTools    string
+	// DefaultEffort is exposed as ACP thought_level current value.
+	DefaultEffort string
+	// AvailableEfforts are exposed to ACP thought_level picker UI.
+	AvailableEfforts []string
+	MaxTurns         int
+	SkipPerms        bool
+	AllowedTools     string
 
 	// Shared adapter settings (same semantics as codexacp.RuntimeConfig).
 	TraceJSON      bool
@@ -51,12 +56,18 @@ func DefaultRuntimeConfig() RuntimeConfig {
 		ClaudeBin:       claude.DefaultBin(),
 		DefaultModel:    claude.DefaultModel,
 		AvailableModels: []string{claude.DefaultModel},
-		MaxTurns:        claude.DefaultMaxTurns,
-		SkipPerms:       true,
-		TraceJSONFile:   defaultTraceJSONFile,
-		LogLevel:        "info",
-		PatchApplyMode:  defaultPatchApplyMode,
-		Profiles:        map[string]ProfileConfig{},
+		DefaultEffort:   claude.DefaultEffort,
+		AvailableEfforts: []string{
+			"low",
+			claude.DefaultEffort,
+			"high",
+		},
+		MaxTurns:       claude.DefaultMaxTurns,
+		SkipPerms:      true,
+		TraceJSONFile:  defaultTraceJSONFile,
+		LogLevel:       "info",
+		PatchApplyMode: defaultPatchApplyMode,
+		Profiles:       map[string]ProfileConfig{},
 	}
 }
 
@@ -81,8 +92,13 @@ func normalizeRuntimeConfig(cfg RuntimeConfig) RuntimeConfig {
 	if strings.TrimSpace(cfg.DefaultModel) == "" {
 		cfg.DefaultModel = claude.DefaultModel
 	}
-	cfg.AvailableModels = append(uniqueModels(cfg.AvailableModels), cfg.DefaultModel)
-	cfg.AvailableModels = uniqueModels(cfg.AvailableModels)
+	if strings.TrimSpace(cfg.DefaultEffort) == "" {
+		cfg.DefaultEffort = claude.DefaultEffort
+	}
+	cfg.AvailableModels = append(uniqueValues(cfg.AvailableModels), cfg.DefaultModel)
+	cfg.AvailableModels = uniqueValues(cfg.AvailableModels)
+	cfg.AvailableEfforts = append(uniqueValues(cfg.AvailableEfforts), cfg.DefaultEffort)
+	cfg.AvailableEfforts = uniqueValues(cfg.AvailableEfforts)
 	if cfg.MaxTurns <= 0 {
 		cfg.MaxTurns = claude.DefaultMaxTurns
 	}
@@ -119,6 +135,7 @@ func toACPProfiles(profiles map[string]ProfileConfig) map[string]acp.ProfileConf
 	for name, p := range profiles {
 		out[name] = acp.ProfileConfig{
 			Model:              p.Model,
+			ThoughtLevel:       p.ThoughtLevel,
 			ApprovalPolicy:     p.ApprovalPolicy,
 			Sandbox:            p.Sandbox,
 			Personality:        p.Personality,
@@ -132,18 +149,22 @@ func toClaudeCliConfig(cfg RuntimeConfig) claude.Config {
 	return claude.Config{
 		ClaudeBin:       cfg.ClaudeBin,
 		DefaultModel:    cfg.DefaultModel,
-		AvailableModels: uniqueModels(cfg.AvailableModels),
-		MaxTurns:        cfg.MaxTurns,
-		SkipPerms:       cfg.SkipPerms,
-		AllowedTools:    cfg.AllowedTools,
+		AvailableModels: uniqueValues(cfg.AvailableModels),
+		DefaultEffort:   cfg.DefaultEffort,
+		AvailableEfforts: uniqueValues(
+			cfg.AvailableEfforts,
+		),
+		MaxTurns:     cfg.MaxTurns,
+		SkipPerms:    cfg.SkipPerms,
+		AllowedTools: cfg.AllowedTools,
 	}
 }
 
-func uniqueModels(models []string) []string {
-	seen := make(map[string]struct{}, len(models))
-	out := make([]string, 0, len(models))
-	for _, model := range models {
-		value := strings.TrimSpace(model)
+func uniqueValues(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		value := strings.TrimSpace(raw)
 		if value == "" {
 			continue
 		}

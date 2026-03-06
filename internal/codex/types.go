@@ -45,6 +45,8 @@ type RunOptions struct {
 	Sandbox            string `json:"sandbox,omitempty"`
 	Personality        string `json:"personality,omitempty"`
 	SystemInstructions string `json:"systemInstructions,omitempty"`
+	// Effort is turn-level reasoning effort; serialized explicitly by TurnStartParams.
+	Effort string `json:"-"`
 }
 
 // ModelOption is one selectable model exposed by the downstream backend.
@@ -54,6 +56,16 @@ type ModelOption struct {
 	Description string
 	Hidden      bool
 	IsDefault   bool
+	// DefaultReasoningEffort is the model default effort (e.g. medium).
+	DefaultReasoningEffort string
+	// SupportedReasoningEfforts are selectable effort options for this model.
+	SupportedReasoningEfforts []ReasoningEffortOption
+}
+
+// ReasoningEffortOption is one selectable reasoning effort level.
+type ReasoningEffortOption struct {
+	Value       string
+	Description string
 }
 
 // UserInput is one structured item inside turn/start input.
@@ -87,6 +99,7 @@ type ThreadStartResult struct {
 type TurnStartParams struct {
 	ThreadID string      `json:"threadId"`
 	Input    []UserInput `json:"input"`
+	Effort   string      `json:"effort,omitempty"`
 	RunOptions
 }
 
@@ -139,12 +152,20 @@ type ModelListResult struct {
 
 // ModelListItem is one app-server model/list entry.
 type ModelListItem struct {
-	ID          string `json:"id,omitempty"`
-	Model       string `json:"model,omitempty"`
-	DisplayName string `json:"displayName,omitempty"`
-	Description string `json:"description,omitempty"`
-	Hidden      bool   `json:"hidden,omitempty"`
-	IsDefault   bool   `json:"isDefault,omitempty"`
+	ID                        string                          `json:"id,omitempty"`
+	Model                     string                          `json:"model,omitempty"`
+	DisplayName               string                          `json:"displayName,omitempty"`
+	Description               string                          `json:"description,omitempty"`
+	Hidden                    bool                            `json:"hidden,omitempty"`
+	IsDefault                 bool                            `json:"isDefault,omitempty"`
+	DefaultReasoningEffort    string                          `json:"defaultReasoningEffort,omitempty"`
+	SupportedReasoningEfforts []ModelReasoningEffortListEntry `json:"supportedReasoningEfforts,omitempty"`
+}
+
+// ModelReasoningEffortListEntry is one model/list reasoning effort option shape.
+type ModelReasoningEffortListEntry struct {
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+	Description     string `json:"description,omitempty"`
 }
 
 // TurnStartedNotification notifies that one turn has entered running state.

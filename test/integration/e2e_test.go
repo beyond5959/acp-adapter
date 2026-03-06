@@ -2161,22 +2161,37 @@ func TestE2ESessionConfigOptionsModelListAndSwitch(t *testing.T) {
 	}
 
 	var modelConfig sessionConfigOption
+	var thoughtConfig sessionConfigOption
 	foundModelConfig := false
+	foundThoughtConfig := false
 	for _, option := range newResult.ConfigOptions {
 		if option.ID == "model" {
 			modelConfig = option
 			foundModelConfig = true
-			break
+			continue
+		}
+		if option.ID == "thought_level" {
+			thoughtConfig = option
+			foundThoughtConfig = true
 		}
 	}
 	if !foundModelConfig {
 		t.Fatalf("session/new configOptions should include model")
+	}
+	if !foundThoughtConfig {
+		t.Fatalf("session/new configOptions should include thought_level")
 	}
 	if len(modelConfig.Options) == 0 {
 		t.Fatalf("model configOptions should include selectable models")
 	}
 	if strings.TrimSpace(modelConfig.CurrentValue) == "" {
 		t.Fatalf("model configOptions should include current value")
+	}
+	if len(thoughtConfig.Options) == 0 {
+		t.Fatalf("thought_level configOptions should include selectable options")
+	}
+	if strings.TrimSpace(thoughtConfig.CurrentValue) == "" {
+		t.Fatalf("thought_level configOptions should include current value")
 	}
 
 	targetModel := ""
@@ -2198,11 +2213,13 @@ func TestE2ESessionConfigOptionsModelListAndSwitch(t *testing.T) {
 
 	gotSetResp := false
 	sawConfigUpdate := false
+	var latestConfigOptions []sessionConfigOption
 	for !gotSetResp {
 		msg := h.nextMessage(responseTimeout)
 		if msg.Method == "session/update" {
 			update := decodeSessionUpdate(t, msg)
 			if update.Type == "config_options_update" {
+				latestConfigOptions = update.ConfigOptions
 				for _, option := range update.ConfigOptions {
 					if option.ID == "model" && option.CurrentValue == targetModel {
 						sawConfigUpdate = true
@@ -2229,13 +2246,85 @@ func TestE2ESessionConfigOptionsModelListAndSwitch(t *testing.T) {
 		if !applied {
 			t.Fatalf("session/set_config_option should apply target model=%q", targetModel)
 		}
+		latestConfigOptions = setResult.ConfigOptions
 		gotSetResp = true
 	}
 	if !sawConfigUpdate {
 		t.Fatalf("session/set_config_option should emit config_options_update")
 	}
 
-	h.sendRequest("4", "session/prompt", map[string]any{
+	updatedThought := sessionConfigOption{}
+	foundUpdatedThought := false
+	for _, option := range latestConfigOptions {
+		if option.ID == "thought_level" {
+			updatedThought = option
+			foundUpdatedThought = true
+			break
+		}
+	}
+	if !foundUpdatedThought {
+		t.Fatalf("config options update should include thought_level after model switch")
+	}
+	targetThought := ""
+	for _, option := range updatedThought.Options {
+		if strings.TrimSpace(option.Value) != "" && option.Value != updatedThought.CurrentValue {
+			targetThought = option.Value
+			break
+		}
+	}
+	if targetThought == "" {
+		targetThought = updatedThought.CurrentValue
+	}
+	if targetThought == "" {
+		t.Fatalf("thought_level should provide a non-empty selectable value")
+	}
+
+	h.sendRequest("4", "session/set_config_option", map[string]any{
+		"sessionId": newResult.SessionID,
+		"configId":  "thought_level",
+		"value":     targetThought,
+	})
+
+	gotThoughtSetResp := false
+	sawThoughtUpdate := false
+	for !gotThoughtSetResp {
+		msg := h.nextMessage(responseTimeout)
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.Type == "config_options_update" {
+				for _, option := range update.ConfigOptions {
+					if option.ID == "thought_level" && option.CurrentValue == targetThought {
+						sawThoughtUpdate = true
+						break
+					}
+				}
+			}
+			continue
+		}
+		if messageID(msg) != "4" {
+			continue
+		}
+		var setResult struct {
+			ConfigOptions []sessionConfigOption `json:"configOptions"`
+		}
+		unmarshalResult(t, msg, &setResult)
+		applied := false
+		for _, option := range setResult.ConfigOptions {
+			if option.ID == "thought_level" && option.CurrentValue == targetThought {
+				applied = true
+				break
+			}
+		}
+		if !applied {
+			t.Fatalf("session/set_config_option should apply thought_level=%q", targetThought)
+		}
+		gotThoughtSetResp = true
+	}
+	if !sawThoughtUpdate {
+		t.Fatalf("session/set_config_option thought_level should emit config_options_update")
+	}
+
+	h.sendRequest("5", "session/prompt", map[string]any{
 		"sessionId": newResult.SessionID,
 		"prompt":    "profile probe",
 	})
@@ -2251,7 +2340,7 @@ func TestE2ESessionConfigOptionsModelListAndSwitch(t *testing.T) {
 			}
 			continue
 		}
-		if messageID(msg) != "4" {
+		if messageID(msg) != "5" {
 			continue
 		}
 		var result struct {
@@ -2265,8 +2354,12 @@ func TestE2ESessionConfigOptionsModelListAndSwitch(t *testing.T) {
 	}
 
 	output := strings.Join(deltas, "\n")
-	if !strings.Contains(strings.ReplaceAll(output, "\n", ""), "model="+targetModel) {
+	flatOutput := strings.ReplaceAll(output, "\n", "")
+	if !strings.Contains(flatOutput, "model="+targetModel) {
 		t.Fatalf("prompt should run with switched model=%q, output=%s", targetModel, output)
+	}
+	if !strings.Contains(flatOutput, "thought="+targetThought) {
+		t.Fatalf("prompt should run with switched thought_level=%q, output=%s", targetThought, output)
 	}
 }
 

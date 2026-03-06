@@ -39,6 +39,7 @@
 - KI-0033：项目重命名后的兼容路径变更（module/import/cmd/npm）
 - KI-0034：`cmd/acp-adapter` 入口已移除（统一为 `cmd/acp`）
 - KI-0035：Claude 模型列表依赖本地配置（非动态探测）
+- KI-0036：`thought_level` 候选值在旧 codex 版本上可能退化为 fallback 列表
 
 ---
 
@@ -438,3 +439,18 @@
   - 通过 profile 配置补充团队标准模型列表，统一客户端展示。
 - 后续计划：
   - 若 Claude CLI 未来提供稳定模型列表接口，切换到动态探测并保留本地配置作为兜底。
+
+## KI-0036：`thought_level` 候选值在旧 codex 版本上可能退化为 fallback 列表
+- 现象：
+  - 新增 `thought_level` 后，adapter 优先使用 `model/list` 返回的 `supportedReasoningEfforts/defaultReasoningEffort` 构建候选值。
+  - 若真实 codex app-server 版本较旧、未返回 reasoning 元数据，adapter 会回退到内置 effort 列表（`none/minimal/low/medium/high/xhigh`）。
+- 影响：
+  - 客户端 UI 仍可展示与切换 `thought_level`，但候选值可能与后端真实支持集不完全一致。
+  - 当用户选择了后端不支持的 effort，可能在真实 turn 执行时收到后端参数错误。
+- 复现：
+  - 连接不含 `supportedReasoningEfforts/defaultReasoningEffort` 的旧版 app-server，执行 `session/new` 并查看 `configOptions` 中的 `thought_level`。
+- Workaround：
+  - 升级本机 codex 到支持 reasoning 元数据的版本。
+  - 在出现后端参数错误时，切回 `medium` 或模型默认 effort 再重试。
+- 后续计划：
+  - 在 adapter 中增加 downstream capability 探测与值白名单回写，进一步减少 fallback 与真实能力不一致的窗口。

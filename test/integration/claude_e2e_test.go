@@ -181,6 +181,8 @@ func TestClaudeE2ESessionConfigOptionsModelListAndSwitch(t *testing.T) {
 		claudeBin,
 		"CLAUDE_MODEL=claude-opus-4-6",
 		"CLAUDE_MODELS=claude-opus-4-6,claude-sonnet-4-5",
+		"CLAUDE_EFFORT=medium",
+		"CLAUDE_EFFORTS=low,medium,high",
 	)
 
 	h.sendRequest("1", "initialize", map[string]any{})
@@ -198,19 +200,31 @@ func TestClaudeE2ESessionConfigOptionsModelListAndSwitch(t *testing.T) {
 	}
 
 	var modelConfig sessionConfigOption
+	var thoughtConfig sessionConfigOption
 	found := false
+	foundThought := false
 	for _, option := range newResult.ConfigOptions {
 		if option.ID == "model" {
 			modelConfig = option
 			found = true
-			break
+			continue
+		}
+		if option.ID == "thought_level" {
+			thoughtConfig = option
+			foundThought = true
 		}
 	}
 	if !found {
 		t.Fatalf("session/new configOptions should include model")
 	}
+	if !foundThought {
+		t.Fatalf("session/new configOptions should include thought_level")
+	}
 	if len(modelConfig.Options) < 2 {
 		t.Fatalf("model options should include configured CLAUDE_MODELS")
+	}
+	if len(thoughtConfig.Options) < 2 {
+		t.Fatalf("thought_level options should include configured CLAUDE_EFFORTS")
 	}
 
 	targetModel := "claude-sonnet-4-5"
@@ -259,7 +273,53 @@ func TestClaudeE2ESessionConfigOptionsModelListAndSwitch(t *testing.T) {
 		t.Fatalf("session/set_config_option should emit config_options_update")
 	}
 
-	h.sendRequest("4", "session/prompt", map[string]any{
+	targetThought := "high"
+	h.sendRequest("4", "session/set_config_option", map[string]any{
+		"sessionId": newResult.SessionID,
+		"configId":  "thought_level",
+		"value":     targetThought,
+	})
+
+	gotThoughtResp := false
+	sawThoughtUpdate := false
+	for !gotThoughtResp {
+		msg := h.nextMessage(responseTimeout)
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.Type == "config_options_update" {
+				for _, option := range update.ConfigOptions {
+					if option.ID == "thought_level" && option.CurrentValue == targetThought {
+						sawThoughtUpdate = true
+						break
+					}
+				}
+			}
+			continue
+		}
+		if messageID(msg) != "4" {
+			continue
+		}
+		var setResult struct {
+			ConfigOptions []sessionConfigOption `json:"configOptions"`
+		}
+		unmarshalResult(t, msg, &setResult)
+		applied := false
+		for _, option := range setResult.ConfigOptions {
+			if option.ID == "thought_level" && option.CurrentValue == targetThought {
+				applied = true
+				break
+			}
+		}
+		if !applied {
+			t.Fatalf("session/set_config_option should apply thought_level=%q", targetThought)
+		}
+		gotThoughtResp = true
+	}
+	if !sawThoughtUpdate {
+		t.Fatalf("session/set_config_option thought_level should emit config_options_update")
+	}
+
+	h.sendRequest("5", "session/prompt", map[string]any{
 		"sessionId": newResult.SessionID,
 		"prompt":    "profile probe",
 	})
@@ -275,7 +335,7 @@ func TestClaudeE2ESessionConfigOptionsModelListAndSwitch(t *testing.T) {
 			}
 			continue
 		}
-		if messageID(msg) != "4" {
+		if messageID(msg) != "5" {
 			continue
 		}
 		var result struct {
@@ -289,8 +349,12 @@ func TestClaudeE2ESessionConfigOptionsModelListAndSwitch(t *testing.T) {
 	}
 
 	output := strings.Join(deltas, "\n")
-	if !strings.Contains(strings.ReplaceAll(output, "\n", ""), "model="+targetModel) {
+	flatOutput := strings.ReplaceAll(output, "\n", "")
+	if !strings.Contains(flatOutput, "model="+targetModel) {
 		t.Fatalf("prompt should run with switched model=%q, output=%s", targetModel, output)
+	}
+	if !strings.Contains(flatOutput, "effort="+targetThought) {
+		t.Fatalf("prompt should run with switched thought_level=%q, output=%s", targetThought, output)
 	}
 }
 

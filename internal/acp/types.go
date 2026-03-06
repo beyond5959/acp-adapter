@@ -115,8 +115,8 @@ type SessionNewResult struct {
 
 // SessionConfig describes one configurable session/runtime option.
 //
-// For model switching, the adapter exposes one config item:
-// id="model", category="model", value=<current model>, options=[...].
+// For runtime switching, the adapter currently exposes:
+// id="model" and id="thought_level".
 type SessionConfig struct {
 	ID           string               `json:"id"`
 	Category     string               `json:"category,omitempty"`
@@ -169,6 +169,7 @@ type SessionCancelParams struct {
 type PromptConfig struct {
 	Profile            string `json:"profile,omitempty"`
 	Model              string `json:"model,omitempty"`
+	ThoughtLevel       string `json:"thoughtLevel,omitempty"`
 	ApprovalPolicy     string `json:"approvalPolicy,omitempty"`
 	Sandbox            string `json:"sandbox,omitempty"`
 	Personality        string `json:"personality,omitempty"`
@@ -178,6 +179,7 @@ type PromptConfig struct {
 // ProfileConfig is one named profile loaded from adapter configuration.
 type ProfileConfig struct {
 	Model              string `json:"model,omitempty"`
+	ThoughtLevel       string `json:"thoughtLevel,omitempty"`
 	ApprovalPolicy     string `json:"approvalPolicy,omitempty"`
 	Sandbox            string `json:"sandbox,omitempty"`
 	Personality        string `json:"personality,omitempty"`
