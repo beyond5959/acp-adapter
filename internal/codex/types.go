@@ -283,6 +283,59 @@ type ApprovalDecisionResult struct {
 	Outcome string `json:"outcome"`
 }
 
+// CommandExecutionRequestApprovalParams are server params for one command approval.
+type CommandExecutionRequestApprovalParams struct {
+	ThreadID               string                  `json:"threadId"`
+	TurnID                 string                  `json:"turnId"`
+	ItemID                 string                  `json:"itemId"`
+	ApprovalID             string                  `json:"approvalId,omitempty"`
+	Command                string                  `json:"command,omitempty"`
+	Reason                 string                  `json:"reason,omitempty"`
+	NetworkApprovalContext *NetworkApprovalContext `json:"networkApprovalContext,omitempty"`
+}
+
+// NetworkApprovalContext carries optional host/protocol hints for network approvals.
+type NetworkApprovalContext struct {
+	Host     string `json:"host"`
+	Protocol string `json:"protocol"`
+}
+
+// FileChangeRequestApprovalParams are server params for one file-change approval.
+type FileChangeRequestApprovalParams struct {
+	ThreadID   string `json:"threadId"`
+	TurnID     string `json:"turnId"`
+	ItemID     string `json:"itemId"`
+	ApprovalID string `json:"approvalId,omitempty"`
+	GrantRoot  string `json:"grantRoot,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+}
+
+// ExecCommandApprovalParams are legacy server params for command approval.
+type ExecCommandApprovalParams struct {
+	ApprovalID     string   `json:"approvalId,omitempty"`
+	CallID         string   `json:"callId"`
+	ConversationID string   `json:"conversationId"`
+	Command        []string `json:"command"`
+	CWD            string   `json:"cwd"`
+	Reason         string   `json:"reason,omitempty"`
+}
+
+// ApplyPatchApprovalParams are legacy server params for patch approval.
+type ApplyPatchApprovalParams struct {
+	ApprovalID     string                     `json:"approvalId,omitempty"`
+	CallID         string                     `json:"callId"`
+	ConversationID string                     `json:"conversationId"`
+	FileChanges    map[string]json.RawMessage `json:"fileChanges"`
+	GrantRoot      string                     `json:"grantRoot,omitempty"`
+	Reason         string                     `json:"reason,omitempty"`
+}
+
+// ChatgptAuthTokensRefreshParams are server params for client-managed token refresh.
+type ChatgptAuthTokensRefreshParams struct {
+	PreviousAccountID string `json:"previousAccountId,omitempty"`
+	Reason            string `json:"reason"`
+}
+
 // MCPServer describes one MCP server capability snapshot.
 type MCPServer struct {
 	Name          string   `json:"name"`
@@ -359,19 +412,26 @@ type TurnEvent struct {
 }
 
 const (
-	methodInitialized   = "initialized"
-	methodThreadStart   = "thread/start"
-	methodThreadCompact = "thread/compact/start"
-	methodTurnStart     = "turn/start"
-	methodReviewStart   = "review/start"
-	methodTurnInterrupt = "turn/interrupt"
-	methodModelList     = "model/list"
-	methodApprovalReq   = "approval/request"
-	methodMCPServerList = "mcpServer/list"
-	methodMCPServerCall = "mcpServer/call"
-	methodMCPOAuthLogin = "mcpServer/oauth/login"
-	methodAuthLogout    = "auth/logout"
-	methodAccountLogout = "account/logout"
+	methodInitialized                         = "initialized"
+	methodThreadStart                         = "thread/start"
+	methodThreadCompact                       = "thread/compact/start"
+	methodTurnStart                           = "turn/start"
+	methodReviewStart                         = "review/start"
+	methodTurnInterrupt                       = "turn/interrupt"
+	methodModelList                           = "model/list"
+	methodApprovalReq                         = "approval/request" // legacy approval request.
+	methodItemCommandExecutionRequestApproval = "item/commandExecution/requestApproval"
+	methodItemFileChangeRequestApproval       = "item/fileChange/requestApproval"
+	methodItemToolRequestUserInput            = "item/tool/requestUserInput"
+	methodItemToolCall                        = "item/tool/call"
+	methodAccountChatgptAuthTokensRefresh     = "account/chatgptAuthTokens/refresh"
+	methodApplyPatchApproval                  = "applyPatchApproval"
+	methodExecCommandApproval                 = "execCommandApproval"
+	methodMCPServerList                       = "mcpServer/list"
+	methodMCPServerCall                       = "mcpServer/call"
+	methodMCPOAuthLogin                       = "mcpServer/oauth/login"
+	methodAuthLogout                          = "auth/logout"
+	methodAccountLogout                       = "account/logout"
 
 	notificationTurnStarted           = "turn/started"
 	notificationTurnUpdate            = "turn/update"

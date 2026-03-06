@@ -33,7 +33,7 @@ const (
 	methodFSWriteTextFile          = "fs/write_text_file"
 	methodFSReadTextFile           = "fs/read_text_file"
 
-	defaultPermissionTimeout = 30 * time.Second
+	defaultPermissionTimeout = 2 * time.Hour
 	defaultFSWriteTimeout    = 10 * time.Second
 	defaultImageSizeLimit    = 4 * 1024 * 1024
 	defaultMentionTextLimit  = 64 * 1024

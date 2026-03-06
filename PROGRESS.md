@@ -6,7 +6,7 @@
 ## 项目概览
 - 项目：acp-adapter（基于 Codex App Server 的 ACP 适配器，同时支持 Claude Code CLI 子进程适配）
 - 当前阶段：Claude Adapter CLI 重构完成（C-R5 内部迭代）
-- 最近更新：2026-03-05
+- 最近更新：2026-03-06
 
 ## 关键链接/文档
 - docs/SPEC.md：技术方案（权威）
@@ -56,6 +56,21 @@
 - [ ] R6 收尾验收
   - 状态：Todo
   - 说明：完成 Library Mode 验收闭环与文档收敛。
+
+## 2026-03-06 增量修复（Codex app-server server-request 兼容）
+- 修复点：
+  - `internal/codex/client` 新增对新版 app-server server request 的兼容：
+    - `item/commandExecution/requestApproval`
+    - `item/fileChange/requestApproval`
+  - 兼容回写审批结果格式：
+    - 新版请求回 `{"decision":"accept|decline|cancel"}`
+    - 旧版 `approval/request` 继续回 `{"outcome":"approved|declined|cancelled"}`
+  - 对当前未实现的 server request（`item/tool/requestUserInput`、`item/tool/call`、`account/chatgptAuthTokens/refresh`、legacy `execCommandApproval`/`applyPatchApproval`）改为显式 fail-closed `-32000`，避免 `-32601 method not found` 误导性错误。
+- 测试与回归：
+  - 新增 `internal/codex/client_server_request_test.go`（请求映射与回写格式单测）。
+  - 新增 `pkg/codexacp/runtime_test.go::TestRunStdio_CommandApprovalRequestCompatibility`（fake app-server 发新版 command approval，验证 ACP permission 闭环）。
+  - 更新 fake app-server：command approval 默认走新版 `item/commandExecution/requestApproval`，其余 approval 路径保持现有行为以保证 review/patch 回归稳定。
+  - 全量通过：`go test ./...`。
 
 ## Claude Adapter Program（C-R0 ~ C-R5）
 - [x] C-R0 文档立项
