@@ -1,6 +1,11 @@
 # ACP adapter for Codex & Claude Code
 
-![acp-adapter promo](docs/assets/acp-adapter.png)
+[![CI](https://github.com/beyond5959/acp-adapter/actions/workflows/go.yml/badge.svg)](https://github.com/beyond5959/acp-adapter/actions)
+[![License](https://img.shields.io/github/license/beyond5959/acp-adapter)](LICENSE)
+[![Go Version](https://img.shields.io/badge/Go-1.24+-blue)](https://go.dev)
+[![Go Report Card](https://goreportcard.com/badge/github.com/beyond5959/acp-adapter)](https://goreportcard.com/report/github.com/beyond5959/acp-adapter)
+
+<img src="docs/assets/acp-adapter.png" alt="acp-adapter promo" width="400">
 
 `acp-adapter` is a Go ACP(Agent Client Protocol) adapter that lets ACP clients drive **Codex** and **Claude Code** over the [ACP protocol](https://agentclientprotocol.com/).
 
