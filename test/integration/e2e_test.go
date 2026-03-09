@@ -55,12 +55,35 @@ type sessionUpdateParams struct {
 	Approval           string                `json:"approval,omitempty"`
 	PermissionDecision string                `json:"permissionDecision,omitempty"`
 	Todo               []todoItem            `json:"todo,omitempty"`
+	Plan               []planEntry           `json:"plan,omitempty"`
 	ConfigOptions      []sessionConfigOption `json:"configOptions,omitempty"`
+	Update             *sessionUpdatePayload `json:"update,omitempty"`
 }
 
 type todoItem struct {
 	Text string `json:"text"`
 	Done bool   `json:"done"`
+}
+
+type planEntry struct {
+	Content  string `json:"content"`
+	Priority string `json:"priority"`
+	Status   string `json:"status"`
+}
+
+type sessionUpdatePayload struct {
+	SessionUpdate string                `json:"sessionUpdate"`
+	Entries       []planEntry           `json:"entries,omitempty"`
+	Content       *sessionUpdateContent `json:"content,omitempty"`
+	ConfigOptions []sessionConfigOption `json:"configOptions,omitempty"`
+	Status        string                `json:"status,omitempty"`
+	Title         string                `json:"title,omitempty"`
+	ToolCallID    string                `json:"toolCallId,omitempty"`
+}
+
+type sessionUpdateContent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
 }
 
 type sessionConfigOption struct {
@@ -1245,6 +1268,148 @@ func TestE2EAcceptanceF1StructuredTODOAcrossTurns(t *testing.T) {
 	}
 	if !todos2[0].Done {
 		t.Fatalf("second todo turn should mark first item done, got %+v", todos2[0])
+	}
+}
+
+func TestE2EACPPlanUpdateMappedFromTurnPlanUpdated(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "generate structured plan for this task",
+	})
+
+	gotPromptResp := false
+	var plans [][]planEntry
+	for !gotPromptResp {
+		msg := h.nextMessage(responseTimeout)
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.Type != "plan" {
+				continue
+			}
+			if update.Update == nil {
+				t.Fatalf("plan update must include standard params.update envelope")
+			}
+			if update.Update.SessionUpdate != "plan" {
+				t.Fatalf("plan update envelope kind=%q, want plan", update.Update.SessionUpdate)
+			}
+			if len(update.Update.Entries) == 0 {
+				t.Fatalf("plan update must include entries")
+			}
+			if len(update.Plan) != len(update.Update.Entries) {
+				t.Fatalf("top-level plan and standard entries length mismatch: %d vs %d", len(update.Plan), len(update.Update.Entries))
+			}
+			plans = append(plans, append([]planEntry(nil), update.Update.Entries...))
+			continue
+		}
+		if messageID(msg) != "3" {
+			continue
+		}
+		var result struct {
+			StopReason string `json:"stopReason"`
+		}
+		unmarshalResult(t, msg, &result)
+		if result.StopReason != "end_turn" {
+			t.Fatalf("plan prompt expected stopReason=end_turn, got %q", result.StopReason)
+		}
+		gotPromptResp = true
+	}
+
+	if len(plans) < 2 {
+		t.Fatalf("expected >=2 plan updates, got %d", len(plans))
+	}
+	first := plans[0]
+	last := plans[len(plans)-1]
+	if len(first) != 2 {
+		t.Fatalf("first plan should contain 2 entries, got %+v", first)
+	}
+	if first[0].Content != "capture requirements" || first[0].Priority != "medium" || first[0].Status != "pending" {
+		t.Fatalf("first plan entry mismatch: %+v", first[0])
+	}
+	if len(last) != 3 {
+		t.Fatalf("last plan should fully replace entries with 3 items, got %+v", last)
+	}
+	if last[0].Status != "completed" {
+		t.Fatalf("expected first last-plan entry completed, got %+v", last[0])
+	}
+	if last[1].Status != "in_progress" {
+		t.Fatalf("expected second last-plan entry in_progress, got %+v", last[1])
+	}
+	if last[2].Content != "run go test ./..." || last[2].Status != "pending" {
+		t.Fatalf("expected final plan entry to be pending test step, got %+v", last[2])
+	}
+}
+
+func TestE2EACPPlanUpdateMappedFromPlanDeltaFallback(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "generate delta plan fallback for this task",
+	})
+
+	gotPromptResp := false
+	var plans [][]planEntry
+	for !gotPromptResp {
+		msg := h.nextMessage(responseTimeout)
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.Type != "plan" || update.Update == nil || update.Update.SessionUpdate != "plan" {
+				continue
+			}
+			plans = append(plans, append([]planEntry(nil), update.Update.Entries...))
+			continue
+		}
+		if messageID(msg) != "3" {
+			continue
+		}
+		var result struct {
+			StopReason string `json:"stopReason"`
+		}
+		unmarshalResult(t, msg, &result)
+		if result.StopReason != "end_turn" {
+			t.Fatalf("delta plan prompt expected stopReason=end_turn, got %q", result.StopReason)
+		}
+		gotPromptResp = true
+	}
+
+	if len(plans) < 4 {
+		t.Fatalf("expected streamed fallback plan updates from item/plan/delta, got %d", len(plans))
+	}
+	first := plans[0]
+	if len(first) != 1 || first[0].Content != "capture" {
+		t.Fatalf("first fallback plan update should expose delta content, got %+v", first)
+	}
+	last := plans[len(plans)-1]
+	if len(last) != 2 {
+		t.Fatalf("final fallback plan should contain 2 entries, got %+v", last)
+	}
+	if last[0].Content != "capture requirements" || last[0].Status != "pending" || last[0].Priority != "medium" {
+		t.Fatalf("first final fallback plan entry mismatch: %+v", last[0])
+	}
+	if last[1].Content != "implement mapping" || last[1].Status != "pending" || last[1].Priority != "medium" {
+		t.Fatalf("second final fallback plan entry mismatch: %+v", last[1])
 	}
 }
 

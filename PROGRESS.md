@@ -6,7 +6,7 @@
 ## 项目概览
 - 项目：acp-adapter（基于 Codex App Server 的 ACP 适配器，同时支持 Claude Code CLI 子进程适配）
 - 当前阶段：Claude Adapter CLI 重构完成（C-R5 内部迭代）
-- 最近更新：2026-03-06
+- 最近更新：2026-03-09
 
 ## 关键链接/文档
 - docs/SPEC.md：技术方案（权威）
@@ -71,6 +71,18 @@
   - 新增 `pkg/codexacp/runtime_test.go::TestRunStdio_CommandApprovalRequestCompatibility`（fake app-server 发新版 command approval，验证 ACP permission 闭环）。
   - 更新 fake app-server：command approval 默认走新版 `item/commandExecution/requestApproval`，其余 approval 路径保持现有行为以保证 review/patch 回归稳定。
   - 全量通过：`go test ./...`。
+
+## 2026-03-09 增量修复（ACP agent-plan 映射）
+- 修复点：
+  - 新增 Codex app-server `turn/plan/updated` -> ACP `session/update` 标准 `update.sessionUpdate="plan"` 映射。
+  - `session/update` 新增 plan entries 输出；每次计划更新都按 ACP 语义发送完整 entries 列表，供客户端整体替换当前 plan。
+  - app-server `inProgress` 状态统一映射为 ACP `in_progress`；由于下游计划项无优先级字段，当前固定回填 `priority=medium`。
+  - 新增 `item/plan/delta` fallback 桥接：当下游未发送 `turn/plan/updated` 时，适配器使用 plan item delta 流与 `item/completed(type=plan)` 文本生成草稿/完成态 ACP `plan` update。
+- 测试与回归：
+  - 新增 `TestE2EACPPlanUpdateMappedFromTurnPlanUpdated`，覆盖 fake app-server 发两次 `turn/plan/updated` 时 ACP plan 全量替换语义。
+  - 新增 `TestE2EACPPlanUpdateMappedFromPlanDeltaFallback`，覆盖仅有 `item/plan/delta + item/completed(plan)` 时的 fallback plan streaming。
+  - 新增 `TestBuildSessionUpdatePayloadPlan`，覆盖 `session/update` 标准 envelope 序列化。
+  - fake app-server 新增 structured plan 场景，便于回归 `turn/plan/updated` 桥接。
 
 ## Claude Adapter Program（C-R0 ~ C-R5）
 - [x] C-R0 文档立项
@@ -237,6 +249,9 @@
 17. `test/integration`：新增 codex/claude 的模型列表与模型切换 e2e 覆盖。
 18. `testdata/fake_codex_app_server` / `testdata/fake_claude_cli`：新增模型列表与模型探针回显，支持回归测试。
 19. `internal/acp` / `internal/codex` / `internal/claude` / `cmd/acp`：新增 thought_level 配置链路（reasoning 列表展示 + effort 切换落地）。
+20. `internal/codex` / `internal/acp`：新增 `turn/plan/updated` -> ACP `plan` session/update 标准映射。
+21. `testdata/fake_codex_app_server` / `test/integration`：新增 structured plan 测试场景与端到端回归。
+22. `internal/codex` / `internal/acp`：新增 `item/plan/delta` + `item/completed(plan)` fallback plan 桥接。
 
 ## 如何验证
 1. 执行：

@@ -41,6 +41,8 @@
 - KI-0035：Claude 模型列表依赖本地配置（非动态探测）
 - KI-0036：`thought_level` 候选值在旧 codex 版本上可能退化为 fallback 列表
 - KI-0037：部分新版 app-server server request 仍未桥接（显式 `-32000` fail-closed）
+- KI-0038：`item/tool/requestUserInput` 目前为兼容自动选项，不是完整交互输入
+- KI-0039：ACP `agent-plan` 仍依赖 `turn/plan/updated`，且 priority 只能启发式回填
 
 ---
 
@@ -221,13 +223,14 @@
 ## KI-0019：TODO 结构化仅覆盖 markdown checklist 形态
 - 现象：当前 TODO 结构化解析依赖 `- [ ]` / `- [x]`（含数字序号变体）markdown checklist。
 - 影响：
-  - 模型若返回自然语言计划、表格或其它格式，不会填充 `session/update.todo`，仅保留原文 delta。
+  - 模型若返回自然语言 checklist、表格或其它非 markdown checklist 形态，不会填充 `session/update.todo`，仅保留原文 delta。
+  - 新增的 ACP `plan` update 与旧 `todo` 字段是两条独立链路；未消费 `plan` 的旧客户端仍只看到 checklist TODO。
 - 复现：
   - 让模型输出“Step 1/Step 2”但不使用 checklist 语法。
 - Workaround：
   - 在提示词中显式要求 markdown checklist 输出。
 - 后续计划：
-  - 评估接入 app-server 原生 plan/todo 事件（若可用）并扩展多格式解析器。
+  - 扩展 TODO 多格式解析器，并评估在 plan update 到达时是否同步生成更丰富的 TODO 视图。
 
 ## KI-0020：go module 路径与仓库地址不一致会导致外部安装失败
 - 现象：
@@ -275,15 +278,15 @@
 ## KI-0021：`session/update` 的标准 `update.sessionUpdate` 在低频事件上仍是回退语义
 - 现象：
   - 适配器已支持“扁平字段 + 标准 envelope”双输出，并保证每条 `session/update` 都带 `update.sessionUpdate`。
-  - 对非 message/tool 的低频更新，当前用 `agent_thought_chunk` 文本回退承载，尚未做细粒度类型映射。
+  - 已补齐 `plan` 标准映射，但对部分非 message/tool 的低频更新，当前仍用 `agent_thought_chunk` 文本回退承载。
 - 影响：
-  - 严格 ACP 客户端可稳定反序列化，但在 plan/thought/模式切换等低频更新上可能出现“语义被弱化”的展示差异。
+  - 严格 ACP 客户端可稳定反序列化，但在 thought/模式切换等低频更新上仍可能出现“语义被弱化”的展示差异。
 - 复现：
   - 使用仅消费 `params.update.sessionUpdate` 的 ACP client，观察非 message/tool 的 session/update 呈现为通用 thought chunk。
 - Workaround：
   - 客户端同时消费扁平字段（`type/status/delta/message/...`）与标准 envelope，以保留更多语义。
 - 后续计划：
-  - 扩展标准映射覆盖：plan、thought、mode/model update、permission/tool 生命周期等，减少通用回退路径。
+  - 继续扩展标准映射覆盖：thought、mode/model update、permission/tool 生命周期等，减少通用回退路径。
 
 ## KI-0022：并发请求下 `authenticate` 与后续请求存在时序依赖
 - 现象：
@@ -491,3 +494,20 @@
   - 对关键操作，使用原生 codex app 交互界面执行。
 - 后续计划：
   - 在 ACP/hub 侧补齐通用 user-input 请求桥接与 UI 交互闭环。
+
+## KI-0039：ACP `agent-plan` 仍依赖 `turn/plan/updated`，且 priority 只能启发式回填
+- 现象：
+  - 当前 adapter 已把 codex app-server `turn/plan/updated` 映射为 ACP `session/update(plan)`，并新增 `item/plan/delta + item/completed(plan)` 的 fallback 桥接。
+  - 但下游 schema 未提供 priority 字段，adapter 只能固定回填 `priority=medium`。
+  - fallback delta 路径缺少结构化 step status，adapter 只能保守回填 `status=pending`。
+- 影响：
+  - ACP client 已可消费标准 `plan` entries，但无法区分高/中/低优先级。
+  - 在仅靠 delta fallback 的版本上，客户端能看到计划文本流，但无法反映真实 completed/in_progress 状态。
+- 复现：
+  - 连接只发 `item/plan/delta` 不发 `turn/plan/updated`，或对 priority / status 有更细粒度需求的 app-server/client 组合。
+- Workaround：
+  - 优先使用会发 `turn/plan/updated` 的 codex app-server 版本，以获得真实 step status。
+  - 客户端若需要优先级差异，可暂时结合普通文本说明做展示降级。
+- 后续计划：
+  - 若下游后续补充 priority 元数据，再升级 ACP plan 映射以透传真实优先级。
+  - 若下游后续为 delta/item-completed 提供结构化状态，再升级 fallback 路径以透传真实状态。

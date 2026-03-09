@@ -460,6 +460,52 @@ func (s *fakeServer) runTurn(
 		)
 	}
 
+	if strings.Contains(lowerInput, "delta plan fallback") {
+		planItemOne := fmt.Sprintf("plan-item-1-%s", turnID)
+		planItemTwo := fmt.Sprintf("plan-item-2-%s", turnID)
+
+		s.writePlanItemStarted(threadID, turnID, planItemOne)
+		s.writePlanDelta(threadID, turnID, planItemOne, "capture ")
+		s.writePlanDelta(threadID, turnID, planItemOne, "requirements")
+		s.writePlanItemCompleted(threadID, turnID, planItemOne, "capture requirements")
+
+		s.writePlanItemStarted(threadID, turnID, planItemTwo)
+		s.writePlanDelta(threadID, turnID, planItemTwo, "implement ")
+		s.writePlanDelta(threadID, turnID, planItemTwo, "mapping")
+		s.writePlanItemCompleted(threadID, turnID, planItemTwo, "implement mapping")
+
+		s.writeAgentMessageDelta(threadID, turnID, itemID, "plan via delta ready")
+		s.writeItemCompleted(threadID, turnID, itemID, "agent_message")
+		s.writeTurnCompleted(threadID, turnID, "end_turn")
+		return
+	}
+
+	if strings.Contains(lowerInput, "structured plan") {
+		s.writeTurnPlanUpdated(
+			threadID,
+			turnID,
+			"break the work into ordered steps before editing",
+			[]codex.TurnPlanStep{
+				{Step: "capture requirements", Status: "pending"},
+				{Step: "implement mapping", Status: "pending"},
+			},
+		)
+		s.writeTurnPlanUpdated(
+			threadID,
+			turnID,
+			"start implementation after requirements are locked",
+			[]codex.TurnPlanStep{
+				{Step: "capture requirements", Status: "completed"},
+				{Step: "implement mapping", Status: "inProgress"},
+				{Step: "run go test ./...", Status: "pending"},
+			},
+		)
+		s.writeAgentMessageDelta(threadID, turnID, itemID, "plan ready")
+		s.writeItemCompleted(threadID, turnID, itemID, "agent_message")
+		s.writeTurnCompleted(threadID, turnID, "end_turn")
+		return
+	}
+
 	if strings.Contains(lowerInput, "todo") {
 		checklist := "\n- [ ] capture requirements\n- [ ] implement mapping\n"
 		if strings.Contains(lowerInput, "continue") ||
@@ -657,6 +703,15 @@ func (s *fakeServer) writeAgentMessageDelta(threadID, turnID, itemID, delta stri
 	})
 }
 
+func (s *fakeServer) writePlanDelta(threadID, turnID, itemID, delta string) {
+	s.writeNotification("item/plan/delta", codex.PlanDeltaNotification{
+		ThreadID: threadID,
+		TurnID:   turnID,
+		ItemID:   itemID,
+		Delta:    delta,
+	})
+}
+
 func (s *fakeServer) writeItemStarted(threadID, turnID, itemID, itemType string) {
 	s.writeNotification("item/started", codex.ItemStartedNotification{
 		ThreadID: threadID,
@@ -666,12 +721,39 @@ func (s *fakeServer) writeItemStarted(threadID, turnID, itemID, itemType string)
 	})
 }
 
+func (s *fakeServer) writePlanItemStarted(threadID, turnID, itemID string) {
+	s.writeNotification("item/started", codex.ItemStartedNotification{
+		ThreadID: threadID,
+		TurnID:   turnID,
+		ItemID:   itemID,
+		ItemType: "plan",
+		Item: &codex.ThreadItemRef{
+			ID:   itemID,
+			Type: "plan",
+		},
+	})
+}
+
 func (s *fakeServer) writeItemCompleted(threadID, turnID, itemID, itemType string) {
 	s.writeNotification("item/completed", codex.ItemCompletedNotification{
 		ThreadID: threadID,
 		TurnID:   turnID,
 		ItemID:   itemID,
 		ItemType: itemType,
+	})
+}
+
+func (s *fakeServer) writePlanItemCompleted(threadID, turnID, itemID, text string) {
+	s.writeNotification("item/completed", codex.ItemCompletedNotification{
+		ThreadID: threadID,
+		TurnID:   turnID,
+		ItemID:   itemID,
+		ItemType: "plan",
+		Item: &codex.ThreadItemRef{
+			ID:   itemID,
+			Type: "plan",
+			Text: text,
+		},
 	})
 }
 
@@ -694,6 +776,20 @@ func (s *fakeServer) writeReviewModeExited(threadID, turnID string) {
 	s.writeNotification("review/mode_exited", codex.ReviewModeNotification{
 		ThreadID: threadID,
 		TurnID:   turnID,
+	})
+}
+
+func (s *fakeServer) writeTurnPlanUpdated(
+	threadID string,
+	turnID string,
+	explanation string,
+	plan []codex.TurnPlanStep,
+) {
+	s.writeNotification("turn/plan/updated", codex.TurnPlanUpdatedNotification{
+		ThreadID:    threadID,
+		TurnID:      turnID,
+		Explanation: explanation,
+		Plan:        plan,
 	})
 }
 

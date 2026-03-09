@@ -758,6 +758,20 @@ func (c *Client) handleNotification(msg RPCMessage) {
 			TurnID:   note.TurnID,
 			ItemID:   itemID,
 			ItemType: itemType,
+			ItemText: itemText(note.Item),
+		}, false)
+	case notificationItemPlanDelta:
+		var note PlanDeltaNotification
+		if err := json.Unmarshal(msg.Params, &note); err != nil {
+			c.logger.Warn("ignore malformed item/plan/delta", slog.String("error", err.Error()))
+			return
+		}
+		c.pushTurnEvent(note.TurnID, TurnEvent{
+			Type:     TurnEventTypePlanDelta,
+			ThreadID: note.ThreadID,
+			TurnID:   note.TurnID,
+			ItemID:   note.ItemID,
+			Delta:    note.Delta,
 		}, false)
 	case notificationItemCompleted:
 		var note ItemCompletedNotification
@@ -781,6 +795,7 @@ func (c *Client) handleNotification(msg RPCMessage) {
 			TurnID:   note.TurnID,
 			ItemID:   itemID,
 			ItemType: itemType,
+			ItemText: itemText(note.Item),
 		}, false)
 	case notificationTurnCompleted:
 		var note TurnCompletedNotification
@@ -821,9 +836,36 @@ func (c *Client) handleNotification(msg RPCMessage) {
 			ThreadID: note.ThreadID,
 			TurnID:   note.TurnID,
 		}, false)
+	case notificationTurnPlanUpdated:
+		var note TurnPlanUpdatedNotification
+		if err := json.Unmarshal(msg.Params, &note); err != nil {
+			c.logger.Warn("ignore malformed turn/plan/updated", slog.String("error", err.Error()))
+			return
+		}
+		plan := make([]TurnPlanStep, 0, len(note.Plan))
+		for _, step := range note.Plan {
+			plan = append(plan, TurnPlanStep{
+				Status: strings.TrimSpace(step.Status),
+				Step:   strings.TrimSpace(step.Step),
+			})
+		}
+		c.pushTurnEvent(note.TurnID, TurnEvent{
+			Type:     TurnEventTypePlanUpdated,
+			ThreadID: note.ThreadID,
+			TurnID:   note.TurnID,
+			Message:  strings.TrimSpace(note.Explanation),
+			Plan:     plan,
+		}, false)
 	default:
 		// Ignore notifications not used by the adapter.
 	}
+}
+
+func itemText(item *ThreadItemRef) string {
+	if item == nil {
+		return ""
+	}
+	return strings.TrimSpace(item.Text)
 }
 
 func effectiveTurnID(turnID string, turn *TurnRef) string {

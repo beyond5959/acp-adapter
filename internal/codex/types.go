@@ -231,12 +231,35 @@ type TurnRef struct {
 type ThreadItemRef struct {
 	ID   string `json:"id,omitempty"`
 	Type string `json:"type,omitempty"`
+	Text string `json:"text,omitempty"`
 }
 
 // ReviewModeNotification indicates review mode lifecycle transitions.
 type ReviewModeNotification struct {
 	ThreadID string `json:"threadId"`
 	TurnID   string `json:"turnId"`
+}
+
+// PlanDeltaNotification carries streamed text for one plan item.
+type PlanDeltaNotification struct {
+	ThreadID string `json:"threadId"`
+	TurnID   string `json:"turnId"`
+	ItemID   string `json:"itemId"`
+	Delta    string `json:"delta"`
+}
+
+// TurnPlanUpdatedNotification carries the latest full turn plan snapshot.
+type TurnPlanUpdatedNotification struct {
+	ThreadID    string         `json:"threadId"`
+	TurnID      string         `json:"turnId"`
+	Explanation string         `json:"explanation,omitempty"`
+	Plan        []TurnPlanStep `json:"plan"`
+}
+
+// TurnPlanStep is one app-server plan step entry.
+type TurnPlanStep struct {
+	Status string `json:"status"`
+	Step   string `json:"step"`
 }
 
 // ApprovalKind describes which side-effect type requires permission.
@@ -452,6 +475,10 @@ const (
 	TurnEventTypeReviewModeEntered TurnEventType = "review_mode_entered"
 	// TurnEventTypeReviewModeExited indicates review mode exited.
 	TurnEventTypeReviewModeExited TurnEventType = "review_mode_exited"
+	// TurnEventTypePlanDelta indicates downstream streamed one plan item delta.
+	TurnEventTypePlanDelta TurnEventType = "plan_delta"
+	// TurnEventTypePlanUpdated indicates the downstream plan snapshot changed.
+	TurnEventTypePlanUpdated TurnEventType = "plan_updated"
 )
 
 // TurnEvent is emitted to ACP session/prompt handler.
@@ -461,10 +488,12 @@ type TurnEvent struct {
 	TurnID     string
 	ItemID     string
 	ItemType   string
+	ItemText   string
 	Delta      string
 	StopReason string
 	Message    string
 	Approval   ApprovalRequest
+	Plan       []TurnPlanStep
 }
 
 const (
@@ -494,7 +523,9 @@ const (
 	notificationItemStarted           = "item/started"
 	notificationItemCompleted         = "item/completed"
 	notificationItemAgentMessageDelta = "item/agentMessage/delta"
+	notificationItemPlanDelta         = "item/plan/delta"
 	notificationTurnCompleted         = "turn/completed"
 	notificationReviewModeEntered     = "review/mode_entered"
 	notificationReviewModeExited      = "review/mode_exited"
+	notificationTurnPlanUpdated       = "turn/plan/updated"
 )

@@ -42,6 +42,8 @@
 - ADR-0036：Session Config Options（model 列表 + `session/set_config_option`）
 - ADR-0037：Session Config Options 扩展（`thought_level` + downstream effort 映射）
 - ADR-0038：Codex app-server server-request 兼容（新版 approval 方法与 fail-closed 回退）
+- ADR-0039：Tool server-request 兼容回包（`requestUserInput`/`tool/call`）
+- ADR-0040：ACP `agent-plan` 映射（`turn/plan/updated` -> `session/update(plan)`）
 
 ---
 
@@ -919,4 +921,37 @@
   - `internal/codex/types.go`
   - `internal/codex/client.go`
 - 验证方式（测试/验收项）：
+  - `go test ./...`
+
+### ADR-0040：ACP `agent-plan` 映射（`turn/plan/updated` -> `session/update(plan)`）
+- 日期：2026-03-09
+- 状态：Accepted
+- 背景：
+  - ACP `agent-plan` 要求 agent 通过 `session/update` 发送 `update.sessionUpdate="plan"`，并在每次更新时提供完整 `entries` 列表。
+  - codex app-server schema 已提供 `turn/plan/updated`（完整 plan 快照）与 `item/plan/delta`（实验性增量文本），现有 adapter 尚未桥接，客户端只能看到弱化后的 thought/message。
+- 决策：
+  - 采用 `turn/plan/updated` 作为唯一权威来源，直接映射为 ACP 标准 `plan` update。
+  - 每次收到 `turn/plan/updated` 时，输出完整 `entries`，由客户端整体替换当前 plan。
+  - 状态映射：`pending -> pending`，`completed -> completed`，`inProgress -> in_progress`。
+  - 由于下游 schema 不含优先级字段，当前固定回填 `priority=medium`。
+  - `item/plan/delta` 作为 fallback 输入源：仅当当前 turn 尚未收到 `turn/plan/updated` 时，适配器才用它生成草稿 `plan` updates。
+  - `item/completed(type=plan)` 的 `item.text` 作为该 plan item 的权威文本，用于覆盖同 item 的增量拼接结果。
+- 备选方案：
+  - 方案A：继续仅依赖 markdown checklist 解析（拒绝，无法满足 ACP `agent-plan` 标准）。
+  - 方案B：把 `item/plan/delta` 逐段拼接成计划（拒绝，schema 明确说明其非权威）。
+  - 方案C：以 `turn/plan/updated` 为标准 plan 来源，并在无快照时再用 delta/completed item 做 fallback。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：直接对齐 ACP 标准语义；客户端可渲染真实计划状态；不再把 plan 弱化为通用 thought chunk；delta-only 版本也能得到基础 plan 展示。
+  - Cons：priority 只能启发式回填；fallback delta 路径缺少结构化状态，只能保守标成 `pending`。
+- 影响范围（文件/模块）：
+  - `internal/codex/types.go`
+  - `internal/codex/client.go`
+  - `internal/acp/types.go`
+  - `internal/acp/server.go`
+  - `testdata/fake_codex_app_server/main.go`
+  - `test/integration/e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `TestE2EACPPlanUpdateMappedFromTurnPlanUpdated`
+  - `TestE2EACPPlanUpdateMappedFromPlanDeltaFallback`
+  - `TestBuildSessionUpdatePayloadPlan`
   - `go test ./...`
