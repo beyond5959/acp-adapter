@@ -100,11 +100,14 @@ type adapterCapabilities struct {
 }
 
 type turnLifecycle struct {
-	sessionID       string
-	turnID          string
-	phase           turnPhase
-	cancelRequested bool
-	messageBuffer   strings.Builder
+	sessionID             string
+	turnID                string
+	phase                 turnPhase
+	cancelRequested       bool
+	messageBuffer         strings.Builder
+	hasAuthoritativePlan  bool
+	fallbackPlanItemOrder []string
+	fallbackPlanItemText  map[string]string
 }
 
 type runtimeOptions struct {
@@ -1051,6 +1054,9 @@ func buildSessionUpdatePayload(update SessionUpdateParams) map[string]any {
 	if len(update.Todo) > 0 {
 		payload["todo"] = update.Todo
 	}
+	if update.Type == "plan" || len(update.Plan) > 0 {
+		payload["plan"] = clonePlanEntriesOrEmpty(update.Plan)
+	}
 	if len(update.ConfigOptions) > 0 {
 		payload["configOptions"] = update.ConfigOptions
 	}
@@ -1094,6 +1100,11 @@ func mapACPUpdateForClient(update SessionUpdateParams) map[string]any {
 			mapped["configOptions"] = update.ConfigOptions
 		}
 		return mapped
+	case "plan":
+		return map[string]any{
+			"sessionUpdate": "plan",
+			"entries":       clonePlanEntriesOrEmpty(update.Plan),
+		}
 	default:
 		text := strings.TrimSpace(update.Delta)
 		if text == "" {
@@ -1878,6 +1889,111 @@ func cloneTodoItems(items []TodoItem) []TodoItem {
 	cp := make([]TodoItem, len(items))
 	copy(cp, items)
 	return cp
+}
+
+func clonePlanEntries(entries []PlanEntry) []PlanEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	cp := make([]PlanEntry, len(entries))
+	copy(cp, entries)
+	return cp
+}
+
+func clonePlanEntriesOrEmpty(entries []PlanEntry) []PlanEntry {
+	if len(entries) == 0 {
+		return []PlanEntry{}
+	}
+	return clonePlanEntries(entries)
+}
+
+func planEntriesFromTurnPlan(steps []codex.TurnPlanStep) []PlanEntry {
+	entries := make([]PlanEntry, 0, len(steps))
+	for _, step := range steps {
+		content := strings.TrimSpace(step.Step)
+		if content == "" {
+			continue
+		}
+		entries = append(entries, PlanEntry{
+			Content:  content,
+			Priority: "medium",
+			Status:   normalizeACPPlanStatus(step.Status),
+		})
+	}
+	if len(entries) == 0 {
+		return []PlanEntry{}
+	}
+	return entries
+}
+
+func normalizeACPPlanStatus(status string) string {
+	switch strings.TrimSpace(status) {
+	case "completed":
+		return "completed"
+	case "inProgress", "in_progress":
+		return "in_progress"
+	default:
+		return "pending"
+	}
+}
+
+func isPlanItemType(itemType string) bool {
+	return strings.EqualFold(strings.TrimSpace(itemType), "plan")
+}
+
+func (t *turnLifecycle) rememberFallbackPlanItem(itemID string) {
+	itemID = strings.TrimSpace(itemID)
+	if itemID == "" {
+		return
+	}
+	if t.fallbackPlanItemText == nil {
+		t.fallbackPlanItemText = make(map[string]string)
+	}
+	if _, ok := t.fallbackPlanItemText[itemID]; ok {
+		return
+	}
+	t.fallbackPlanItemText[itemID] = ""
+	t.fallbackPlanItemOrder = append(t.fallbackPlanItemOrder, itemID)
+}
+
+func (t *turnLifecycle) appendFallbackPlanDelta(itemID string, delta string) {
+	itemID = strings.TrimSpace(itemID)
+	if itemID == "" || delta == "" {
+		return
+	}
+	t.rememberFallbackPlanItem(itemID)
+	t.fallbackPlanItemText[itemID] += delta
+}
+
+func (t *turnLifecycle) setFallbackPlanText(itemID string, text string) {
+	itemID = strings.TrimSpace(itemID)
+	if itemID == "" {
+		return
+	}
+	t.rememberFallbackPlanItem(itemID)
+	t.fallbackPlanItemText[itemID] = text
+}
+
+func (t *turnLifecycle) fallbackPlanEntries() []PlanEntry {
+	if len(t.fallbackPlanItemOrder) == 0 {
+		return nil
+	}
+	entries := make([]PlanEntry, 0, len(t.fallbackPlanItemOrder))
+	for _, itemID := range t.fallbackPlanItemOrder {
+		content := strings.TrimSpace(t.fallbackPlanItemText[itemID])
+		if content == "" {
+			continue
+		}
+		entries = append(entries, PlanEntry{
+			Content:  content,
+			Priority: "medium",
+			Status:   "pending",
+		})
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	return entries
 }
 
 func (s *Server) attachSessionTodos(update SessionUpdateParams) SessionUpdateParams {
@@ -2854,8 +2970,68 @@ func (t *turnLifecycle) apply(event codex.TurnEvent) ([]SessionUpdateParams, boo
 			update.Todo = todos
 		}
 		return []SessionUpdateParams{update}, false, ""
+	case codex.TurnEventTypePlanUpdated:
+		t.phase = turnPhaseStreaming
+		t.hasAuthoritativePlan = true
+		return []SessionUpdateParams{
+			{
+				SessionID: t.sessionID,
+				TurnID:    t.turnID,
+				Type:      "plan",
+				Phase:     string(t.phase),
+				Message:   event.Message,
+				Plan:      planEntriesFromTurnPlan(event.Plan),
+			},
+		}, false, ""
+	case codex.TurnEventTypePlanDelta:
+		t.phase = turnPhaseStreaming
+		t.appendFallbackPlanDelta(event.ItemID, event.Delta)
+		if t.hasAuthoritativePlan {
+			return nil, false, ""
+		}
+		entries := t.fallbackPlanEntries()
+		if len(entries) == 0 {
+			return nil, false, ""
+		}
+		return []SessionUpdateParams{
+			{
+				SessionID: t.sessionID,
+				TurnID:    t.turnID,
+				Type:      "plan",
+				Phase:     string(t.phase),
+				ItemID:    event.ItemID,
+				Plan:      entries,
+			},
+		}, false, ""
 	case codex.TurnEventTypeItemStarted:
 		t.phase = turnPhaseStreaming
+		if isPlanItemType(event.ItemType) {
+			t.rememberFallbackPlanItem(event.ItemID)
+			if !t.hasAuthoritativePlan && strings.TrimSpace(event.ItemText) != "" {
+				t.setFallbackPlanText(event.ItemID, strings.TrimSpace(event.ItemText))
+				if entries := t.fallbackPlanEntries(); len(entries) > 0 {
+					return []SessionUpdateParams{
+						{
+							SessionID: t.sessionID,
+							TurnID:    t.turnID,
+							Type:      "plan",
+							Phase:     string(t.phase),
+							ItemID:    event.ItemID,
+							Plan:      entries,
+						},
+						{
+							SessionID: t.sessionID,
+							TurnID:    t.turnID,
+							Type:      "status",
+							Phase:     string(t.phase),
+							ItemID:    event.ItemID,
+							ItemType:  event.ItemType,
+							Status:    "item_started",
+						},
+					}, false, ""
+				}
+			}
+		}
 		return []SessionUpdateParams{
 			{
 				SessionID: t.sessionID,
@@ -2869,16 +3045,38 @@ func (t *turnLifecycle) apply(event codex.TurnEvent) ([]SessionUpdateParams, boo
 		}, false, ""
 	case codex.TurnEventTypeItemCompleted:
 		t.phase = turnPhaseStreaming
+		statusUpdate := SessionUpdateParams{
+			SessionID: t.sessionID,
+			TurnID:    t.turnID,
+			Type:      "status",
+			Phase:     string(t.phase),
+			ItemID:    event.ItemID,
+			ItemType:  event.ItemType,
+			Status:    "item_completed",
+		}
+		if isPlanItemType(event.ItemType) {
+			text := strings.TrimSpace(event.ItemText)
+			if text != "" {
+				t.setFallbackPlanText(event.ItemID, text)
+			}
+			if !t.hasAuthoritativePlan {
+				if entries := t.fallbackPlanEntries(); len(entries) > 0 {
+					return []SessionUpdateParams{
+						{
+							SessionID: t.sessionID,
+							TurnID:    t.turnID,
+							Type:      "plan",
+							Phase:     string(t.phase),
+							ItemID:    event.ItemID,
+							Plan:      entries,
+						},
+						statusUpdate,
+					}, false, ""
+				}
+			}
+		}
 		return []SessionUpdateParams{
-			{
-				SessionID: t.sessionID,
-				TurnID:    t.turnID,
-				Type:      "status",
-				Phase:     string(t.phase),
-				ItemID:    event.ItemID,
-				ItemType:  event.ItemType,
-				Status:    "item_completed",
-			},
+			statusUpdate,
 		}, false, ""
 	case codex.TurnEventTypeReviewModeEntered:
 		t.phase = turnPhaseStreaming

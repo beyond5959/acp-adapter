@@ -131,6 +131,45 @@ func TestServerStdioBaselineInitializeNewPrompt(t *testing.T) {
 	}
 }
 
+func TestBuildSessionUpdatePayloadPlan(t *testing.T) {
+	t.Parallel()
+
+	payload := buildSessionUpdatePayload(SessionUpdateParams{
+		SessionID: "session-1",
+		TurnID:    "turn-1",
+		Type:      "plan",
+		Plan: []PlanEntry{
+			{
+				Content:  "capture requirements",
+				Priority: "medium",
+				Status:   "pending",
+			},
+		},
+	})
+
+	update, ok := payload["update"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload missing update envelope: %+v", payload)
+	}
+	if got, _ := update["sessionUpdate"].(string); got != "plan" {
+		t.Fatalf("update.sessionUpdate=%q, want plan", got)
+	}
+	entries, ok := update["entries"].([]PlanEntry)
+	if !ok {
+		t.Fatalf("update.entries has unexpected type %T", update["entries"])
+	}
+	if len(entries) != 1 || entries[0].Content != "capture requirements" {
+		t.Fatalf("update.entries mismatch: %+v", entries)
+	}
+	topLevel, ok := payload["plan"].([]PlanEntry)
+	if !ok {
+		t.Fatalf("payload.plan has unexpected type %T", payload["plan"])
+	}
+	if len(topLevel) != 1 || topLevel[0].Status != "pending" {
+		t.Fatalf("payload.plan mismatch: %+v", topLevel)
+	}
+}
+
 type stdioMockAppClient struct{}
 
 func (m *stdioMockAppClient) ThreadStart(ctx context.Context, cwd string, options codex.RunOptions) (string, error) {

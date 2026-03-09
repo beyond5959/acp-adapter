@@ -250,6 +250,13 @@ type TodoItem struct {
 	Done bool   `json:"done"`
 }
 
+// PlanEntry is one ACP agent-plan entry.
+type PlanEntry struct {
+	Content  string `json:"content"`
+	Priority string `json:"priority"`
+	Status   string `json:"status"`
+}
+
 // SessionUpdateParams is emitted via session/update notification.
 type SessionUpdateParams struct {
 	SessionID          string          `json:"sessionId"`
@@ -265,5 +272,6 @@ type SessionUpdateParams struct {
 	Approval           string          `json:"approval,omitempty"`
 	PermissionDecision string          `json:"permissionDecision,omitempty"`
 	Todo               []TodoItem      `json:"todo,omitempty"`
+	Plan               []PlanEntry     `json:"plan,omitempty"`
 	ConfigOptions      []SessionConfig `json:"configOptions,omitempty"`
 }
