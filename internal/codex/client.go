@@ -86,6 +86,28 @@ func (c *Client) ThreadsList(ctx context.Context, params ThreadListParams) (Thre
 	return result, nil
 }
 
+// ThreadResume loads one persisted thread into memory.
+func (c *Client) ThreadResume(
+	ctx context.Context,
+	threadID string,
+	cwd string,
+	options RunOptions,
+) (ThreadResumeResult, error) {
+	params := ThreadResumeParams{
+		ThreadID:       threadID,
+		CWD:            cwd,
+		Model:          options.Model,
+		ApprovalPolicy: options.ApprovalPolicy,
+		Sandbox:        options.Sandbox,
+		Personality:    options.Personality,
+	}
+	var result ThreadResumeResult
+	if err := c.call(ctx, methodThreadResume, params, &result); err != nil {
+		return ThreadResumeResult{}, err
+	}
+	return result, nil
+}
+
 // ThreadStart starts a new thread and returns thread id.
 func (c *Client) ThreadStart(ctx context.Context, cwd string, options RunOptions) (string, error) {
 	params := ThreadStartParams{

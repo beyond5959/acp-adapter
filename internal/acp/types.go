@@ -101,6 +101,17 @@ type AuthenticateResult struct {
 	ActiveAuthMethod string `json:"activeAuthMethod,omitempty"`
 }
 
+// SessionLoadParams restores one historical session into memory.
+type SessionLoadParams struct {
+	SessionID string `json:"sessionId"`
+	CWD       string `json:"cwd"`
+}
+
+// SessionLoadResult reports the restored runtime config snapshot.
+type SessionLoadResult struct {
+	ConfigOptions []SessionConfig `json:"configOptions,omitempty"`
+}
+
 // SessionNewParams are optional fields for session/new.
 type SessionNewParams struct {
 	CWD string `json:"cwd,omitempty"`
@@ -283,6 +294,7 @@ type SessionUpdateParams struct {
 	SessionID          string          `json:"sessionId"`
 	TurnID             string          `json:"turnId"`
 	Type               string          `json:"type"`
+	Role               string          `json:"role,omitempty"`
 	Phase              string          `json:"phase,omitempty"`
 	ItemID             string          `json:"itemId,omitempty"`
 	ItemType           string          `json:"itemType,omitempty"`

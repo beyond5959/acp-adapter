@@ -92,6 +92,25 @@ func (s *Supervisor) ThreadList(ctx context.Context, params ThreadListParams) (T
 	return result, nil
 }
 
+// ThreadResume loads one persisted thread into memory.
+func (s *Supervisor) ThreadResume(
+	ctx context.Context,
+	threadID string,
+	cwd string,
+	options RunOptions,
+) (ThreadResumeResult, error) {
+	var result ThreadResumeResult
+	err := s.call(ctx, methodThreadResume, func(client *Client) error {
+		var callErr error
+		result, callErr = client.ThreadResume(ctx, threadID, cwd, options)
+		return callErr
+	})
+	if err != nil {
+		return ThreadResumeResult{}, err
+	}
+	return result, nil
+}
+
 // TurnStart starts one prompt turn and returns event stream.
 func (s *Supervisor) TurnStart(
 	ctx context.Context,

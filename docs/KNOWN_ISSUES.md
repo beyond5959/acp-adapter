@@ -43,7 +43,7 @@
 - KI-0037：部分新版 app-server server request 仍未桥接（显式 `-32000` fail-closed）
 - KI-0038：`item/tool/requestUserInput` 目前为兼容自动选项，不是完整交互输入
 - KI-0039：ACP `agent-plan` 仍依赖 `turn/plan/updated`，且 priority 只能启发式回填
-- KI-0040：`session/list` 已支持发现历史会话，但 `session/load` 尚未实现
+- KI-0040：`session/load` 已实现，但历史 session 标识与回放仍有局限
 
 ---
 
@@ -221,21 +221,24 @@
 - 后续计划：
   - 支持可配置的图片大小上限与 mime 白名单；补充更细粒度 capability 探测。
 
-## KI-0040：`session/list` 已支持发现历史会话，但 `session/load` 尚未实现
+## KI-0040：`session/load` 已实现，但历史 session 标识与回放仍有局限
 - 现象：
-  - Codex adapter 已支持 ACP `session/list`，可列出通过 app-server `thread/list` 暴露的历史 thread。
-  - 但 adapter 仍未实现 ACP `session/load` / `loadSession`，因此历史会话当前主要用于发现与展示。
+  - Codex adapter 已支持 ACP `session/list` 与 `session/load`，可通过 app-server `thread/list` / `thread/resume` 发现并恢复历史 thread。
+  - 但 `session/list` 返回的 `sessionId` 仍是 adapter 进程内映射；重启 adapter 后，同一历史 thread 可能分配新的 `sessionId`。
+  - `thread/resume` 返回的 `thread.turns` 本身是 lossy history；app-server schema 明确说明不会完整持久化所有 agent 交互，例如部分 command/tool 细节。
 - 影响：
-  - `session/list` 返回的历史 `sessionId` 只保证在当前 adapter 进程内稳定；重启后会重新分配。
-  - 上游客户端若期待“点选历史 session 后直接继续对话”，当前仍需要后续补 `session/load` / `thread/resume` 才能打通。
+  - 当前 `session/load` 适合恢复“当前 adapter 进程里已发现过的历史 session”；跨重启稳定恢复仍不保证。
+  - load 回放主要覆盖 `userMessage` / `agentMessage`；对未持久化的 tool/reasoning 细节，客户端只能接受降级后的历史视图。
 - 复现：
   - 执行 `initialize` 后调用 `session/list`，可收到历史会话分页结果。
+  - 在同一进程内对 list 出来的 session 调用 `session/load`，可恢复历史并继续 prompt。
   - 重启 adapter 后再次 `session/list`，同一历史 thread 的 `sessionId` 可能变化。
 - Workaround：
-  - 当前把 `session/list` 视为 history discovery API，而不是可恢复会话入口。
-  - 如需稳定恢复语义，需以 `_meta.threadId` 为基础继续实现 `session/load -> thread/resume`。
+  - 当前把 `sessionId` 视为当前 adapter 进程的会话句柄；若客户端需要更稳定的外部标识，可同时缓存 `_meta.threadId`。
+  - 对需要完整 tool/reasoning 历史的场景，仍应以原生 Codex 客户端的 thread 视图为准。
 - 后续计划：
-  - 增加 ACP `session/load`，并将 `session/list` / `session/load` 的 id 稳定性统一到 thread id 或持久化映射。
+  - 将 `session/list` / `session/load` 的 id 稳定性统一到 thread id 或持久化映射。
+  - 评估是否把更多 persisted item（如 plan/review）映射为 ACP 标准历史回放事件。
 
 ## KI-0019：TODO 结构化仅覆盖 markdown checklist 形态
 - 现象：当前 TODO 结构化解析依赖 `- [ ]` / `- [x]`（含数字序号变体）markdown checklist。

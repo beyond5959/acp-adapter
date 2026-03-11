@@ -98,6 +98,20 @@
   - 新增 `TestE2ESessionListMappedFromThreadList`，覆盖 capability 广告、当前 sessionId 复用、RFC3339 时间、cwd 过滤、active→archived 分页。
   - 全量通过：`go test ./...`。
 
+## 2026-03-11 增量修复（ACP `session/load` -> Codex `thread/resume`）
+- 修复点：
+  - ACP server 新增 `session/load` handler，并在 Codex adapter 初始化能力里声明 `agentCapabilities.loadSession=true`。
+  - Codex app-server client/supervisor 新增 `thread/resume` 调用，使用 persisted thread history 恢复会话到内存。
+  - `session/load` 成功后会先把历史 turn 中的 `userMessage` / `agentMessage` 通过 `session/update` 回放给上游，再返回 `configOptions`。
+  - 历史消息映射：
+    - `userMessage` -> `update.sessionUpdate="user_message_chunk"`
+    - `agentMessage` -> `update.sessionUpdate="agent_message_chunk"`
+  - load 后会用 `thread/resume` 返回的 `model` / `reasoningEffort` 刷新 session config，使后续 `session/prompt` 沿用恢复出的运行参数。
+- 测试与回归：
+  - fake app-server 新增 `thread/resume` 与 seeded thread history。
+  - 新增 `TestE2ESessionLoadReplaysHistoryAndAllowsPrompt`，覆盖 `session/list -> session/load -> session/prompt` 链路、历史回放、TODO 回放与 resumed config 复用。
+  - 全量通过：`go test ./...`。
+
 ## Claude Adapter Program（C-R0 ~ C-R5）
 - [x] C-R0 文档立项
   - 状态：Done

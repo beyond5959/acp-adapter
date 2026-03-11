@@ -109,6 +109,43 @@ type Thread struct {
 	UpdatedAt     int64  `json:"updatedAt"`
 	Source        any    `json:"source,omitempty"`
 	Status        any    `json:"status,omitempty"`
+	Turns         []Turn `json:"turns,omitempty"`
+}
+
+// Turn is one historical turn returned by thread/resume.
+type Turn struct {
+	ID     string       `json:"id"`
+	Status string       `json:"status"`
+	Items  []ThreadItem `json:"items,omitempty"`
+}
+
+// ThreadItem is one persisted thread item returned by thread/resume.
+type ThreadItem struct {
+	ID      string      `json:"id"`
+	Type    string      `json:"type"`
+	Text    string      `json:"text,omitempty"`
+	Content []UserInput `json:"content,omitempty"`
+}
+
+// ThreadResumeParams resumes a persisted thread into memory.
+type ThreadResumeParams struct {
+	ThreadID       string `json:"threadId"`
+	CWD            string `json:"cwd,omitempty"`
+	Model          string `json:"model,omitempty"`
+	ApprovalPolicy string `json:"approvalPolicy,omitempty"`
+	Sandbox        string `json:"sandbox,omitempty"`
+	Personality    string `json:"personality,omitempty"`
+}
+
+// ThreadResumeResult carries the resumed thread and effective runtime settings.
+type ThreadResumeResult struct {
+	ApprovalPolicy  any    `json:"approvalPolicy,omitempty"`
+	CWD             string `json:"cwd,omitempty"`
+	Model           string `json:"model,omitempty"`
+	ModelProvider   string `json:"modelProvider,omitempty"`
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+	Sandbox         any    `json:"sandbox,omitempty"`
+	Thread          Thread `json:"thread"`
 }
 
 // ThreadStartParams starts a new conversation thread.
@@ -527,6 +564,7 @@ type TurnEvent struct {
 const (
 	methodInitialized                         = "initialized"
 	methodThreadList                          = "thread/list"
+	methodThreadResume                        = "thread/resume"
 	methodThreadStart                         = "thread/start"
 	methodThreadCompact                       = "thread/compact/start"
 	methodTurnStart                           = "turn/start"

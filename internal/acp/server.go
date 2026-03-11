@@ -24,6 +24,7 @@ import (
 const (
 	methodInitialize               = "initialize"
 	methodAuthenticate             = "authenticate"
+	methodSessionLoad              = "session/load"
 	methodSessionList              = "session/list"
 	methodSessionNew               = "session/new"
 	methodSessionSetConfigOption   = "session/set_config_option"
@@ -178,6 +179,15 @@ type appSessionLister interface {
 	ThreadList(ctx context.Context, params codex.ThreadListParams) (codex.ThreadListResult, error)
 }
 
+type appSessionLoader interface {
+	ThreadResume(
+		ctx context.Context,
+		threadID string,
+		cwd string,
+		options codex.RunOptions,
+	) (codex.ThreadResumeResult, error)
+}
+
 // ServerOptions configures optional ACP server behaviors.
 type ServerOptions struct {
 	PatchApplyMode   string
@@ -299,6 +309,8 @@ func (s *Server) handleRequest(ctx context.Context, msg RPCMessage) {
 		s.handleInitialize(rawID, msg.Params)
 	case methodAuthenticate:
 		s.handleAuthenticate(rawID, msg.Params)
+	case methodSessionLoad:
+		s.handleSessionLoad(ctx, rawID, msg.Params)
 	case methodSessionList:
 		s.handleSessionList(ctx, rawID, msg.Params)
 	case methodSessionNew:
@@ -322,6 +334,10 @@ func (s *Server) handleInitialize(id json.RawMessage, paramsRaw json.RawMessage)
 	sessionCapabilities := SessionCapabilities{}
 	if _, ok := s.app.(appSessionLister); ok {
 		sessionCapabilities.List = map[string]any{}
+	}
+	loadSessionSupported := false
+	if _, ok := s.app.(appSessionLoader); ok {
+		loadSessionSupported = true
 	}
 
 	authMethods := []AuthMethod{
@@ -351,7 +367,7 @@ func (s *Server) handleInitialize(id json.RawMessage, paramsRaw json.RawMessage)
 	result := InitializeResult{
 		ProtocolVersion: 1,
 		AgentCapabilities: AgentCapabilities{
-			LoadSession: false,
+			LoadSession: loadSessionSupported,
 			PromptCapabilities: PromptCapabilities{
 				Image:           true,
 				Audio:           false,
@@ -415,6 +431,78 @@ func (s *Server) handleAuthenticate(id json.RawMessage, paramsRaw json.RawMessag
 	_ = s.codec.WriteResult(id, AuthenticateResult{
 		Authenticated:    true,
 		ActiveAuthMethod: methodID,
+	})
+}
+
+func (s *Server) handleSessionLoad(ctx context.Context, id json.RawMessage, paramsRaw json.RawMessage) {
+	var params SessionLoadParams
+	if err := decodeParams(paramsRaw, &params); err != nil {
+		s.writeInvalidParams(id, map[string]any{"error": err.Error()})
+		return
+	}
+	params.SessionID = strings.TrimSpace(params.SessionID)
+	params.CWD = strings.TrimSpace(params.CWD)
+	if params.SessionID == "" {
+		s.writeInvalidParams(id, map[string]any{"sessionId": "required"})
+		return
+	}
+	if params.CWD == "" {
+		s.writeInvalidParams(id, map[string]any{"cwd": "required"})
+		return
+	}
+	if !s.requireAuth(id, methodSessionLoad) {
+		return
+	}
+
+	loader, ok := s.app.(appSessionLoader)
+	if !ok {
+		s.writeError(id, rpcErrMethodNotFound, "method not found", map[string]any{
+			"method": methodSessionLoad,
+		})
+		return
+	}
+
+	threadID, err := s.sessions.ThreadID(params.SessionID)
+	if err != nil {
+		s.writeInternalError(id, "unknown session", map[string]any{
+			"error":     err.Error(),
+			"sessionId": params.SessionID,
+		})
+		return
+	}
+
+	resumed, err := loader.ThreadResume(
+		ctx,
+		threadID,
+		params.CWD,
+		toRunOptions(s.getSessionConfig(params.SessionID)),
+	)
+	if err != nil {
+		s.writeInternalError(id, "thread/resume failed", map[string]any{
+			"error":     err.Error(),
+			"sessionId": params.SessionID,
+			"threadId":  threadID,
+		})
+		return
+	}
+
+	loadedOptions := runtimeOptions{
+		Model:          strings.TrimSpace(resumed.Model),
+		ThoughtLevel:   strings.TrimSpace(resumed.ReasoningEffort),
+		ApprovalPolicy: stringFromAny(resumed.ApprovalPolicy),
+		Sandbox:        stringFromAny(resumed.Sandbox),
+	}
+	s.setSessionConfig(params.SessionID, loadedOptions)
+	configOptions := s.buildSessionConfigOptions(ctx, loadedOptions)
+	s.setSessionConfigOptions(params.SessionID, configOptions)
+
+	s.sessionTodosMu.Lock()
+	s.sessionTodos[params.SessionID] = nil
+	s.sessionTodosMu.Unlock()
+
+	s.emitUpdates(historyUpdatesFromThread(params.SessionID, resumed.Thread))
+	_ = s.codec.WriteResult(id, SessionLoadResult{
+		ConfigOptions: configOptions,
 	})
 }
 
@@ -1014,6 +1102,107 @@ func (s *Server) sessionInfosFromThreads(threads []codex.Thread, archived bool) 
 	return out
 }
 
+func historyUpdatesFromThread(sessionID string, thread codex.Thread) []SessionUpdateParams {
+	if sessionID == "" || len(thread.Turns) == 0 {
+		return nil
+	}
+
+	updates := make([]SessionUpdateParams, 0, len(thread.Turns)*2)
+	for _, turn := range thread.Turns {
+		turnID := strings.TrimSpace(turn.ID)
+		for _, item := range turn.Items {
+			switch strings.TrimSpace(item.Type) {
+			case "userMessage":
+				text := historyUserMessageText(item.Content)
+				if strings.TrimSpace(text) == "" {
+					continue
+				}
+				updates = append(updates, SessionUpdateParams{
+					SessionID: sessionID,
+					TurnID:    turnID,
+					Type:      "message",
+					Role:      "user",
+					ItemID:    strings.TrimSpace(item.ID),
+					ItemType:  item.Type,
+					Delta:     text,
+				})
+			case "agentMessage":
+				if strings.TrimSpace(item.Text) == "" {
+					continue
+				}
+				update := SessionUpdateParams{
+					SessionID: sessionID,
+					TurnID:    turnID,
+					Type:      "message",
+					Role:      "assistant",
+					ItemID:    strings.TrimSpace(item.ID),
+					ItemType:  item.Type,
+					Delta:     item.Text,
+				}
+				if todos := parseMarkdownTodoItems(item.Text); len(todos) > 0 {
+					update.Todo = todos
+				}
+				updates = append(updates, update)
+			}
+		}
+	}
+	return updates
+}
+
+func historyUserMessageText(items []codex.UserInput) string {
+	if len(items) == 0 {
+		return ""
+	}
+
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		switch strings.ToLower(strings.TrimSpace(item.Type)) {
+		case "text":
+			if text := strings.TrimSpace(item.Text); text != "" {
+				parts = append(parts, text)
+			}
+		case "image":
+			text := strings.TrimSpace(item.URL)
+			if text == "" {
+				text = "[Image]"
+			} else {
+				text = "[Image: " + text + "]"
+			}
+			parts = append(parts, text)
+		case "localimage":
+			text := strings.TrimSpace(item.Path)
+			if text == "" {
+				text = "[Local image]"
+			} else {
+				text = "[Local image: " + text + "]"
+			}
+			parts = append(parts, text)
+		case "mention":
+			text := strings.TrimSpace(item.Text)
+			switch {
+			case text != "" && strings.TrimSpace(item.Path) != "":
+				parts = append(parts, "[Mention: "+strings.TrimSpace(item.Path)+"]\n"+text)
+			case text != "":
+				parts = append(parts, text)
+			case strings.TrimSpace(item.Path) != "":
+				parts = append(parts, "[Mention: "+strings.TrimSpace(item.Path)+"]")
+			case strings.TrimSpace(item.Name) != "":
+				parts = append(parts, "[Mention: "+strings.TrimSpace(item.Name)+"]")
+			}
+		default:
+			if text := strings.TrimSpace(item.Text); text != "" {
+				parts = append(parts, text)
+				continue
+			}
+			if path := strings.TrimSpace(item.Path); path != "" {
+				parts = append(parts, path)
+			}
+		}
+	}
+
+	return strings.Join(parts, "\n")
+}
+
 func sessionTitle(thread codex.Thread) string {
 	title := strings.TrimSpace(thread.Name)
 	if title == "" {
@@ -1031,6 +1220,15 @@ func formatUnixTimestamp(value int64) string {
 		return ""
 	}
 	return time.Unix(value, 0).UTC().Format(time.RFC3339)
+}
+
+func stringFromAny(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	default:
+		return ""
+	}
 }
 
 func decodeSessionListCursor(raw string) (sessionListCursor, error) {
@@ -1235,6 +1433,9 @@ func buildSessionUpdatePayload(update SessionUpdateParams) map[string]any {
 	if update.Type != "" {
 		payload["type"] = update.Type
 	}
+	if update.Role != "" {
+		payload["role"] = update.Role
+	}
 	if update.Phase != "" {
 		payload["phase"] = update.Phase
 	}
@@ -1282,8 +1483,12 @@ func buildSessionUpdatePayload(update SessionUpdateParams) map[string]any {
 func mapACPUpdateForClient(update SessionUpdateParams) map[string]any {
 	switch update.Type {
 	case "message":
+		sessionUpdate := "agent_message_chunk"
+		if strings.EqualFold(strings.TrimSpace(update.Role), "user") {
+			sessionUpdate = "user_message_chunk"
+		}
 		return map[string]any{
-			"sessionUpdate": "agent_message_chunk",
+			"sessionUpdate": sessionUpdate,
 			"content": map[string]any{
 				"type": "text",
 				"text": update.Delta,

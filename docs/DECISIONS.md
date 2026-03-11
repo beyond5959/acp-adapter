@@ -45,6 +45,7 @@
 - ADR-0039：Tool server-request 兼容回包（`requestUserInput`/`tool/call`）
 - ADR-0040：ACP `agent-plan` 映射（`turn/plan/updated` -> `session/update(plan)`）
 - ADR-0041：ACP `session/list` 映射到 Codex `thread/list`（含 archived 分页拼接）
+- ADR-0042：ACP `session/load` 映射到 Codex `thread/resume`（历史回放 + 恢复配置）
 
 ---
 
@@ -986,4 +987,37 @@
   - `test/integration/e2e_test.go`
 - 验证方式（测试/验收项）：
   - `TestE2ESessionListMappedFromThreadList`
+  - `go test ./...`
+
+### ADR-0042：ACP `session/load` 映射到 Codex `thread/resume`（历史回放 + 恢复配置）
+- 日期：2026-03-11
+- 状态：Accepted
+- 背景：
+  - ACP `session/load` 要求 adapter 将历史 session 恢复为可继续交互的活跃会话，并在 response 前回放历史消息。
+  - Codex app-server schema 已提供 `thread/resume`，且其 `thread.turns` 包含可用于 UI history replay 的持久化 turn/items。
+- 决策：
+  - 仅在下游 app client 支持 `thread/resume` 时，对外声明 `agentCapabilities.loadSession=true`。
+  - ACP `session/load` 直接桥接到 Codex `thread/resume`。
+  - 在返回 `session/load` response 之前，adapter 遍历 `thread.turns[].items[]`，把：
+    - `userMessage` 映射为 `session/update(update.sessionUpdate="user_message_chunk")`
+    - `agentMessage` 映射为 `session/update(update.sessionUpdate="agent_message_chunk")`
+  - load 成功后，用 `thread/resume` 返回的 `model` / `reasoningEffort` 刷新 session config，使后续 `session/prompt` 沿用恢复出的运行参数。
+  - 当前只重放持久化的消息型 item；非持久化或 lossy item 交给已知限制记录。
+- 备选方案：
+  - 方案A：只做 `thread/resume`，不回放历史，直接返回成功。
+  - 方案B：通过 `thread/read(includeTurns=true)` 读取 history，再单独 resume。
+  - 方案C：直接用 `thread/resume` 同时完成“恢复 + 读取 turns”，并先回放消息历史。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：实现简单，直接符合 ACP `session/load` 的“恢复后可继续对话”语义；load 后下一次 prompt 可以沿用恢复出的 model / thought level。
+  - Cons：受限于 app-server persisted history 的 lossy 特性，无法完整重建所有 tool/reasoning 细节；当前 session id 稳定性仍受 adapter 进程生命周期限制。
+- 影响范围（文件/模块）：
+  - `internal/acp/server.go`
+  - `internal/acp/types.go`
+  - `internal/codex/client.go`
+  - `internal/codex/supervisor.go`
+  - `internal/codex/types.go`
+  - `testdata/fake_codex_app_server/main.go`
+  - `test/integration/e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `TestE2ESessionLoadReplaysHistoryAndAllowsPrompt`
   - `go test ./...`

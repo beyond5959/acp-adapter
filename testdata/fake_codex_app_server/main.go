@@ -19,8 +19,12 @@ type turnControl struct {
 }
 
 type fakeThreadRecord struct {
-	thread   codex.Thread
-	archived bool
+	thread          codex.Thread
+	archived        bool
+	model           string
+	reasoningEffort string
+	approvalPolicy  string
+	sandbox         string
 }
 
 type fakeServer struct {
@@ -76,7 +80,49 @@ func seedThreads() []fakeThreadRecord {
 				UpdatedAt:     base - 300,
 				Source:        map[string]any{"kind": "appServer"},
 				Status:        map[string]any{"kind": "idle"},
+				Turns: []codex.Turn{
+					{
+						ID:     "seed-turn-1",
+						Status: "completed",
+						Items: []codex.ThreadItem{
+							{
+								ID:   "seed-user-1",
+								Type: "userMessage",
+								Content: []codex.UserInput{
+									{Type: "text", Text: "Explain the adapter architecture."},
+								},
+							},
+							{
+								ID:   "seed-agent-1",
+								Type: "agentMessage",
+								Text: "It bridges ACP stdio to Codex app-server JSON-RPC.",
+							},
+						},
+					},
+					{
+						ID:     "seed-turn-2",
+						Status: "completed",
+						Items: []codex.ThreadItem{
+							{
+								ID:   "seed-user-2",
+								Type: "userMessage",
+								Content: []codex.UserInput{
+									{Type: "text", Text: "What should be tested next?"},
+								},
+							},
+							{
+								ID:   "seed-agent-2",
+								Type: "agentMessage",
+								Text: "- [ ] add session/load coverage\n- [ ] run go test ./...",
+							},
+						},
+					},
+				},
 			},
+			model:           "gpt-4.1",
+			reasoningEffort: "low",
+			approvalPolicy:  "never",
+			sandbox:         "workspace-write",
 		},
 		{
 			thread: codex.Thread{
@@ -90,6 +136,10 @@ func seedThreads() []fakeThreadRecord {
 				Source:        map[string]any{"kind": "appServer"},
 				Status:        map[string]any{"kind": "idle"},
 			},
+			model:           "gpt-5.1-codex",
+			reasoningEffort: "medium",
+			approvalPolicy:  "on-request",
+			sandbox:         "workspace-write",
 		},
 		{
 			thread: codex.Thread{
@@ -104,6 +154,8 @@ func seedThreads() []fakeThreadRecord {
 				Status:        map[string]any{"kind": "idle"},
 			},
 			archived: true,
+			model:    "gpt-5-codex",
+			sandbox:  "workspace-write",
 		},
 		{
 			thread: codex.Thread{
@@ -117,6 +169,10 @@ func seedThreads() []fakeThreadRecord {
 				Source:        map[string]any{"kind": "appServer"},
 				Status:        map[string]any{"kind": "idle"},
 			},
+			model:           "gpt-5.1-codex",
+			reasoningEffort: "high",
+			approvalPolicy:  "on-failure",
+			sandbox:         "workspace-write",
 		},
 	}
 }
@@ -179,6 +235,10 @@ func (s *fakeServer) handle(msg codex.RPCMessage) {
 				Source:        map[string]any{"kind": "appServer"},
 				Status:        map[string]any{"kind": "idle"},
 			},
+			model:           "gpt-5.1-codex",
+			reasoningEffort: "medium",
+			approvalPolicy:  "on-request",
+			sandbox:         "workspace-write",
 		})
 		s.writeResult(msg.ID, codex.ThreadStartResult{
 			ThreadID: threadID,
@@ -190,6 +250,26 @@ func (s *fakeServer) handle(msg codex.RPCMessage) {
 			return
 		}
 		s.writeResult(msg.ID, s.listThreads(params))
+	case "thread/resume":
+		var params codex.ThreadResumeParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			s.writeError(msg.ID, -32602, "invalid params")
+			return
+		}
+		record, ok := s.lookupThread(strings.TrimSpace(params.ThreadID))
+		if !ok {
+			s.writeError(msg.ID, -32000, "thread not found")
+			return
+		}
+		s.writeResult(msg.ID, codex.ThreadResumeResult{
+			ApprovalPolicy:  firstNonEmpty(record.approvalPolicy, "never"),
+			CWD:             firstNonEmpty(strings.TrimSpace(params.CWD), record.thread.CWD),
+			Model:           firstNonEmpty(record.model, "gpt-5.1-codex"),
+			ModelProvider:   firstNonEmpty(record.thread.ModelProvider, "openai"),
+			ReasoningEffort: record.reasoningEffort,
+			Sandbox:         firstNonEmpty(record.sandbox, "workspace-write"),
+			Thread:          record.thread,
+		})
 	case "turn/start":
 		var params codex.TurnStartParams
 		if err := json.Unmarshal(msg.Params, &params); err != nil {
@@ -402,6 +482,18 @@ func (s *fakeServer) appendThread(record fakeThreadRecord) {
 	s.mu.Unlock()
 }
 
+func (s *fakeServer) lookupThread(threadID string) (fakeThreadRecord, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, record := range s.threads {
+		if record.thread.ID == threadID {
+			return record, true
+		}
+	}
+	return fakeThreadRecord{}, false
+}
+
 func (s *fakeServer) listThreads(params codex.ThreadListParams) codex.ThreadListResult {
 	s.mu.Lock()
 	records := append([]fakeThreadRecord(nil), s.threads...)
@@ -447,6 +539,15 @@ func (s *fakeServer) listThreads(params codex.ThreadListParams) codex.ThreadList
 		result.NextCursor = strconv.Itoa(end)
 	}
 	return result
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func flattenUserInputText(input []codex.UserInput) string {
