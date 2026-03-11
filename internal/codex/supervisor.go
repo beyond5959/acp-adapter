@@ -78,6 +78,20 @@ func (s *Supervisor) ThreadStart(ctx context.Context, cwd string, options RunOpt
 	return threadID, nil
 }
 
+// ThreadList returns one page of app-server thread history.
+func (s *Supervisor) ThreadList(ctx context.Context, params ThreadListParams) (ThreadListResult, error) {
+	var result ThreadListResult
+	err := s.call(ctx, methodThreadList, func(client *Client) error {
+		var callErr error
+		result, callErr = client.ThreadsList(ctx, params)
+		return callErr
+	})
+	if err != nil {
+		return ThreadListResult{}, err
+	}
+	return result, nil
+}
+
 // TurnStart starts one prompt turn and returns event stream.
 func (s *Supervisor) TurnStart(
 	ctx context.Context,

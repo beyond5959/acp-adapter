@@ -6,7 +6,7 @@
 ## 项目概览
 - 项目：acp-adapter（基于 Codex App Server 的 ACP 适配器，同时支持 Claude Code CLI 子进程适配）
 - 当前阶段：Claude Adapter CLI 重构完成（C-R5 内部迭代）
-- 最近更新：2026-03-09
+- 最近更新：2026-03-11
 
 ## 关键链接/文档
 - docs/SPEC.md：技术方案（权威）
@@ -83,6 +83,20 @@
   - 新增 `TestE2EACPPlanUpdateMappedFromPlanDeltaFallback`，覆盖仅有 `item/plan/delta + item/completed(plan)` 时的 fallback plan streaming。
   - 新增 `TestBuildSessionUpdatePayloadPlan`，覆盖 `session/update` 标准 envelope 序列化。
   - fake app-server 新增 structured plan 场景，便于回归 `turn/plan/updated` 桥接。
+
+## 2026-03-11 增量修复（ACP `session/list` -> Codex `thread/list`）
+- 修复点：
+  - ACP server 新增 `session/list` handler，并在 Codex adapter 初始化能力里声明 `agentCapabilities.sessionCapabilities.list`。
+  - Codex app-server client/supervisor 新增 `thread/list` 调用，桥接历史线程到 ACP session 摘要。
+  - `session/list` 结果映射字段：
+    - `sessionId`：复用当前进程内已知 session 映射；历史 thread 首次发现时分配稳定的 adapter session id。
+    - `cwd` / `title` / `updatedAt`：分别来自 thread cwd、`name|preview`、UTC RFC3339 时间。
+    - `_meta`：补充 `threadId`、`archived`、`createdAt`、`modelProvider`、`preview`、`source`、`status`。
+  - 为满足“历史会话”语义，adapter 在内部串接 app-server 的 active / archived 两段 `thread/list` 分页，并对 ACP 暴露单一 opaque cursor。
+- 测试与回归：
+  - fake app-server 新增 `thread/list`、cwd 过滤、active/archived 分页，以及新建 thread 自动进入 history 列表。
+  - 新增 `TestE2ESessionListMappedFromThreadList`，覆盖 capability 广告、当前 sessionId 复用、RFC3339 时间、cwd 过滤、active→archived 分页。
+  - 全量通过：`go test ./...`。
 
 ## Claude Adapter Program（C-R0 ~ C-R5）
 - [x] C-R0 文档立项

@@ -44,6 +44,7 @@
 - ADR-0038：Codex app-server server-request 兼容（新版 approval 方法与 fail-closed 回退）
 - ADR-0039：Tool server-request 兼容回包（`requestUserInput`/`tool/call`）
 - ADR-0040：ACP `agent-plan` 映射（`turn/plan/updated` -> `session/update(plan)`）
+- ADR-0041：ACP `session/list` 映射到 Codex `thread/list`（含 archived 分页拼接）
 
 ---
 
@@ -954,4 +955,35 @@
   - `TestE2EACPPlanUpdateMappedFromTurnPlanUpdated`
   - `TestE2EACPPlanUpdateMappedFromPlanDeltaFallback`
   - `TestBuildSessionUpdatePayloadPlan`
+  - `go test ./...`
+
+### ADR-0041：ACP `session/list` 映射到 Codex `thread/list`（含 archived 分页拼接）
+- 日期：2026-03-11
+- 状态：Accepted
+- 背景：
+  - ACP `session/list` 用于列出历史 session；当前 adapter 仅支持 `session/new` / `session/prompt` / `session/cancel`，无法暴露 Codex 本地历史线程。
+  - Codex app-server schema 已提供 `thread/list`，且支持 `cwd` / `cursor` / `archived` 过滤与分页。
+- 决策：
+  - 仅在下游 app client 支持 `thread/list` 时，对外声明 `agentCapabilities.sessionCapabilities.list`。
+  - ACP `session/list` 直接桥接到 Codex `thread/list`，并将 `Thread` 映射成 ACP session 摘要：`sessionId`、`cwd`、`title`、`updatedAt`、`_meta`。
+  - adapter 内部把 active 与 archived 两段 `thread/list` 结果串成一个 ACP opaque cursor，向上游表现为单一连续分页流。
+  - session id 映射沿用 adapter 现有 session store：对已知 thread 复用既有 session id；首次发现的历史 thread 在当前进程内分配并缓存一个 session id。
+- 备选方案：
+  - 方案A：继续不支持 `session/list`。
+  - 方案B：ACP `session/list` 直接暴露 Codex thread id 作为 session id。
+  - 方案C：桥接 `thread/list`，但只返回 non-archived page。（采用方案为 B/C 的折中，既保留 adapter 侧 opaque session id，又补 archived 连续分页）
+- 取舍（Pros/Cons）：
+  - Pros：上游 ACP client 可以发现 Codex 历史会话；当前活跃 session 在列表里保持同一 session id；分页语义对上游简单。
+  - Cons：在尚未实现 `session/load` 前，`session/list` 返回的历史 session 主要用于发现与展示；历史 session id 目前只保证在 adapter 进程生命周期内稳定。
+- 影响范围（文件/模块）：
+  - `internal/acp/server.go`
+  - `internal/acp/types.go`
+  - `internal/codex/client.go`
+  - `internal/codex/supervisor.go`
+  - `internal/codex/types.go`
+  - `internal/bridge/session_state.go`
+  - `testdata/fake_codex_app_server/main.go`
+  - `test/integration/e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `TestE2ESessionListMappedFromThreadList`
   - `go test ./...`

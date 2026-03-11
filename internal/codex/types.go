@@ -83,6 +83,34 @@ type UserInput struct {
 	Name string `json:"name,omitempty"`
 }
 
+// ThreadListParams requests one page of thread history.
+type ThreadListParams struct {
+	Archived *bool   `json:"archived,omitempty"`
+	Cursor   string  `json:"cursor,omitempty"`
+	CWD      string  `json:"cwd,omitempty"`
+	Limit    *uint32 `json:"limit,omitempty"`
+}
+
+// ThreadListResult carries one page of thread history.
+type ThreadListResult struct {
+	Data       []Thread `json:"data"`
+	NextCursor string   `json:"nextCursor,omitempty"`
+}
+
+// Thread is the minimal app-server history shape used by ACP session/list.
+type Thread struct {
+	ID            string `json:"id"`
+	CWD           string `json:"cwd"`
+	Name          string `json:"name,omitempty"`
+	Preview       string `json:"preview,omitempty"`
+	Path          string `json:"path,omitempty"`
+	ModelProvider string `json:"modelProvider,omitempty"`
+	CreatedAt     int64  `json:"createdAt"`
+	UpdatedAt     int64  `json:"updatedAt"`
+	Source        any    `json:"source,omitempty"`
+	Status        any    `json:"status,omitempty"`
+}
+
 // ThreadStartParams starts a new conversation thread.
 type ThreadStartParams struct {
 	CWD string `json:"cwd,omitempty"`
@@ -498,6 +526,7 @@ type TurnEvent struct {
 
 const (
 	methodInitialized                         = "initialized"
+	methodThreadList                          = "thread/list"
 	methodThreadStart                         = "thread/start"
 	methodThreadCompact                       = "thread/compact/start"
 	methodTurnStart                           = "turn/start"

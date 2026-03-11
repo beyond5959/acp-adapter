@@ -541,6 +541,118 @@ func TestE2EAcceptanceA1ToA5AndB1(t *testing.T) {
 	h.assertStdoutPureJSONRPC()
 }
 
+func TestE2ESessionListMappedFromThreadList(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	initResp := h.waitResponse("1", responseTimeout)
+	var initResult struct {
+		AgentCapabilities struct {
+			SessionCapabilities struct {
+				List json.RawMessage `json:"list"`
+			} `json:"sessionCapabilities"`
+		} `json:"agentCapabilities"`
+	}
+	unmarshalResult(t, initResp, &initResult)
+	if len(initResult.AgentCapabilities.SessionCapabilities.List) == 0 {
+		t.Fatalf("initialize should advertise session/list capability")
+	}
+
+	h.sendRequest("2", "session/new", map[string]any{
+		"cwd": "/workspace/session-list",
+	})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+	if newResult.SessionID == "" {
+		t.Fatalf("session/new returned empty sessionId")
+	}
+
+	type sessionListItem struct {
+		SessionID string         `json:"sessionId"`
+		CWD       string         `json:"cwd"`
+		Title     string         `json:"title"`
+		UpdatedAt string         `json:"updatedAt"`
+		Meta      map[string]any `json:"_meta"`
+	}
+	type sessionListResult struct {
+		Sessions   []sessionListItem `json:"sessions"`
+		NextCursor string            `json:"nextCursor"`
+	}
+
+	h.sendRequest("3", "session/list", map[string]any{
+		"cwd": "/workspace/session-list",
+	})
+	listRespOne := h.waitResponse("3", responseTimeout)
+	var pageOne sessionListResult
+	unmarshalResult(t, listRespOne, &pageOne)
+	if len(pageOne.Sessions) != 2 {
+		t.Fatalf("session/list first page len=%d, want 2", len(pageOne.Sessions))
+	}
+	if pageOne.NextCursor == "" {
+		t.Fatalf("session/list first page should include nextCursor")
+	}
+
+	foundCurrentSession := false
+	for _, item := range pageOne.Sessions {
+		if item.CWD != "/workspace/session-list" {
+			t.Fatalf("session/list cwd filter mismatch: got %q", item.CWD)
+		}
+		if item.Title == "" {
+			t.Fatalf("session/list title should not be empty: %+v", item)
+		}
+		if _, err := time.Parse(time.RFC3339, item.UpdatedAt); err != nil {
+			t.Fatalf("session/list updatedAt should be RFC3339: %q (%v)", item.UpdatedAt, err)
+		}
+		if strings.TrimSpace(fmt.Sprint(item.Meta["threadId"])) == "" {
+			t.Fatalf("session/list _meta.threadId should be present: %+v", item.Meta)
+		}
+		if item.SessionID == newResult.SessionID {
+			foundCurrentSession = true
+		}
+	}
+	if !foundCurrentSession {
+		t.Fatalf("session/list should reuse current sessionId %q on first page", newResult.SessionID)
+	}
+
+	h.sendRequest("4", "session/list", map[string]any{
+		"cwd":    "/workspace/session-list",
+		"cursor": pageOne.NextCursor,
+	})
+	listRespTwo := h.waitResponse("4", responseTimeout)
+	var pageTwo sessionListResult
+	unmarshalResult(t, listRespTwo, &pageTwo)
+	if len(pageTwo.Sessions) != 1 {
+		t.Fatalf("session/list second page len=%d, want 1", len(pageTwo.Sessions))
+	}
+	if pageTwo.NextCursor == "" {
+		t.Fatalf("session/list second page should continue into archived history")
+	}
+
+	h.sendRequest("5", "session/list", map[string]any{
+		"cwd":    "/workspace/session-list",
+		"cursor": pageTwo.NextCursor,
+	})
+	listRespThree := h.waitResponse("5", responseTimeout)
+	var pageThree sessionListResult
+	unmarshalResult(t, listRespThree, &pageThree)
+	if len(pageThree.Sessions) != 1 {
+		t.Fatalf("session/list archived page len=%d, want 1", len(pageThree.Sessions))
+	}
+	if pageThree.NextCursor != "" {
+		t.Fatalf("session/list archived final page should not include nextCursor, got %q", pageThree.NextCursor)
+	}
+	if got := pageThree.Sessions[0].Title; got != "Archived Session" {
+		t.Fatalf("session/list archived title=%q, want %q", got, "Archived Session")
+	}
+	archivedFlag, ok := pageThree.Sessions[0].Meta["archived"].(bool)
+	if !ok || !archivedFlag {
+		t.Fatalf("session/list archived page should mark _meta.archived=true: %+v", pageThree.Sessions[0].Meta)
+	}
+}
+
 func TestE2EInitializeIncludesACPStandardFields(t *testing.T) {
 	h := startAdapter(t)
 

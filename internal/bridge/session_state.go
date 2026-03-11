@@ -28,26 +28,36 @@ type sessionState struct {
 
 // Store tracks session/thread/turn bindings for ACP lifecycle.
 type Store struct {
-	mu       sync.Mutex
-	sessions map[string]*sessionState
-	nextID   uint64
+	mu        sync.Mutex
+	sessions  map[string]*sessionState
+	threadIDs map[string]string
+	nextID    uint64
 }
 
 // NewStore creates an empty session store.
 func NewStore() *Store {
 	return &Store{
-		sessions: make(map[string]*sessionState),
+		sessions:  make(map[string]*sessionState),
+		threadIDs: make(map[string]string),
 	}
 }
 
 // Create creates a session bound to an app-server thread.
 func (s *Store) Create(threadID string) string {
-	id := fmt.Sprintf("session-%d", atomic.AddUint64(&s.nextID, 1))
-
 	s.mu.Lock()
-	s.sessions[id] = &sessionState{threadID: threadID}
-	s.mu.Unlock()
+	defer s.mu.Unlock()
 
+	return s.createLocked(threadID)
+}
+
+func (s *Store) createLocked(threadID string) string {
+	if sessionID, ok := s.threadIDs[threadID]; ok {
+		return sessionID
+	}
+
+	id := fmt.Sprintf("session-%d", atomic.AddUint64(&s.nextID, 1))
+	s.sessions[id] = &sessionState{threadID: threadID}
+	s.threadIDs[threadID] = id
 	return id
 }
 

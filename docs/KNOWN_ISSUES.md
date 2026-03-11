@@ -43,6 +43,7 @@
 - KI-0037：部分新版 app-server server request 仍未桥接（显式 `-32000` fail-closed）
 - KI-0038：`item/tool/requestUserInput` 目前为兼容自动选项，不是完整交互输入
 - KI-0039：ACP `agent-plan` 仍依赖 `turn/plan/updated`，且 priority 只能启发式回填
+- KI-0040：`session/list` 已支持发现历史会话，但 `session/load` 尚未实现
 
 ---
 
@@ -219,6 +220,22 @@
   - 对 images：在客户端先做压缩/重采样并保证 mime 合法。
 - 后续计划：
   - 支持可配置的图片大小上限与 mime 白名单；补充更细粒度 capability 探测。
+
+## KI-0040：`session/list` 已支持发现历史会话，但 `session/load` 尚未实现
+- 现象：
+  - Codex adapter 已支持 ACP `session/list`，可列出通过 app-server `thread/list` 暴露的历史 thread。
+  - 但 adapter 仍未实现 ACP `session/load` / `loadSession`，因此历史会话当前主要用于发现与展示。
+- 影响：
+  - `session/list` 返回的历史 `sessionId` 只保证在当前 adapter 进程内稳定；重启后会重新分配。
+  - 上游客户端若期待“点选历史 session 后直接继续对话”，当前仍需要后续补 `session/load` / `thread/resume` 才能打通。
+- 复现：
+  - 执行 `initialize` 后调用 `session/list`，可收到历史会话分页结果。
+  - 重启 adapter 后再次 `session/list`，同一历史 thread 的 `sessionId` 可能变化。
+- Workaround：
+  - 当前把 `session/list` 视为 history discovery API，而不是可恢复会话入口。
+  - 如需稳定恢复语义，需以 `_meta.threadId` 为基础继续实现 `session/load -> thread/resume`。
+- 后续计划：
+  - 增加 ACP `session/load`，并将 `session/list` / `session/load` 的 id 稳定性统一到 thread id 或持久化映射。
 
 ## KI-0019：TODO 结构化仅覆盖 markdown checklist 形态
 - 现象：当前 TODO 结构化解析依赖 `- [ ]` / `- [x]`（含数字序号变体）markdown checklist。

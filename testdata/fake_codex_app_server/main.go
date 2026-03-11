@@ -18,6 +18,11 @@ type turnControl struct {
 	once   sync.Once
 }
 
+type fakeThreadRecord struct {
+	thread   codex.Thread
+	archived bool
+}
+
 type fakeServer struct {
 	codec *codex.JSONLCodec
 
@@ -28,6 +33,7 @@ type fakeServer struct {
 	turns      map[string]*turnControl
 	pending    map[string]chan codex.RPCMessage
 	threadOpts map[string]codex.RunOptions
+	threads    []fakeThreadRecord
 
 	receivedInitialize  bool
 	receivedInitialized bool
@@ -43,6 +49,7 @@ func main() {
 		turns:              make(map[string]*turnControl),
 		pending:            make(map[string]chan codex.RPCMessage),
 		threadOpts:         make(map[string]codex.RunOptions),
+		threads:            seedThreads(),
 		crashOnThreadStart: os.Getenv("FAKE_APP_SERVER_CRASH_ON_THREAD_START") == "1",
 		crashOnceFile:      os.Getenv("FAKE_APP_SERVER_CRASH_ON_THREAD_START_ONCE_FILE"),
 		crashDuringTurn:    os.Getenv("FAKE_APP_SERVER_CRASH_DURING_TURN") == "1",
@@ -52,6 +59,65 @@ func main() {
 	if err := server.serve(); err != nil && err != io.EOF {
 		_, _ = fmt.Fprintf(os.Stderr, "fake app-server error: %v\n", err)
 		os.Exit(1)
+	}
+}
+
+func seedThreads() []fakeThreadRecord {
+	base := time.Date(2026, 3, 10, 9, 0, 0, 0, time.UTC).Unix()
+	return []fakeThreadRecord{
+		{
+			thread: codex.Thread{
+				ID:            "seed-active-1",
+				CWD:           "/workspace/session-list",
+				Name:          "Seed Active Session",
+				Preview:       "seed active preview",
+				ModelProvider: "openai",
+				CreatedAt:     base - 3600,
+				UpdatedAt:     base - 300,
+				Source:        map[string]any{"kind": "appServer"},
+				Status:        map[string]any{"kind": "idle"},
+			},
+		},
+		{
+			thread: codex.Thread{
+				ID:            "seed-active-2",
+				CWD:           "/workspace/session-list",
+				Name:          "Seed Active Session Two",
+				Preview:       "seed active preview two",
+				ModelProvider: "openai",
+				CreatedAt:     base - 7200,
+				UpdatedAt:     base - 600,
+				Source:        map[string]any{"kind": "appServer"},
+				Status:        map[string]any{"kind": "idle"},
+			},
+		},
+		{
+			thread: codex.Thread{
+				ID:            "seed-archived-1",
+				CWD:           "/workspace/session-list",
+				Name:          "Archived Session",
+				Preview:       "archived preview",
+				ModelProvider: "openai",
+				CreatedAt:     base - 10800,
+				UpdatedAt:     base - 900,
+				Source:        map[string]any{"kind": "appServer"},
+				Status:        map[string]any{"kind": "idle"},
+			},
+			archived: true,
+		},
+		{
+			thread: codex.Thread{
+				ID:            "seed-other-cwd",
+				CWD:           "/workspace/other",
+				Name:          "Other Workspace Session",
+				Preview:       "other cwd preview",
+				ModelProvider: "openai",
+				CreatedAt:     base - 14400,
+				UpdatedAt:     base - 1200,
+				Source:        map[string]any{"kind": "appServer"},
+				Status:        map[string]any{"kind": "idle"},
+			},
+		},
 	}
 }
 
@@ -102,9 +168,28 @@ func (s *fakeServer) handle(msg codex.RPCMessage) {
 		}
 		threadID := s.newThreadID()
 		s.storeThreadOptions(threadID, params.RunOptions)
+		s.appendThread(fakeThreadRecord{
+			thread: codex.Thread{
+				ID:            threadID,
+				CWD:           strings.TrimSpace(params.CWD),
+				Name:          fmt.Sprintf("Live Session %s", threadID),
+				ModelProvider: "openai",
+				CreatedAt:     time.Now().UTC().Unix(),
+				UpdatedAt:     time.Now().UTC().Unix(),
+				Source:        map[string]any{"kind": "appServer"},
+				Status:        map[string]any{"kind": "idle"},
+			},
+		})
 		s.writeResult(msg.ID, codex.ThreadStartResult{
 			ThreadID: threadID,
 		})
+	case "thread/list":
+		var params codex.ThreadListParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			s.writeError(msg.ID, -32602, "invalid params")
+			return
+		}
+		s.writeResult(msg.ID, s.listThreads(params))
 	case "turn/start":
 		var params codex.TurnStartParams
 		if err := json.Unmarshal(msg.Params, &params); err != nil {
@@ -309,6 +394,59 @@ func (s *fakeServer) effectiveRunOptions(threadID string, turnOptions codex.RunO
 		base.Effort = turnOptions.Effort
 	}
 	return base
+}
+
+func (s *fakeServer) appendThread(record fakeThreadRecord) {
+	s.mu.Lock()
+	s.threads = append([]fakeThreadRecord{record}, s.threads...)
+	s.mu.Unlock()
+}
+
+func (s *fakeServer) listThreads(params codex.ThreadListParams) codex.ThreadListResult {
+	s.mu.Lock()
+	records := append([]fakeThreadRecord(nil), s.threads...)
+	s.mu.Unlock()
+
+	filtered := make([]codex.Thread, 0, len(records))
+	archived := params.Archived != nil && *params.Archived
+	cwd := strings.TrimSpace(params.CWD)
+	for _, record := range records {
+		if record.archived != archived {
+			continue
+		}
+		if cwd != "" && record.thread.CWD != cwd {
+			continue
+		}
+		filtered = append(filtered, record.thread)
+	}
+
+	offset := 0
+	if raw := strings.TrimSpace(params.Cursor); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+	if offset >= len(filtered) {
+		return codex.ThreadListResult{Data: []codex.Thread{}}
+	}
+
+	limit := 2
+	if params.Limit != nil && *params.Limit > 0 {
+		limit = int(*params.Limit)
+	}
+	end := offset + limit
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+
+	result := codex.ThreadListResult{
+		Data: append([]codex.Thread(nil), filtered[offset:end]...),
+	}
+	if end < len(filtered) {
+		result.NextCursor = strconv.Itoa(end)
+	}
+	return result
 }
 
 func flattenUserInputText(input []codex.UserInput) string {

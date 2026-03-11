@@ -77,6 +77,15 @@ func (c *Client) Initialized() error {
 	return c.notify(methodInitialized, map[string]any{})
 }
 
+// ThreadsList fetches one page of conversation history.
+func (c *Client) ThreadsList(ctx context.Context, params ThreadListParams) (ThreadListResult, error) {
+	var result ThreadListResult
+	if err := c.call(ctx, methodThreadList, params, &result); err != nil {
+		return ThreadListResult{}, err
+	}
+	return result, nil
+}
+
 // ThreadStart starts a new thread and returns thread id.
 func (c *Client) ThreadStart(ctx context.Context, cwd string, options RunOptions) (string, error) {
 	params := ThreadStartParams{

@@ -107,6 +107,27 @@ type SessionNewParams struct {
 	PromptConfig
 }
 
+// SessionListParams requests one page of historical sessions.
+type SessionListParams struct {
+	CWD    string `json:"cwd,omitempty"`
+	Cursor string `json:"cursor,omitempty"`
+}
+
+// SessionInfo is one ACP-discoverable historical session summary.
+type SessionInfo struct {
+	SessionID string         `json:"sessionId"`
+	CWD       string         `json:"cwd"`
+	Title     string         `json:"title"`
+	UpdatedAt string         `json:"updatedAt"`
+	Meta      map[string]any `json:"_meta,omitempty"`
+}
+
+// SessionListResult carries one page of historical sessions.
+type SessionListResult struct {
+	Sessions   []SessionInfo `json:"sessions"`
+	NextCursor string        `json:"nextCursor,omitempty"`
+}
+
 // SessionNewResult returns new session id.
 type SessionNewResult struct {
 	SessionID     string          `json:"sessionId"`
