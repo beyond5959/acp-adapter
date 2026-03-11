@@ -57,6 +57,19 @@ func (ss *sessionStore) Create(threadID, cwd string) *session {
 	return s
 }
 
+func (ss *sessionStore) CreateLoaded(threadID, cwd, sessionID string) *session {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+
+	s := &session{
+		cwd:       cwd,
+		sessionID: sessionID,
+		turnCount: 1,
+	}
+	ss.sessions[threadID] = s
+	return s
+}
+
 func (ss *sessionStore) Get(threadID string) (*session, bool) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
@@ -139,6 +152,78 @@ func (c *Client) ThreadStart(_ context.Context, cwd string, _ codex.RunOptions) 
 	threadID := c.genID("thread")
 	c.sessions.Create(threadID, cwd)
 	return threadID, nil
+}
+
+// ThreadList returns an empty history page because claude CLI does not expose a
+// stable machine-readable session listing API.
+func (c *Client) ThreadList(_ context.Context, _ codex.ThreadListParams) (codex.ThreadListResult, error) {
+	return codex.ThreadListResult{Data: []codex.Thread{}}, nil
+}
+
+// ThreadResume rebinds an already-known adapter thread to resume on the next turn.
+func (c *Client) ThreadResume(
+	_ context.Context,
+	threadID string,
+	cwd string,
+	options codex.RunOptions,
+) (codex.ThreadResumeResult, error) {
+	if c.loggedOut.Load() {
+		return codex.ThreadResumeResult{}, fmt.Errorf("claudecli: not authenticated")
+	}
+	sess, ok := c.sessions.Get(threadID)
+	if !ok {
+		return codex.ThreadResumeResult{}, fmt.Errorf("claudecli: unknown thread %q", threadID)
+	}
+
+	sess.mu.Lock()
+	if cwd != "" {
+		sess.cwd = cwd
+	}
+	if sess.turnCount == 0 {
+		sess.turnCount = 1
+	}
+	sessionCWD := sess.cwd
+	sess.mu.Unlock()
+
+	return codex.ThreadResumeResult{
+		CWD:             sessionCWD,
+		Model:           resolveModel(options.Model, c.cfg.DefaultModel),
+		ReasoningEffort: resolveEffort(options.Effort, c.cfg.DefaultEffort),
+		Thread: codex.Thread{
+			ID:  threadID,
+			CWD: sessionCWD,
+		},
+	}, nil
+}
+
+// LoadSession binds a caller-provided Claude native session id so later turns
+// can use `claude --resume <session-id>`. History replay is not available in CLI mode.
+func (c *Client) LoadSession(
+	_ context.Context,
+	sessionID string,
+	cwd string,
+	options codex.RunOptions,
+) (string, codex.ThreadResumeResult, error) {
+	if c.loggedOut.Load() {
+		return "", codex.ThreadResumeResult{}, fmt.Errorf("claudecli: not authenticated")
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return "", codex.ThreadResumeResult{}, fmt.Errorf("claudecli: session id is required")
+	}
+
+	threadID := c.genID("thread")
+	c.sessions.CreateLoaded(threadID, cwd, sessionID)
+
+	return threadID, codex.ThreadResumeResult{
+		CWD:             cwd,
+		Model:           resolveModel(options.Model, c.cfg.DefaultModel),
+		ReasoningEffort: resolveEffort(options.Effort, c.cfg.DefaultEffort),
+		Thread: codex.Thread{
+			ID:  threadID,
+			CWD: cwd,
+		},
+	}, nil
 }
 
 // TurnStart begins a streaming turn via a claude -p subprocess.

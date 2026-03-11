@@ -46,6 +46,7 @@
 - ADR-0040：ACP `agent-plan` 映射（`turn/plan/updated` -> `session/update(plan)`）
 - ADR-0041：ACP `session/list` 映射到 Codex `thread/list`（含 archived 分页拼接）
 - ADR-0042：ACP `session/load` 映射到 Codex `thread/resume`（历史回放 + 恢复配置）
+- ADR-0043：Claude CLI `session/list` 占位 + `session/load` 部分恢复
 
 ---
 
@@ -1020,4 +1021,36 @@
   - `test/integration/e2e_test.go`
 - 验证方式（测试/验收项）：
   - `TestE2ESessionLoadReplaysHistoryAndAllowsPrompt`
+  - `go test ./...`
+
+### ADR-0043：Claude CLI `session/list` 占位 + `session/load` 部分恢复
+- 日期：2026-03-11
+- 状态：Accepted
+- 背景：
+  - ACP `session/list` / `session/load` 面向“可发现历史会话 + 恢复后回放历史”的完整语义。
+  - 当前 Claude adapter 基于 `claude -p` CLI 子进程实现；本地 `claude --help` 可确认有 `--resume [value]` 与 `--continue`，但没有稳定的 machine-readable 会话列表接口。
+  - `--resume` 在未提供确切 session id 时会打开交互式 picker，不适合 ACP bridge 自动化调用；同时 CLI 未提供历史消息回放 API。
+- 决策：
+  - Claude adapter 暂时声明 `sessionCapabilities.list` 与 `loadSession`，但区分两条路径：
+    - `session/list`：返回空页占位，不尝试抓取交互式 picker 或解析未公开存储格式。
+    - `session/load`：接受 caller 提供的 Claude native session id，并把它直接绑定为 ACP `sessionId`；后续 turn 通过 `claude --resume <session-id>` 继续对话。
+  - ACP server 新增 external session loader 旁路，允许后端在 adapter 尚未见过该 session 时，先按外部 session id 建立映射。
+  - Claude CLI 模式下 `session/load` 不回放历史 `session/update`，`configOptions` 也只按当前 adapter 默认 model / effort 重建，不从历史 transcript 逆向恢复。
+- 备选方案：
+  - 方案A：不暴露 Claude `session/list` / `session/load` 能力，继续返回 `method not found`。
+  - 方案B：抓取 `claude --resume` 交互式 picker 或直接解析 CLI 本地 transcript 文件。
+  - 方案C：先提供空 `session/list` 与“已知 session id 可续聊”的 `session/load`，把不可自动化的部分显式记录为限制。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：上游客户端不再直接撞 `method not found`；对已知 Claude native session id 的场景，可尽快打通继续对话；不依赖脆弱的交互式抓取或未承诺稳定性的本地存储格式。
+  - Cons：`session/list` 目前没有真实历史发现能力；`session/load` 不满足 ACP 对“先回放历史再返回”的完整理想语义；跨客户端共享 Claude history 仍需外部保存 native session id。
+- 影响范围（文件/模块）：
+  - `internal/acp/server.go`
+  - `internal/bridge/session_state.go`
+  - `internal/claude/client.go`
+  - `test/integration/claude_e2e_test.go`
+  - `PROGRESS.md`
+  - `docs/KNOWN_ISSUES.md`
+- 验证方式（测试/验收项）：
+  - `TestClaudeE2ESessionListEmptyAndLoadAllowsPrompt`
+  - `go test ./test/integration -run TestClaudeE2E -count=1`
   - `go test ./...`

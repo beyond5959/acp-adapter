@@ -188,6 +188,15 @@ type appSessionLoader interface {
 	) (codex.ThreadResumeResult, error)
 }
 
+type appSessionExternalLoader interface {
+	LoadSession(
+		ctx context.Context,
+		sessionID string,
+		cwd string,
+		options codex.RunOptions,
+	) (string, codex.ThreadResumeResult, error)
+}
+
 // ServerOptions configures optional ACP server behaviors.
 type ServerOptions struct {
 	PatchApplyMode   string
@@ -338,6 +347,8 @@ func (s *Server) handleInitialize(id json.RawMessage, paramsRaw json.RawMessage)
 	loadSessionSupported := false
 	if _, ok := s.app.(appSessionLoader); ok {
 		loadSessionSupported = true
+	} else if _, ok := s.app.(appSessionExternalLoader); ok {
+		loadSessionSupported = true
 	}
 
 	authMethods := []AuthMethod{
@@ -454,29 +465,47 @@ func (s *Server) handleSessionLoad(ctx context.Context, id json.RawMessage, para
 		return
 	}
 
-	loader, ok := s.app.(appSessionLoader)
-	if !ok {
+	loader, hasLoader := s.app.(appSessionLoader)
+	externalLoader, hasExternalLoader := s.app.(appSessionExternalLoader)
+	if !hasLoader && !hasExternalLoader {
 		s.writeError(id, rpcErrMethodNotFound, "method not found", map[string]any{
 			"method": methodSessionLoad,
 		})
 		return
 	}
 
+	options := toRunOptions(s.getSessionConfig(params.SessionID))
 	threadID, err := s.sessions.ThreadID(params.SessionID)
-	if err != nil {
+	var resumed codex.ThreadResumeResult
+	switch {
+	case err == nil:
+		if !hasLoader {
+			s.writeInternalError(id, "session/load failed", map[string]any{
+				"error":     "loader does not support resuming bound sessions",
+				"sessionId": params.SessionID,
+			})
+			return
+		}
+		resumed, err = loader.ThreadResume(ctx, threadID, params.CWD, options)
+	case hasExternalLoader:
+		threadID, resumed, err = externalLoader.LoadSession(ctx, params.SessionID, params.CWD, options)
+		if err == nil {
+			if bindErr := s.sessions.Bind(params.SessionID, threadID); bindErr != nil {
+				s.writeInternalError(id, "bind loaded session failed", map[string]any{
+					"error":     bindErr.Error(),
+					"sessionId": params.SessionID,
+					"threadId":  threadID,
+				})
+				return
+			}
+		}
+	default:
 		s.writeInternalError(id, "unknown session", map[string]any{
 			"error":     err.Error(),
 			"sessionId": params.SessionID,
 		})
 		return
 	}
-
-	resumed, err := loader.ThreadResume(
-		ctx,
-		threadID,
-		params.CWD,
-		toRunOptions(s.getSessionConfig(params.SessionID)),
-	)
 	if err != nil {
 		s.writeInternalError(id, "thread/resume failed", map[string]any{
 			"error":     err.Error(),

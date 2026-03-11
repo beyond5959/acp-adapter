@@ -44,6 +44,7 @@
 - KI-0038：`item/tool/requestUserInput` 目前为兼容自动选项，不是完整交互输入
 - KI-0039：ACP `agent-plan` 仍依赖 `turn/plan/updated`，且 priority 只能启发式回填
 - KI-0040：`session/load` 已实现，但历史 session 标识与回放仍有局限
+- KI-0041：Claude CLI `session/list` / `session/load` 仅做占位与部分恢复
 
 ---
 
@@ -239,6 +240,28 @@
 - 后续计划：
   - 将 `session/list` / `session/load` 的 id 稳定性统一到 thread id 或持久化映射。
   - 评估是否把更多 persisted item（如 plan/review）映射为 ACP 标准历史回放事件。
+
+## KI-0041：Claude CLI `session/list` / `session/load` 仅做占位与部分恢复
+- 现象：
+  - Claude adapter 现已暴露 ACP `session/list` 与 `session/load` 方法，但能力不对称：
+    - `session/list` 恒返回空页。
+    - `session/load` 仅支持“调用方已知 Claude native session id”的恢复占位，并把该 id 作为后续 ACP `sessionId` 使用。
+  - 当前 Claude CLI 只有 `--resume <session-id>` / `--continue`，没有稳定的 machine-readable 会话枚举与历史消息回放接口。
+- 影响：
+  - ACP client 目前无法通过 Claude adapter 浏览真实的 Claude 历史会话列表。
+  - `session/load` 后不会收到历史 `user_message_chunk` / `agent_message_chunk` 回放；它只保证后续 `session/prompt` 能继续使用该 native session id。
+  - `configOptions` 仅按 adapter 当前默认 model / effort 重建，不代表原会话真实历史配置。
+- 复现：
+  - Claude 模式下执行 `initialize`，会看到 `sessionCapabilities.list` 与 `loadSession=true`。
+  - 调用 `session/list`，结果始终为空页。
+  - 调用 `session/load(sessionId=<Claude native session id>)` 后，再 `session/prompt`，请求会走 `claude --resume <session-id>`。
+- Workaround：
+  - 若上游需要恢复 Claude 会话，必须自行缓存 Claude native session id，再把该 id 传给 `session/load`。
+  - 不要把 Claude `session/list` 结果视为真实历史索引；当前它只是协议占位。
+  - 若必须展示完整历史，请使用原生 Claude Code 客户端或等待 CLI/SDK 暴露稳定 transcript API。
+- 后续计划：
+  - 若 Claude CLI/SDK 后续提供稳定的会话列表或 transcript 读取接口，再升级为真正的 `session/list` / `session/load` 历史回放实现。
+  - 评估是否在 adapter 内持久化“ACP session id -> Claude native session id”映射，减少上游自行缓存的负担。
 
 ## KI-0019：TODO 结构化仅覆盖 markdown checklist 形态
 - 现象：当前 TODO 结构化解析依赖 `- [ ]` / `- [x]`（含数字序号变体）markdown checklist。

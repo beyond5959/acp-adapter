@@ -50,6 +50,36 @@ func (s *Store) Create(threadID string) string {
 	return s.createLocked(threadID)
 }
 
+// Bind attaches one caller-provided session id to an existing thread id.
+func (s *Store) Bind(sessionID, threadID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if sessionID == "" {
+		return fmt.Errorf("session id is required")
+	}
+	if threadID == "" {
+		return fmt.Errorf("thread id is required")
+	}
+
+	if existingSessionID, ok := s.threadIDs[threadID]; ok {
+		if existingSessionID != sessionID {
+			return fmt.Errorf("thread %q already bound to session %q", threadID, existingSessionID)
+		}
+	}
+
+	if session, ok := s.sessions[sessionID]; ok {
+		if session.threadID != threadID {
+			return fmt.Errorf("session %q already bound to thread %q", sessionID, session.threadID)
+		}
+		return nil
+	}
+
+	s.sessions[sessionID] = &sessionState{threadID: threadID}
+	s.threadIDs[threadID] = sessionID
+	return nil
+}
+
 func (s *Store) createLocked(threadID string) string {
 	if sessionID, ok := s.threadIDs[threadID]; ok {
 		return sessionID

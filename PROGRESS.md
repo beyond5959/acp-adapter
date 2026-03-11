@@ -112,6 +112,18 @@
   - 新增 `TestE2ESessionLoadReplaysHistoryAndAllowsPrompt`，覆盖 `session/list -> session/load -> session/prompt` 链路、历史回放、TODO 回放与 resumed config 复用。
   - 全量通过：`go test ./...`。
 
+## 2026-03-11 增量修复（Claude CLI `session/list` 占位 + `session/load` 部分恢复）
+- 修复点：
+  - Claude adapter 新增 ACP `session/list` / `session/load` 方法入口，并在初始化能力中声明 `agentCapabilities.sessionCapabilities.list` 与 `agentCapabilities.loadSession=true`。
+  - `session/list` 当前返回空页占位；原因是 Claude CLI 只有 `--resume` / `--continue` 恢复入口，没有稳定的 machine-readable 历史会话枚举接口。
+  - `session/load` 当前支持“已知 Claude native session ID”的部分恢复：adapter 直接把该 ID 绑定为 ACP `sessionId`，后续 `session/prompt` 使用 `claude --resume <session-id>` 续聊。
+  - ACP server 新增 external session loader 旁路，允许非 Codex 后端在 adapter 尚未见过该 session 时，通过外部 session ID 先绑定 thread。
+  - `bridge.Store` 新增显式 `Bind(sessionID, threadID)`，用于把 caller-supplied session id 绑定到运行时 thread。
+- 测试与回归：
+  - 新增 `TestClaudeE2ESessionListEmptyAndLoadAllowsPrompt`，覆盖 capability 广告、空 `session/list`、以及 `session/load -> session/prompt` 可继续。
+  - Claude 相关回归通过：`go test ./test/integration -run 'TestClaudeE2E(BasicPromptAndCancel|SessionConfigOptionsModelListAndSwitch|SessionListEmptyAndLoadAllowsPrompt|InitializeContainsStandardFields|ApprovalAutoApproved|NoAuthRequiredWithCLI|ContractStandaloneVsEmbedded|UnifiedCmdAdapterFlag)$' -count=1`。
+  - 全量通过：`go test ./...`。
+
 ## Claude Adapter Program（C-R0 ~ C-R5）
 - [x] C-R0 文档立项
   - 状态：Done
