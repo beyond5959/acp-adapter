@@ -24,6 +24,8 @@ import (
 const (
 	methodInitialize               = "initialize"
 	methodAuthenticate             = "authenticate"
+	methodSessionLoad              = "session/load"
+	methodSessionList              = "session/list"
 	methodSessionNew               = "session/new"
 	methodSessionSetConfigOption   = "session/set_config_option"
 	methodSessionPrompt            = "session/prompt"
@@ -82,6 +84,11 @@ const (
 	patchApplyModeAppServer patchApplyMode = "appserver"
 	patchApplyModeACPFS     patchApplyMode = "acp_fs"
 )
+
+type sessionListCursor struct {
+	Archived bool   `json:"archived"`
+	Cursor   string `json:"cursor,omitempty"`
+}
 
 type fsWriteTextFileResult struct {
 	OK       bool   `json:"ok,omitempty"`
@@ -166,6 +173,28 @@ type appClient interface {
 	MCPToolCall(ctx context.Context, params codex.MCPToolCallParams) (codex.MCPToolCallResult, error)
 	MCPOAuthLogin(ctx context.Context, server string) (codex.MCPOAuthLoginResult, error)
 	Logout(ctx context.Context) error
+}
+
+type appSessionLister interface {
+	ThreadList(ctx context.Context, params codex.ThreadListParams) (codex.ThreadListResult, error)
+}
+
+type appSessionLoader interface {
+	ThreadResume(
+		ctx context.Context,
+		threadID string,
+		cwd string,
+		options codex.RunOptions,
+	) (codex.ThreadResumeResult, error)
+}
+
+type appSessionExternalLoader interface {
+	LoadSession(
+		ctx context.Context,
+		sessionID string,
+		cwd string,
+		options codex.RunOptions,
+	) (string, codex.ThreadResumeResult, error)
 }
 
 // ServerOptions configures optional ACP server behaviors.
@@ -289,6 +318,10 @@ func (s *Server) handleRequest(ctx context.Context, msg RPCMessage) {
 		s.handleInitialize(rawID, msg.Params)
 	case methodAuthenticate:
 		s.handleAuthenticate(rawID, msg.Params)
+	case methodSessionLoad:
+		s.handleSessionLoad(ctx, rawID, msg.Params)
+	case methodSessionList:
+		s.handleSessionList(ctx, rawID, msg.Params)
 	case methodSessionNew:
 		s.handleSessionNew(ctx, rawID, msg.Params)
 	case methodSessionSetConfigOption:
@@ -306,6 +339,17 @@ func (s *Server) handleRequest(ctx context.Context, msg RPCMessage) {
 
 func (s *Server) handleInitialize(id json.RawMessage, paramsRaw json.RawMessage) {
 	s.captureClientCapabilities(paramsRaw)
+
+	sessionCapabilities := SessionCapabilities{}
+	if _, ok := s.app.(appSessionLister); ok {
+		sessionCapabilities.List = map[string]any{}
+	}
+	loadSessionSupported := false
+	if _, ok := s.app.(appSessionLoader); ok {
+		loadSessionSupported = true
+	} else if _, ok := s.app.(appSessionExternalLoader); ok {
+		loadSessionSupported = true
+	}
 
 	authMethods := []AuthMethod{
 		{
@@ -334,7 +378,7 @@ func (s *Server) handleInitialize(id json.RawMessage, paramsRaw json.RawMessage)
 	result := InitializeResult{
 		ProtocolVersion: 1,
 		AgentCapabilities: AgentCapabilities{
-			LoadSession: false,
+			LoadSession: loadSessionSupported,
 			PromptCapabilities: PromptCapabilities{
 				Image:           true,
 				Audio:           false,
@@ -344,7 +388,7 @@ func (s *Server) handleInitialize(id json.RawMessage, paramsRaw json.RawMessage)
 				HTTP: false,
 				SSE:  false,
 			},
-			SessionCapabilities: SessionCapabilities{},
+			SessionCapabilities: sessionCapabilities,
 
 			// Legacy capability fields for older ACP clients.
 			Sessions:      true,
@@ -399,6 +443,125 @@ func (s *Server) handleAuthenticate(id json.RawMessage, paramsRaw json.RawMessag
 		Authenticated:    true,
 		ActiveAuthMethod: methodID,
 	})
+}
+
+func (s *Server) handleSessionLoad(ctx context.Context, id json.RawMessage, paramsRaw json.RawMessage) {
+	var params SessionLoadParams
+	if err := decodeParams(paramsRaw, &params); err != nil {
+		s.writeInvalidParams(id, map[string]any{"error": err.Error()})
+		return
+	}
+	params.SessionID = strings.TrimSpace(params.SessionID)
+	params.CWD = strings.TrimSpace(params.CWD)
+	if params.SessionID == "" {
+		s.writeInvalidParams(id, map[string]any{"sessionId": "required"})
+		return
+	}
+	if params.CWD == "" {
+		s.writeInvalidParams(id, map[string]any{"cwd": "required"})
+		return
+	}
+	if !s.requireAuth(id, methodSessionLoad) {
+		return
+	}
+
+	loader, hasLoader := s.app.(appSessionLoader)
+	externalLoader, hasExternalLoader := s.app.(appSessionExternalLoader)
+	if !hasLoader && !hasExternalLoader {
+		s.writeError(id, rpcErrMethodNotFound, "method not found", map[string]any{
+			"method": methodSessionLoad,
+		})
+		return
+	}
+
+	options := toRunOptions(s.getSessionConfig(params.SessionID))
+	threadID, err := s.sessions.ThreadID(params.SessionID)
+	var resumed codex.ThreadResumeResult
+	switch {
+	case err == nil:
+		if !hasLoader {
+			s.writeInternalError(id, "session/load failed", map[string]any{
+				"error":     "loader does not support resuming bound sessions",
+				"sessionId": params.SessionID,
+			})
+			return
+		}
+		resumed, err = loader.ThreadResume(ctx, threadID, params.CWD, options)
+	case hasExternalLoader:
+		threadID, resumed, err = externalLoader.LoadSession(ctx, params.SessionID, params.CWD, options)
+		if err == nil {
+			if bindErr := s.sessions.Bind(params.SessionID, threadID); bindErr != nil {
+				s.writeInternalError(id, "bind loaded session failed", map[string]any{
+					"error":     bindErr.Error(),
+					"sessionId": params.SessionID,
+					"threadId":  threadID,
+				})
+				return
+			}
+		}
+	default:
+		s.writeInternalError(id, "unknown session", map[string]any{
+			"error":     err.Error(),
+			"sessionId": params.SessionID,
+		})
+		return
+	}
+	if err != nil {
+		s.writeInternalError(id, "thread/resume failed", map[string]any{
+			"error":     err.Error(),
+			"sessionId": params.SessionID,
+			"threadId":  threadID,
+		})
+		return
+	}
+
+	loadedOptions := runtimeOptions{
+		Model:          strings.TrimSpace(resumed.Model),
+		ThoughtLevel:   strings.TrimSpace(resumed.ReasoningEffort),
+		ApprovalPolicy: stringFromAny(resumed.ApprovalPolicy),
+		Sandbox:        stringFromAny(resumed.Sandbox),
+	}
+	s.setSessionConfig(params.SessionID, loadedOptions)
+	configOptions := s.buildSessionConfigOptions(ctx, loadedOptions)
+	s.setSessionConfigOptions(params.SessionID, configOptions)
+
+	s.sessionTodosMu.Lock()
+	s.sessionTodos[params.SessionID] = nil
+	s.sessionTodosMu.Unlock()
+
+	s.emitUpdates(historyUpdatesFromThread(params.SessionID, resumed.Thread))
+	_ = s.codec.WriteResult(id, SessionLoadResult{
+		ConfigOptions: configOptions,
+	})
+}
+
+func (s *Server) handleSessionList(ctx context.Context, id json.RawMessage, paramsRaw json.RawMessage) {
+	var params SessionListParams
+	if err := decodeParams(paramsRaw, &params); err != nil {
+		s.writeInvalidParams(id, map[string]any{"error": err.Error()})
+		return
+	}
+
+	lister, ok := s.app.(appSessionLister)
+	if !ok {
+		s.writeError(id, rpcErrMethodNotFound, "method not found", map[string]any{
+			"method": methodSessionList,
+		})
+		return
+	}
+
+	cursor, err := decodeSessionListCursor(params.Cursor)
+	if err != nil {
+		s.writeInvalidParams(id, map[string]any{"cursor": err.Error()})
+		return
+	}
+
+	result, err := s.listSessionsPage(ctx, lister, strings.TrimSpace(params.CWD), cursor)
+	if err != nil {
+		s.writeInternalError(id, "session/list failed", map[string]any{"error": err.Error()})
+		return
+	}
+	_ = s.codec.WriteResult(id, result)
 }
 
 func (s *Server) handleSessionNew(ctx context.Context, id json.RawMessage, paramsRaw json.RawMessage) {
@@ -851,6 +1014,281 @@ func (s *Server) handleSessionCancel(ctx context.Context, id json.RawMessage, pa
 	_ = s.codec.WriteResult(id, SessionCancelResult{Cancelled: true})
 }
 
+func (s *Server) listSessionsPage(
+	ctx context.Context,
+	lister appSessionLister,
+	cwd string,
+	cursor sessionListCursor,
+) (SessionListResult, error) {
+	page, err := s.fetchThreadListPage(ctx, lister, cwd, cursor.Archived, cursor.Cursor, nil)
+	if err != nil {
+		return SessionListResult{}, err
+	}
+
+	if cursor.Archived {
+		nextCursor := ""
+		if strings.TrimSpace(page.NextCursor) != "" {
+			nextCursor = encodeSessionListCursor(sessionListCursor{Archived: true, Cursor: page.NextCursor})
+		}
+		return SessionListResult{
+			Sessions:   s.sessionInfosFromThreads(page.Data, true),
+			NextCursor: nextCursor,
+		}, nil
+	}
+
+	if len(page.Data) == 0 && page.NextCursor == "" {
+		archivedPage, archivedErr := s.fetchThreadListPage(ctx, lister, cwd, true, "", nil)
+		if archivedErr != nil {
+			return SessionListResult{}, archivedErr
+		}
+		nextCursor := ""
+		if strings.TrimSpace(archivedPage.NextCursor) != "" {
+			nextCursor = encodeSessionListCursor(sessionListCursor{Archived: true, Cursor: archivedPage.NextCursor})
+		}
+		return SessionListResult{
+			Sessions:   s.sessionInfosFromThreads(archivedPage.Data, true),
+			NextCursor: nextCursor,
+		}, nil
+	}
+
+	nextCursor := encodeSessionListCursor(sessionListCursor{Archived: false, Cursor: page.NextCursor})
+	if nextCursor == "" {
+		limit := uint32(1)
+		archivedProbe, archivedErr := s.fetchThreadListPage(ctx, lister, cwd, true, "", &limit)
+		if archivedErr != nil {
+			return SessionListResult{}, archivedErr
+		}
+		if len(archivedProbe.Data) > 0 {
+			nextCursor = encodeSessionListCursor(sessionListCursor{Archived: true})
+		}
+	}
+
+	return SessionListResult{
+		Sessions:   s.sessionInfosFromThreads(page.Data, false),
+		NextCursor: nextCursor,
+	}, nil
+}
+
+func (s *Server) fetchThreadListPage(
+	ctx context.Context,
+	lister appSessionLister,
+	cwd string,
+	archived bool,
+	cursor string,
+	limit *uint32,
+) (codex.ThreadListResult, error) {
+	return lister.ThreadList(ctx, codex.ThreadListParams{
+		Archived: &archived,
+		Cursor:   cursor,
+		CWD:      cwd,
+		Limit:    limit,
+	})
+}
+
+func (s *Server) sessionInfosFromThreads(threads []codex.Thread, archived bool) []SessionInfo {
+	if len(threads) == 0 {
+		return nil
+	}
+
+	out := make([]SessionInfo, 0, len(threads))
+	for _, thread := range threads {
+		threadID := strings.TrimSpace(thread.ID)
+		if threadID == "" {
+			continue
+		}
+
+		meta := map[string]any{
+			"threadId": threadID,
+			"archived": archived,
+		}
+		if createdAt := formatUnixTimestamp(thread.CreatedAt); createdAt != "" {
+			meta["createdAt"] = createdAt
+		}
+		if modelProvider := strings.TrimSpace(thread.ModelProvider); modelProvider != "" {
+			meta["modelProvider"] = modelProvider
+		}
+		if preview := strings.TrimSpace(thread.Preview); preview != "" {
+			meta["preview"] = preview
+		}
+		if path := strings.TrimSpace(thread.Path); path != "" {
+			meta["path"] = path
+		}
+		if thread.Source != nil {
+			meta["source"] = thread.Source
+		}
+		if thread.Status != nil {
+			meta["status"] = thread.Status
+		}
+
+		out = append(out, SessionInfo{
+			SessionID: s.sessions.Create(threadID),
+			CWD:       strings.TrimSpace(thread.CWD),
+			Title:     sessionTitle(thread),
+			UpdatedAt: formatUnixTimestamp(thread.UpdatedAt),
+			Meta:      meta,
+		})
+	}
+	return out
+}
+
+func historyUpdatesFromThread(sessionID string, thread codex.Thread) []SessionUpdateParams {
+	if sessionID == "" || len(thread.Turns) == 0 {
+		return nil
+	}
+
+	updates := make([]SessionUpdateParams, 0, len(thread.Turns)*2)
+	for _, turn := range thread.Turns {
+		turnID := strings.TrimSpace(turn.ID)
+		for _, item := range turn.Items {
+			switch strings.TrimSpace(item.Type) {
+			case "userMessage":
+				text := historyUserMessageText(item.Content)
+				if strings.TrimSpace(text) == "" {
+					continue
+				}
+				updates = append(updates, SessionUpdateParams{
+					SessionID: sessionID,
+					TurnID:    turnID,
+					Type:      "message",
+					Role:      "user",
+					ItemID:    strings.TrimSpace(item.ID),
+					ItemType:  item.Type,
+					Delta:     text,
+				})
+			case "agentMessage":
+				if strings.TrimSpace(item.Text) == "" {
+					continue
+				}
+				update := SessionUpdateParams{
+					SessionID: sessionID,
+					TurnID:    turnID,
+					Type:      "message",
+					Role:      "assistant",
+					ItemID:    strings.TrimSpace(item.ID),
+					ItemType:  item.Type,
+					Delta:     item.Text,
+				}
+				if todos := parseMarkdownTodoItems(item.Text); len(todos) > 0 {
+					update.Todo = todos
+				}
+				updates = append(updates, update)
+			}
+		}
+	}
+	return updates
+}
+
+func historyUserMessageText(items []codex.UserInput) string {
+	if len(items) == 0 {
+		return ""
+	}
+
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		switch strings.ToLower(strings.TrimSpace(item.Type)) {
+		case "text":
+			if text := strings.TrimSpace(item.Text); text != "" {
+				parts = append(parts, text)
+			}
+		case "image":
+			text := strings.TrimSpace(item.URL)
+			if text == "" {
+				text = "[Image]"
+			} else {
+				text = "[Image: " + text + "]"
+			}
+			parts = append(parts, text)
+		case "localimage":
+			text := strings.TrimSpace(item.Path)
+			if text == "" {
+				text = "[Local image]"
+			} else {
+				text = "[Local image: " + text + "]"
+			}
+			parts = append(parts, text)
+		case "mention":
+			text := strings.TrimSpace(item.Text)
+			switch {
+			case text != "" && strings.TrimSpace(item.Path) != "":
+				parts = append(parts, "[Mention: "+strings.TrimSpace(item.Path)+"]\n"+text)
+			case text != "":
+				parts = append(parts, text)
+			case strings.TrimSpace(item.Path) != "":
+				parts = append(parts, "[Mention: "+strings.TrimSpace(item.Path)+"]")
+			case strings.TrimSpace(item.Name) != "":
+				parts = append(parts, "[Mention: "+strings.TrimSpace(item.Name)+"]")
+			}
+		default:
+			if text := strings.TrimSpace(item.Text); text != "" {
+				parts = append(parts, text)
+				continue
+			}
+			if path := strings.TrimSpace(item.Path); path != "" {
+				parts = append(parts, path)
+			}
+		}
+	}
+
+	return strings.Join(parts, "\n")
+}
+
+func sessionTitle(thread codex.Thread) string {
+	title := strings.TrimSpace(thread.Name)
+	if title == "" {
+		title = strings.TrimSpace(thread.Preview)
+	}
+	title = strings.Join(strings.Fields(title), " ")
+	if title == "" {
+		return strings.TrimSpace(thread.ID)
+	}
+	return title
+}
+
+func formatUnixTimestamp(value int64) string {
+	if value <= 0 {
+		return ""
+	}
+	return time.Unix(value, 0).UTC().Format(time.RFC3339)
+}
+
+func stringFromAny(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	default:
+		return ""
+	}
+}
+
+func decodeSessionListCursor(raw string) (sessionListCursor, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return sessionListCursor{}, nil
+	}
+
+	data, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return sessionListCursor{}, fmt.Errorf("invalid cursor encoding")
+	}
+
+	var cursor sessionListCursor
+	if err := json.Unmarshal(data, &cursor); err != nil {
+		return sessionListCursor{}, fmt.Errorf("invalid cursor payload")
+	}
+	return cursor, nil
+}
+
+func encodeSessionListCursor(cursor sessionListCursor) string {
+	if strings.TrimSpace(cursor.Cursor) == "" && !cursor.Archived {
+		return ""
+	}
+	payload, err := json.Marshal(cursor)
+	if err != nil {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(payload)
+}
+
 func isRetryableTurnError(message string) bool {
 	lower := strings.ToLower(strings.TrimSpace(message))
 	if lower == "" {
@@ -1024,6 +1462,9 @@ func buildSessionUpdatePayload(update SessionUpdateParams) map[string]any {
 	if update.Type != "" {
 		payload["type"] = update.Type
 	}
+	if update.Role != "" {
+		payload["role"] = update.Role
+	}
 	if update.Phase != "" {
 		payload["phase"] = update.Phase
 	}
@@ -1071,8 +1512,12 @@ func buildSessionUpdatePayload(update SessionUpdateParams) map[string]any {
 func mapACPUpdateForClient(update SessionUpdateParams) map[string]any {
 	switch update.Type {
 	case "message":
+		sessionUpdate := "agent_message_chunk"
+		if strings.EqualFold(strings.TrimSpace(update.Role), "user") {
+			sessionUpdate = "user_message_chunk"
+		}
 		return map[string]any{
-			"sessionUpdate": "agent_message_chunk",
+			"sessionUpdate": sessionUpdate,
 			"content": map[string]any{
 				"type": "text",
 				"text": update.Delta,

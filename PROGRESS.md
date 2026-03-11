@@ -6,7 +6,7 @@
 ## 项目概览
 - 项目：acp-adapter（基于 Codex App Server 的 ACP 适配器，同时支持 Claude Code CLI 子进程适配）
 - 当前阶段：Claude Adapter CLI 重构完成（C-R5 内部迭代）
-- 最近更新：2026-03-09
+- 最近更新：2026-03-11
 
 ## 关键链接/文档
 - docs/SPEC.md：技术方案（权威）
@@ -83,6 +83,46 @@
   - 新增 `TestE2EACPPlanUpdateMappedFromPlanDeltaFallback`，覆盖仅有 `item/plan/delta + item/completed(plan)` 时的 fallback plan streaming。
   - 新增 `TestBuildSessionUpdatePayloadPlan`，覆盖 `session/update` 标准 envelope 序列化。
   - fake app-server 新增 structured plan 场景，便于回归 `turn/plan/updated` 桥接。
+
+## 2026-03-11 增量修复（ACP `session/list` -> Codex `thread/list`）
+- 修复点：
+  - ACP server 新增 `session/list` handler，并在 Codex adapter 初始化能力里声明 `agentCapabilities.sessionCapabilities.list`。
+  - Codex app-server client/supervisor 新增 `thread/list` 调用，桥接历史线程到 ACP session 摘要。
+  - `session/list` 结果映射字段：
+    - `sessionId`：复用当前进程内已知 session 映射；历史 thread 首次发现时分配稳定的 adapter session id。
+    - `cwd` / `title` / `updatedAt`：分别来自 thread cwd、`name|preview`、UTC RFC3339 时间。
+    - `_meta`：补充 `threadId`、`archived`、`createdAt`、`modelProvider`、`preview`、`source`、`status`。
+  - 为满足“历史会话”语义，adapter 在内部串接 app-server 的 active / archived 两段 `thread/list` 分页，并对 ACP 暴露单一 opaque cursor。
+- 测试与回归：
+  - fake app-server 新增 `thread/list`、cwd 过滤、active/archived 分页，以及新建 thread 自动进入 history 列表。
+  - 新增 `TestE2ESessionListMappedFromThreadList`，覆盖 capability 广告、当前 sessionId 复用、RFC3339 时间、cwd 过滤、active→archived 分页。
+  - 全量通过：`go test ./...`。
+
+## 2026-03-11 增量修复（ACP `session/load` -> Codex `thread/resume`）
+- 修复点：
+  - ACP server 新增 `session/load` handler，并在 Codex adapter 初始化能力里声明 `agentCapabilities.loadSession=true`。
+  - Codex app-server client/supervisor 新增 `thread/resume` 调用，使用 persisted thread history 恢复会话到内存。
+  - `session/load` 成功后会先把历史 turn 中的 `userMessage` / `agentMessage` 通过 `session/update` 回放给上游，再返回 `configOptions`。
+  - 历史消息映射：
+    - `userMessage` -> `update.sessionUpdate="user_message_chunk"`
+    - `agentMessage` -> `update.sessionUpdate="agent_message_chunk"`
+  - load 后会用 `thread/resume` 返回的 `model` / `reasoningEffort` 刷新 session config，使后续 `session/prompt` 沿用恢复出的运行参数。
+- 测试与回归：
+  - fake app-server 新增 `thread/resume` 与 seeded thread history。
+  - 新增 `TestE2ESessionLoadReplaysHistoryAndAllowsPrompt`，覆盖 `session/list -> session/load -> session/prompt` 链路、历史回放、TODO 回放与 resumed config 复用。
+  - 全量通过：`go test ./...`。
+
+## 2026-03-11 增量修复（Claude CLI `session/list` 占位 + `session/load` 部分恢复）
+- 修复点：
+  - Claude adapter 新增 ACP `session/list` / `session/load` 方法入口，并在初始化能力中声明 `agentCapabilities.sessionCapabilities.list` 与 `agentCapabilities.loadSession=true`。
+  - `session/list` 当前返回空页占位；原因是 Claude CLI 只有 `--resume` / `--continue` 恢复入口，没有稳定的 machine-readable 历史会话枚举接口。
+  - `session/load` 当前支持“已知 Claude native session ID”的部分恢复：adapter 直接把该 ID 绑定为 ACP `sessionId`，后续 `session/prompt` 使用 `claude --resume <session-id>` 续聊。
+  - ACP server 新增 external session loader 旁路，允许非 Codex 后端在 adapter 尚未见过该 session 时，通过外部 session ID 先绑定 thread。
+  - `bridge.Store` 新增显式 `Bind(sessionID, threadID)`，用于把 caller-supplied session id 绑定到运行时 thread。
+- 测试与回归：
+  - 新增 `TestClaudeE2ESessionListEmptyAndLoadAllowsPrompt`，覆盖 capability 广告、空 `session/list`、以及 `session/load -> session/prompt` 可继续。
+  - Claude 相关回归通过：`go test ./test/integration -run 'TestClaudeE2E(BasicPromptAndCancel|SessionConfigOptionsModelListAndSwitch|SessionListEmptyAndLoadAllowsPrompt|InitializeContainsStandardFields|ApprovalAutoApproved|NoAuthRequiredWithCLI|ContractStandaloneVsEmbedded|UnifiedCmdAdapterFlag)$' -count=1`。
+  - 全量通过：`go test ./...`。
 
 ## Claude Adapter Program（C-R0 ~ C-R5）
 - [x] C-R0 文档立项

@@ -468,6 +468,95 @@ func TestClaudeE2EInitializeContainsStandardFields(t *testing.T) {
 	h.assertStdoutPureJSONRPC()
 }
 
+func TestClaudeE2ESessionListEmptyAndLoadAllowsPrompt(t *testing.T) {
+	claudeBin := buildFakeClaudeCLI(t)
+	h := startClaudeAdapter(t, claudeBin)
+	loadCWD := repoRoot(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	initResp := h.waitResponse("1", responseTimeout)
+	var initResult struct {
+		AgentCapabilities struct {
+			LoadSession         bool `json:"loadSession"`
+			SessionCapabilities struct {
+				List json.RawMessage `json:"list"`
+			} `json:"sessionCapabilities"`
+		} `json:"agentCapabilities"`
+	}
+	unmarshalResult(t, initResp, &initResult)
+	if !initResult.AgentCapabilities.LoadSession {
+		t.Fatalf("initialize should advertise loadSession=true for Claude CLI placeholder support")
+	}
+	if len(initResult.AgentCapabilities.SessionCapabilities.List) == 0 {
+		t.Fatalf("initialize should advertise session/list capability for Claude CLI placeholder support")
+	}
+
+	h.sendRequest("2", "session/list", map[string]any{
+		"cwd": loadCWD,
+	})
+	listResp := h.waitResponse("2", responseTimeout)
+	var listResult struct {
+		Sessions   []map[string]any `json:"sessions"`
+		NextCursor string           `json:"nextCursor"`
+	}
+	unmarshalResult(t, listResp, &listResult)
+	if len(listResult.Sessions) != 0 {
+		t.Fatalf("Claude CLI session/list placeholder should return empty page, got %+v", listResult.Sessions)
+	}
+	if listResult.NextCursor != "" {
+		t.Fatalf("Claude CLI session/list placeholder should not return nextCursor, got %q", listResult.NextCursor)
+	}
+
+	loadedSessionID := "11111111-1111-4111-8111-111111111111"
+	h.sendRequest("3", "session/load", map[string]any{
+		"sessionId": loadedSessionID,
+		"cwd":       loadCWD,
+	})
+	loadResp := h.waitResponse("3", responseTimeout)
+	var loadResult struct {
+		ConfigOptions []sessionConfigOption `json:"configOptions"`
+	}
+	unmarshalResult(t, loadResp, &loadResult)
+	if len(loadResult.ConfigOptions) == 0 {
+		t.Fatalf("session/load should return configOptions for loaded Claude session")
+	}
+
+	h.sendRequest("4", "session/prompt", map[string]any{
+		"sessionId": loadedSessionID,
+		"prompt":    "hello after load",
+	})
+
+	gotPromptResp := false
+	sawMessageChunk := false
+	for !gotPromptResp {
+		msg := h.nextMessage(responseTimeout)
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.SessionID != loadedSessionID {
+				t.Fatalf("session/update routed to wrong loaded session: got %q want %q", update.SessionID, loadedSessionID)
+			}
+			if update.Type == "message" && update.Delta != "" {
+				sawMessageChunk = true
+			}
+			continue
+		}
+		if messageID(msg) != "4" {
+			continue
+		}
+		var promptResult struct {
+			StopReason string `json:"stopReason"`
+		}
+		unmarshalResult(t, msg, &promptResult)
+		if promptResult.StopReason != "end_turn" {
+			t.Fatalf("loaded Claude session prompt expected stopReason=end_turn, got %q", promptResult.StopReason)
+		}
+		gotPromptResp = true
+	}
+	if !sawMessageChunk {
+		t.Fatalf("loaded Claude session prompt should stream at least one message chunk")
+	}
+}
+
 func TestClaudeContractStandaloneVsEmbedded(t *testing.T) {
 	claudeBin := buildFakeClaudeCLI(t)
 

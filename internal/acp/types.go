@@ -101,10 +101,42 @@ type AuthenticateResult struct {
 	ActiveAuthMethod string `json:"activeAuthMethod,omitempty"`
 }
 
+// SessionLoadParams restores one historical session into memory.
+type SessionLoadParams struct {
+	SessionID string `json:"sessionId"`
+	CWD       string `json:"cwd"`
+}
+
+// SessionLoadResult reports the restored runtime config snapshot.
+type SessionLoadResult struct {
+	ConfigOptions []SessionConfig `json:"configOptions,omitempty"`
+}
+
 // SessionNewParams are optional fields for session/new.
 type SessionNewParams struct {
 	CWD string `json:"cwd,omitempty"`
 	PromptConfig
+}
+
+// SessionListParams requests one page of historical sessions.
+type SessionListParams struct {
+	CWD    string `json:"cwd,omitempty"`
+	Cursor string `json:"cursor,omitempty"`
+}
+
+// SessionInfo is one ACP-discoverable historical session summary.
+type SessionInfo struct {
+	SessionID string         `json:"sessionId"`
+	CWD       string         `json:"cwd"`
+	Title     string         `json:"title"`
+	UpdatedAt string         `json:"updatedAt"`
+	Meta      map[string]any `json:"_meta,omitempty"`
+}
+
+// SessionListResult carries one page of historical sessions.
+type SessionListResult struct {
+	Sessions   []SessionInfo `json:"sessions"`
+	NextCursor string        `json:"nextCursor,omitempty"`
 }
 
 // SessionNewResult returns new session id.
@@ -262,6 +294,7 @@ type SessionUpdateParams struct {
 	SessionID          string          `json:"sessionId"`
 	TurnID             string          `json:"turnId"`
 	Type               string          `json:"type"`
+	Role               string          `json:"role,omitempty"`
 	Phase              string          `json:"phase,omitempty"`
 	ItemID             string          `json:"itemId,omitempty"`
 	ItemType           string          `json:"itemType,omitempty"`

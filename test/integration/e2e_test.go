@@ -541,6 +541,252 @@ func TestE2EAcceptanceA1ToA5AndB1(t *testing.T) {
 	h.assertStdoutPureJSONRPC()
 }
 
+func TestE2ESessionListMappedFromThreadList(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	initResp := h.waitResponse("1", responseTimeout)
+	var initResult struct {
+		AgentCapabilities struct {
+			LoadSession         bool `json:"loadSession"`
+			SessionCapabilities struct {
+				List json.RawMessage `json:"list"`
+			} `json:"sessionCapabilities"`
+		} `json:"agentCapabilities"`
+	}
+	unmarshalResult(t, initResp, &initResult)
+	if !initResult.AgentCapabilities.LoadSession {
+		t.Fatalf("initialize should advertise loadSession=true")
+	}
+	if len(initResult.AgentCapabilities.SessionCapabilities.List) == 0 {
+		t.Fatalf("initialize should advertise session/list capability")
+	}
+
+	h.sendRequest("2", "session/new", map[string]any{
+		"cwd": "/workspace/session-list",
+	})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+	if newResult.SessionID == "" {
+		t.Fatalf("session/new returned empty sessionId")
+	}
+
+	type sessionListItem struct {
+		SessionID string         `json:"sessionId"`
+		CWD       string         `json:"cwd"`
+		Title     string         `json:"title"`
+		UpdatedAt string         `json:"updatedAt"`
+		Meta      map[string]any `json:"_meta"`
+	}
+	type sessionListResult struct {
+		Sessions   []sessionListItem `json:"sessions"`
+		NextCursor string            `json:"nextCursor"`
+	}
+
+	h.sendRequest("3", "session/list", map[string]any{
+		"cwd": "/workspace/session-list",
+	})
+	listRespOne := h.waitResponse("3", responseTimeout)
+	var pageOne sessionListResult
+	unmarshalResult(t, listRespOne, &pageOne)
+	if len(pageOne.Sessions) != 2 {
+		t.Fatalf("session/list first page len=%d, want 2", len(pageOne.Sessions))
+	}
+	if pageOne.NextCursor == "" {
+		t.Fatalf("session/list first page should include nextCursor")
+	}
+
+	foundCurrentSession := false
+	for _, item := range pageOne.Sessions {
+		if item.CWD != "/workspace/session-list" {
+			t.Fatalf("session/list cwd filter mismatch: got %q", item.CWD)
+		}
+		if item.Title == "" {
+			t.Fatalf("session/list title should not be empty: %+v", item)
+		}
+		if _, err := time.Parse(time.RFC3339, item.UpdatedAt); err != nil {
+			t.Fatalf("session/list updatedAt should be RFC3339: %q (%v)", item.UpdatedAt, err)
+		}
+		if strings.TrimSpace(fmt.Sprint(item.Meta["threadId"])) == "" {
+			t.Fatalf("session/list _meta.threadId should be present: %+v", item.Meta)
+		}
+		if item.SessionID == newResult.SessionID {
+			foundCurrentSession = true
+		}
+	}
+	if !foundCurrentSession {
+		t.Fatalf("session/list should reuse current sessionId %q on first page", newResult.SessionID)
+	}
+
+	h.sendRequest("4", "session/list", map[string]any{
+		"cwd":    "/workspace/session-list",
+		"cursor": pageOne.NextCursor,
+	})
+	listRespTwo := h.waitResponse("4", responseTimeout)
+	var pageTwo sessionListResult
+	unmarshalResult(t, listRespTwo, &pageTwo)
+	if len(pageTwo.Sessions) != 1 {
+		t.Fatalf("session/list second page len=%d, want 1", len(pageTwo.Sessions))
+	}
+	if pageTwo.NextCursor == "" {
+		t.Fatalf("session/list second page should continue into archived history")
+	}
+
+	h.sendRequest("5", "session/list", map[string]any{
+		"cwd":    "/workspace/session-list",
+		"cursor": pageTwo.NextCursor,
+	})
+	listRespThree := h.waitResponse("5", responseTimeout)
+	var pageThree sessionListResult
+	unmarshalResult(t, listRespThree, &pageThree)
+	if len(pageThree.Sessions) != 1 {
+		t.Fatalf("session/list archived page len=%d, want 1", len(pageThree.Sessions))
+	}
+	if pageThree.NextCursor != "" {
+		t.Fatalf("session/list archived final page should not include nextCursor, got %q", pageThree.NextCursor)
+	}
+	if got := pageThree.Sessions[0].Title; got != "Archived Session" {
+		t.Fatalf("session/list archived title=%q, want %q", got, "Archived Session")
+	}
+	archivedFlag, ok := pageThree.Sessions[0].Meta["archived"].(bool)
+	if !ok || !archivedFlag {
+		t.Fatalf("session/list archived page should mark _meta.archived=true: %+v", pageThree.Sessions[0].Meta)
+	}
+}
+
+func TestE2ESessionLoadReplaysHistoryAndAllowsPrompt(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	type sessionListItem struct {
+		SessionID string `json:"sessionId"`
+		Title     string `json:"title"`
+	}
+	type sessionListResult struct {
+		Sessions []sessionListItem `json:"sessions"`
+	}
+
+	h.sendRequest("2", "session/list", map[string]any{
+		"cwd": "/workspace/session-list",
+	})
+	listResp := h.waitResponse("2", responseTimeout)
+	var listResult sessionListResult
+	unmarshalResult(t, listResp, &listResult)
+
+	targetSessionID := ""
+	for _, item := range listResult.Sessions {
+		if item.Title == "Seed Active Session" {
+			targetSessionID = item.SessionID
+			break
+		}
+	}
+	if targetSessionID == "" {
+		t.Fatalf("seed session not found in session/list result: %+v", listResult.Sessions)
+	}
+
+	h.sendRequest("3", "session/load", map[string]any{
+		"sessionId": targetSessionID,
+		"cwd":       "/workspace/session-list",
+	})
+
+	var (
+		sawUserHistory      bool
+		sawAgentHistory     bool
+		sawLoadedTodo       bool
+		loadResultReceived  bool
+		loadConfigOptionSet []sessionConfigOption
+	)
+	for !loadResultReceived {
+		msg := h.reader.next(responseTimeout)
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.SessionID != targetSessionID {
+				t.Fatalf("session/load replay routed to wrong session: got %q want %q", update.SessionID, targetSessionID)
+			}
+			if update.Update != nil && update.Update.Content != nil {
+				switch update.Update.SessionUpdate {
+				case "user_message_chunk":
+					if strings.Contains(update.Update.Content.Text, "Explain the adapter architecture.") {
+						sawUserHistory = true
+					}
+				case "agent_message_chunk":
+					if strings.Contains(update.Update.Content.Text, "bridges ACP stdio to Codex app-server") {
+						sawAgentHistory = true
+					}
+				}
+			}
+			if len(update.Todo) > 0 {
+				sawLoadedTodo = true
+			}
+			continue
+		}
+		if messageID(msg) != "3" {
+			continue
+		}
+
+		var loadResult struct {
+			ConfigOptions []sessionConfigOption `json:"configOptions"`
+		}
+		unmarshalResult(t, msg, &loadResult)
+		loadConfigOptionSet = loadResult.ConfigOptions
+		loadResultReceived = true
+	}
+
+	if !sawUserHistory {
+		t.Fatalf("session/load should replay at least one user_message_chunk")
+	}
+	if !sawAgentHistory {
+		t.Fatalf("session/load should replay at least one agent_message_chunk")
+	}
+	if !sawLoadedTodo {
+		t.Fatalf("session/load should replay todo-bearing assistant history")
+	}
+	if len(loadConfigOptionSet) == 0 {
+		t.Fatalf("session/load should return configOptions")
+	}
+
+	h.sendRequest("4", "session/prompt", map[string]any{
+		"sessionId": targetSessionID,
+		"prompt":    "profile probe",
+	})
+
+	var (
+		sawProfileProbe bool
+		gotPromptResp   bool
+	)
+	for !gotPromptResp {
+		msg := h.reader.next(responseTimeout)
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.Update != nil && update.Update.Content != nil &&
+				strings.Contains(update.Update.Content.Text, "profile model=gpt-4.1 thought=low") {
+				sawProfileProbe = true
+			}
+			continue
+		}
+		if messageID(msg) != "4" {
+			continue
+		}
+
+		var promptResult struct {
+			StopReason string `json:"stopReason"`
+		}
+		unmarshalResult(t, msg, &promptResult)
+		if promptResult.StopReason != "end_turn" {
+			t.Fatalf("loaded session prompt stopReason=%q, want end_turn", promptResult.StopReason)
+		}
+		gotPromptResp = true
+	}
+	if !sawProfileProbe {
+		t.Fatalf("loaded session prompt should reuse resumed model/thought_level config")
+	}
+}
+
 func TestE2EInitializeIncludesACPStandardFields(t *testing.T) {
 	h := startAdapter(t)
 

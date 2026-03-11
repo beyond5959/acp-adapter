@@ -77,6 +77,37 @@ func (c *Client) Initialized() error {
 	return c.notify(methodInitialized, map[string]any{})
 }
 
+// ThreadsList fetches one page of conversation history.
+func (c *Client) ThreadsList(ctx context.Context, params ThreadListParams) (ThreadListResult, error) {
+	var result ThreadListResult
+	if err := c.call(ctx, methodThreadList, params, &result); err != nil {
+		return ThreadListResult{}, err
+	}
+	return result, nil
+}
+
+// ThreadResume loads one persisted thread into memory.
+func (c *Client) ThreadResume(
+	ctx context.Context,
+	threadID string,
+	cwd string,
+	options RunOptions,
+) (ThreadResumeResult, error) {
+	params := ThreadResumeParams{
+		ThreadID:       threadID,
+		CWD:            cwd,
+		Model:          options.Model,
+		ApprovalPolicy: options.ApprovalPolicy,
+		Sandbox:        options.Sandbox,
+		Personality:    options.Personality,
+	}
+	var result ThreadResumeResult
+	if err := c.call(ctx, methodThreadResume, params, &result); err != nil {
+		return ThreadResumeResult{}, err
+	}
+	return result, nil
+}
+
 // ThreadStart starts a new thread and returns thread id.
 func (c *Client) ThreadStart(ctx context.Context, cwd string, options RunOptions) (string, error) {
 	params := ThreadStartParams{

@@ -44,6 +44,9 @@
 - ADR-0038：Codex app-server server-request 兼容（新版 approval 方法与 fail-closed 回退）
 - ADR-0039：Tool server-request 兼容回包（`requestUserInput`/`tool/call`）
 - ADR-0040：ACP `agent-plan` 映射（`turn/plan/updated` -> `session/update(plan)`）
+- ADR-0041：ACP `session/list` 映射到 Codex `thread/list`（含 archived 分页拼接）
+- ADR-0042：ACP `session/load` 映射到 Codex `thread/resume`（历史回放 + 恢复配置）
+- ADR-0043：Claude CLI `session/list` 占位 + `session/load` 部分恢复
 
 ---
 
@@ -954,4 +957,100 @@
   - `TestE2EACPPlanUpdateMappedFromTurnPlanUpdated`
   - `TestE2EACPPlanUpdateMappedFromPlanDeltaFallback`
   - `TestBuildSessionUpdatePayloadPlan`
+  - `go test ./...`
+
+### ADR-0041：ACP `session/list` 映射到 Codex `thread/list`（含 archived 分页拼接）
+- 日期：2026-03-11
+- 状态：Accepted
+- 背景：
+  - ACP `session/list` 用于列出历史 session；当前 adapter 仅支持 `session/new` / `session/prompt` / `session/cancel`，无法暴露 Codex 本地历史线程。
+  - Codex app-server schema 已提供 `thread/list`，且支持 `cwd` / `cursor` / `archived` 过滤与分页。
+- 决策：
+  - 仅在下游 app client 支持 `thread/list` 时，对外声明 `agentCapabilities.sessionCapabilities.list`。
+  - ACP `session/list` 直接桥接到 Codex `thread/list`，并将 `Thread` 映射成 ACP session 摘要：`sessionId`、`cwd`、`title`、`updatedAt`、`_meta`。
+  - adapter 内部把 active 与 archived 两段 `thread/list` 结果串成一个 ACP opaque cursor，向上游表现为单一连续分页流。
+  - session id 映射沿用 adapter 现有 session store：对已知 thread 复用既有 session id；首次发现的历史 thread 在当前进程内分配并缓存一个 session id。
+- 备选方案：
+  - 方案A：继续不支持 `session/list`。
+  - 方案B：ACP `session/list` 直接暴露 Codex thread id 作为 session id。
+  - 方案C：桥接 `thread/list`，但只返回 non-archived page。（采用方案为 B/C 的折中，既保留 adapter 侧 opaque session id，又补 archived 连续分页）
+- 取舍（Pros/Cons）：
+  - Pros：上游 ACP client 可以发现 Codex 历史会话；当前活跃 session 在列表里保持同一 session id；分页语义对上游简单。
+  - Cons：在尚未实现 `session/load` 前，`session/list` 返回的历史 session 主要用于发现与展示；历史 session id 目前只保证在 adapter 进程生命周期内稳定。
+- 影响范围（文件/模块）：
+  - `internal/acp/server.go`
+  - `internal/acp/types.go`
+  - `internal/codex/client.go`
+  - `internal/codex/supervisor.go`
+  - `internal/codex/types.go`
+  - `internal/bridge/session_state.go`
+  - `testdata/fake_codex_app_server/main.go`
+  - `test/integration/e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `TestE2ESessionListMappedFromThreadList`
+  - `go test ./...`
+
+### ADR-0042：ACP `session/load` 映射到 Codex `thread/resume`（历史回放 + 恢复配置）
+- 日期：2026-03-11
+- 状态：Accepted
+- 背景：
+  - ACP `session/load` 要求 adapter 将历史 session 恢复为可继续交互的活跃会话，并在 response 前回放历史消息。
+  - Codex app-server schema 已提供 `thread/resume`，且其 `thread.turns` 包含可用于 UI history replay 的持久化 turn/items。
+- 决策：
+  - 仅在下游 app client 支持 `thread/resume` 时，对外声明 `agentCapabilities.loadSession=true`。
+  - ACP `session/load` 直接桥接到 Codex `thread/resume`。
+  - 在返回 `session/load` response 之前，adapter 遍历 `thread.turns[].items[]`，把：
+    - `userMessage` 映射为 `session/update(update.sessionUpdate="user_message_chunk")`
+    - `agentMessage` 映射为 `session/update(update.sessionUpdate="agent_message_chunk")`
+  - load 成功后，用 `thread/resume` 返回的 `model` / `reasoningEffort` 刷新 session config，使后续 `session/prompt` 沿用恢复出的运行参数。
+  - 当前只重放持久化的消息型 item；非持久化或 lossy item 交给已知限制记录。
+- 备选方案：
+  - 方案A：只做 `thread/resume`，不回放历史，直接返回成功。
+  - 方案B：通过 `thread/read(includeTurns=true)` 读取 history，再单独 resume。
+  - 方案C：直接用 `thread/resume` 同时完成“恢复 + 读取 turns”，并先回放消息历史。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：实现简单，直接符合 ACP `session/load` 的“恢复后可继续对话”语义；load 后下一次 prompt 可以沿用恢复出的 model / thought level。
+  - Cons：受限于 app-server persisted history 的 lossy 特性，无法完整重建所有 tool/reasoning 细节；当前 session id 稳定性仍受 adapter 进程生命周期限制。
+- 影响范围（文件/模块）：
+  - `internal/acp/server.go`
+  - `internal/acp/types.go`
+  - `internal/codex/client.go`
+  - `internal/codex/supervisor.go`
+  - `internal/codex/types.go`
+  - `testdata/fake_codex_app_server/main.go`
+  - `test/integration/e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `TestE2ESessionLoadReplaysHistoryAndAllowsPrompt`
+  - `go test ./...`
+
+### ADR-0043：Claude CLI `session/list` 占位 + `session/load` 部分恢复
+- 日期：2026-03-11
+- 状态：Accepted
+- 背景：
+  - ACP `session/list` / `session/load` 面向“可发现历史会话 + 恢复后回放历史”的完整语义。
+  - 当前 Claude adapter 基于 `claude -p` CLI 子进程实现；本地 `claude --help` 可确认有 `--resume [value]` 与 `--continue`，但没有稳定的 machine-readable 会话列表接口。
+  - `--resume` 在未提供确切 session id 时会打开交互式 picker，不适合 ACP bridge 自动化调用；同时 CLI 未提供历史消息回放 API。
+- 决策：
+  - Claude adapter 暂时声明 `sessionCapabilities.list` 与 `loadSession`，但区分两条路径：
+    - `session/list`：返回空页占位，不尝试抓取交互式 picker 或解析未公开存储格式。
+    - `session/load`：接受 caller 提供的 Claude native session id，并把它直接绑定为 ACP `sessionId`；后续 turn 通过 `claude --resume <session-id>` 继续对话。
+  - ACP server 新增 external session loader 旁路，允许后端在 adapter 尚未见过该 session 时，先按外部 session id 建立映射。
+  - Claude CLI 模式下 `session/load` 不回放历史 `session/update`，`configOptions` 也只按当前 adapter 默认 model / effort 重建，不从历史 transcript 逆向恢复。
+- 备选方案：
+  - 方案A：不暴露 Claude `session/list` / `session/load` 能力，继续返回 `method not found`。
+  - 方案B：抓取 `claude --resume` 交互式 picker 或直接解析 CLI 本地 transcript 文件。
+  - 方案C：先提供空 `session/list` 与“已知 session id 可续聊”的 `session/load`，把不可自动化的部分显式记录为限制。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：上游客户端不再直接撞 `method not found`；对已知 Claude native session id 的场景，可尽快打通继续对话；不依赖脆弱的交互式抓取或未承诺稳定性的本地存储格式。
+  - Cons：`session/list` 目前没有真实历史发现能力；`session/load` 不满足 ACP 对“先回放历史再返回”的完整理想语义；跨客户端共享 Claude history 仍需外部保存 native session id。
+- 影响范围（文件/模块）：
+  - `internal/acp/server.go`
+  - `internal/bridge/session_state.go`
+  - `internal/claude/client.go`
+  - `test/integration/claude_e2e_test.go`
+  - `PROGRESS.md`
+  - `docs/KNOWN_ISSUES.md`
+- 验证方式（测试/验收项）：
+  - `TestClaudeE2ESessionListEmptyAndLoadAllowsPrompt`
+  - `go test ./test/integration -run TestClaudeE2E -count=1`
   - `go test ./...`

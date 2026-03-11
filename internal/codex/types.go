@@ -83,6 +83,71 @@ type UserInput struct {
 	Name string `json:"name,omitempty"`
 }
 
+// ThreadListParams requests one page of thread history.
+type ThreadListParams struct {
+	Archived *bool   `json:"archived,omitempty"`
+	Cursor   string  `json:"cursor,omitempty"`
+	CWD      string  `json:"cwd,omitempty"`
+	Limit    *uint32 `json:"limit,omitempty"`
+}
+
+// ThreadListResult carries one page of thread history.
+type ThreadListResult struct {
+	Data       []Thread `json:"data"`
+	NextCursor string   `json:"nextCursor,omitempty"`
+}
+
+// Thread is the minimal app-server history shape used by ACP session/list.
+type Thread struct {
+	ID            string `json:"id"`
+	CWD           string `json:"cwd"`
+	Name          string `json:"name,omitempty"`
+	Preview       string `json:"preview,omitempty"`
+	Path          string `json:"path,omitempty"`
+	ModelProvider string `json:"modelProvider,omitempty"`
+	CreatedAt     int64  `json:"createdAt"`
+	UpdatedAt     int64  `json:"updatedAt"`
+	Source        any    `json:"source,omitempty"`
+	Status        any    `json:"status,omitempty"`
+	Turns         []Turn `json:"turns,omitempty"`
+}
+
+// Turn is one historical turn returned by thread/resume.
+type Turn struct {
+	ID     string       `json:"id"`
+	Status string       `json:"status"`
+	Items  []ThreadItem `json:"items,omitempty"`
+}
+
+// ThreadItem is one persisted thread item returned by thread/resume.
+type ThreadItem struct {
+	ID      string      `json:"id"`
+	Type    string      `json:"type"`
+	Text    string      `json:"text,omitempty"`
+	Content []UserInput `json:"content,omitempty"`
+}
+
+// ThreadResumeParams resumes a persisted thread into memory.
+type ThreadResumeParams struct {
+	ThreadID       string `json:"threadId"`
+	CWD            string `json:"cwd,omitempty"`
+	Model          string `json:"model,omitempty"`
+	ApprovalPolicy string `json:"approvalPolicy,omitempty"`
+	Sandbox        string `json:"sandbox,omitempty"`
+	Personality    string `json:"personality,omitempty"`
+}
+
+// ThreadResumeResult carries the resumed thread and effective runtime settings.
+type ThreadResumeResult struct {
+	ApprovalPolicy  any    `json:"approvalPolicy,omitempty"`
+	CWD             string `json:"cwd,omitempty"`
+	Model           string `json:"model,omitempty"`
+	ModelProvider   string `json:"modelProvider,omitempty"`
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+	Sandbox         any    `json:"sandbox,omitempty"`
+	Thread          Thread `json:"thread"`
+}
+
 // ThreadStartParams starts a new conversation thread.
 type ThreadStartParams struct {
 	CWD string `json:"cwd,omitempty"`
@@ -498,6 +563,8 @@ type TurnEvent struct {
 
 const (
 	methodInitialized                         = "initialized"
+	methodThreadList                          = "thread/list"
+	methodThreadResume                        = "thread/resume"
 	methodThreadStart                         = "thread/start"
 	methodThreadCompact                       = "thread/compact/start"
 	methodTurnStart                           = "turn/start"
