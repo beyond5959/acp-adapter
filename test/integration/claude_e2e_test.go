@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -466,6 +467,43 @@ func TestClaudeE2EInitializeContainsStandardFields(t *testing.T) {
 	}
 
 	h.assertStdoutPureJSONRPC()
+}
+
+func TestClaudeE2EAvailableCommandsPublishedOnSessionNew(t *testing.T) {
+	claudeBin := buildFakeClaudeCLI(t)
+	h := startClaudeAdapter(t, claudeBin)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	for {
+		msg := h.nextMessage(responseTimeout)
+		if msg.Method != "session/update" {
+			continue
+		}
+		update := decodeSessionUpdate(t, msg)
+		if update.SessionID != newResult.SessionID || update.Type != "available_commands_update" {
+			continue
+		}
+		if update.Update == nil || update.Update.SessionUpdate != "available_commands_update" {
+			t.Fatalf("Claude available commands update envelope missing: %+v", update)
+		}
+		want := []string{"review", "review-branch", "review-commit", "init", "compact", "logout"}
+		if got := availableCommandNames(update.AvailableCommands); !reflect.DeepEqual(got, want) {
+			t.Fatalf("Claude availableCommands=%v, want %v", got, want)
+		}
+		if hasAvailableCommand(update.AvailableCommands, "mcp") {
+			t.Fatalf("Claude availableCommands should not advertise /mcp: %+v", update.AvailableCommands)
+		}
+		return
+	}
 }
 
 func TestClaudeE2ESessionListEmptyAndLoadAllowsPrompt(t *testing.T) {

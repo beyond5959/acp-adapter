@@ -45,6 +45,7 @@
 - KI-0039：ACP `agent-plan` 仍依赖 `turn/plan/updated`，且 priority 只能启发式回填
 - KI-0040：`session/load` 已实现，但历史 session 标识与回放仍有局限
 - KI-0041：Claude CLI `session/list` / `session/load` 仅做占位与部分恢复
+- KI-0042：`available_commands_update` 目前仍是 adapter 级命令目录
 
 ---
 
@@ -258,10 +259,26 @@
 - Workaround：
   - 若上游需要恢复 Claude 会话，必须自行缓存 Claude native session id，再把该 id 传给 `session/load`。
   - 不要把 Claude `session/list` 结果视为真实历史索引；当前它只是协议占位。
-  - 若必须展示完整历史，请使用原生 Claude Code 客户端或等待 CLI/SDK 暴露稳定 transcript API。
 - 后续计划：
   - 若 Claude CLI/SDK 后续提供稳定的会话列表或 transcript 读取接口，再升级为真正的 `session/list` / `session/load` 历史回放实现。
   - 评估是否在 adapter 内持久化“ACP session id -> Claude native session id”映射，减少上游自行缓存的负担。
+
+## KI-0042：`available_commands_update` 目前仍是 adapter 级命令目录
+- 现象：
+  - adapter 已支持在 `session/new` / `session/load` 后主动发布 ACP `available_commands_update`，并在 `/logout` / `authenticate` 后刷新命令表。
+  - 但命令目录当前仍由 adapter runtime 静态定义，不会实时探测更细粒度的后端能力变化。
+- 影响：
+  - Codex 真实后端如果因版本/配置差异暂时失去某个 endpoint，可广告命令与实际可执行能力短时间不一致。
+  - `authenticate` 只会刷新当前进程内“已知 session”；外部客户端若缓存了旧 session 且未重新连上，命令表可能仍旧。
+- 复现：
+  - 启动 session 后更新底层 codex app-server 版本或外部配置，再观察客户端 slash popup。
+  - `/logout` 后在另一端恢复认证，但不重新连接旧 session。
+- Workaround：
+  - 在能力明显变化后，重新创建或重新加载 session，让 adapter 重新发布命令目录。
+  - 对 Codex 后端版本敏感命令，仍以实际调用结果为准，并结合现有错误提示处理。
+- 后续计划：
+  - 评估把命令目录与更细粒度 capability 探测绑定，例如按后端 endpoint 可用性或客户端功能开关动态裁剪。
+  - 评估在更多全局状态变化时广播命令目录刷新事件。
 
 ## KI-0019：TODO 结构化仅覆盖 markdown checklist 形态
 - 现象：当前 TODO 结构化解析依赖 `- [ ]` / `- [x]`（含数字序号变体）markdown checklist。

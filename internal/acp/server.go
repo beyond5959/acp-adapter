@@ -199,11 +199,12 @@ type appSessionExternalLoader interface {
 
 // ServerOptions configures optional ACP server behaviors.
 type ServerOptions struct {
-	PatchApplyMode   string
-	RetryTurnOnCrash bool
-	Profiles         map[string]ProfileConfig
-	DefaultProfile   string
-	InitialAuthMode  string
+	PatchApplyMode    string
+	RetryTurnOnCrash  bool
+	Profiles          map[string]ProfileConfig
+	DefaultProfile    string
+	InitialAuthMode   string
+	AvailableCommands []AvailableCommand
 }
 
 // Server handles ACP JSON-RPC requests over one Transport.
@@ -249,6 +250,11 @@ func NewServer(
 		options.PatchApplyMode = string(patchApplyModeAppServer)
 	}
 	options.DefaultProfile = strings.TrimSpace(options.DefaultProfile)
+	if len(options.AvailableCommands) == 0 {
+		options.AvailableCommands = DefaultAvailableCommands()
+	} else {
+		options.AvailableCommands = cloneAvailableCommands(options.AvailableCommands)
+	}
 
 	return &Server{
 		codec:                codec,
@@ -265,6 +271,45 @@ func NewServer(
 		lastAuthMode:         strings.TrimSpace(options.InitialAuthMode),
 		authLoggedIn:         strings.TrimSpace(options.InitialAuthMode) != "",
 	}
+}
+
+// DefaultAvailableCommands returns the slash commands supported by every adapter backend.
+func DefaultAvailableCommands() []AvailableCommand {
+	return []AvailableCommand{
+		availableCommand("review", "Review the current workspace changes.", "optional review instructions"),
+		availableCommand("review-branch", "Review changes against another branch.", "<branch>"),
+		availableCommand("review-commit", "Review a specific commit.", "<sha>"),
+		availableCommand("init", "Generate project initialization guidance and scaffold suggestions.", "optional initialization instructions"),
+		availableCommand("compact", "Compact the current conversation history.", ""),
+		availableCommand("logout", "Clear the current adapter authentication state.", ""),
+	}
+}
+
+// CodexAvailableCommands returns the slash commands published for the Codex-backed adapter.
+func CodexAvailableCommands() []AvailableCommand {
+	commands := DefaultAvailableCommands()
+	commands = append(commands, availableCommand(
+		"mcp",
+		"Inspect or invoke configured MCP servers.",
+		"list | call <server> <tool> [arguments] | oauth <server>",
+	))
+	return commands
+}
+
+// ClaudeAvailableCommands returns the slash commands published for the Claude-backed adapter.
+func ClaudeAvailableCommands() []AvailableCommand {
+	return DefaultAvailableCommands()
+}
+
+func availableCommand(name string, description string, hint string) AvailableCommand {
+	command := AvailableCommand{
+		Name:        name,
+		Description: description,
+	}
+	if strings.TrimSpace(hint) != "" {
+		command.Input = &AvailableCommandInput{Hint: hint}
+	}
+	return command
 }
 
 // Serve reads ACP requests and writes responses/notifications.
@@ -443,6 +488,7 @@ func (s *Server) handleAuthenticate(id json.RawMessage, paramsRaw json.RawMessag
 		Authenticated:    true,
 		ActiveAuthMethod: methodID,
 	})
+	s.emitAvailableCommandUpdates(s.sessions.SessionIDs())
 }
 
 func (s *Server) handleSessionLoad(ctx context.Context, id json.RawMessage, paramsRaw json.RawMessage) {
@@ -533,6 +579,7 @@ func (s *Server) handleSessionLoad(ctx context.Context, id json.RawMessage, para
 	_ = s.codec.WriteResult(id, SessionLoadResult{
 		ConfigOptions: configOptions,
 	})
+	s.emitAvailableCommandUpdate(params.SessionID)
 }
 
 func (s *Server) handleSessionList(ctx context.Context, id json.RawMessage, paramsRaw json.RawMessage) {
@@ -605,6 +652,7 @@ func (s *Server) handleSessionNew(ctx context.Context, id json.RawMessage, param
 		SessionID:     sessionID,
 		ConfigOptions: configOptions,
 	})
+	s.emitAvailableCommandUpdate(sessionID)
 }
 
 func (s *Server) handleSessionSetConfigOption(ctx context.Context, id json.RawMessage, paramsRaw json.RawMessage) {
@@ -1501,6 +1549,9 @@ func buildSessionUpdatePayload(update SessionUpdateParams) map[string]any {
 	if len(update.ConfigOptions) > 0 {
 		payload["configOptions"] = update.ConfigOptions
 	}
+	if update.Type == "available_commands_update" || len(update.AvailableCommands) > 0 {
+		payload["availableCommands"] = cloneAvailableCommandsOrEmpty(update.AvailableCommands)
+	}
 
 	if mapped := mapACPUpdateForClient(update); mapped != nil {
 		payload["update"] = mapped
@@ -1549,6 +1600,11 @@ func mapACPUpdateForClient(update SessionUpdateParams) map[string]any {
 		return map[string]any{
 			"sessionUpdate": "plan",
 			"entries":       clonePlanEntriesOrEmpty(update.Plan),
+		}
+	case "available_commands_update":
+		return map[string]any{
+			"sessionUpdate":     "available_commands_update",
+			"availableCommands": cloneAvailableCommandsOrEmpty(update.AvailableCommands),
 		}
 	default:
 		text := strings.TrimSpace(update.Delta)
@@ -2352,6 +2408,32 @@ func clonePlanEntriesOrEmpty(entries []PlanEntry) []PlanEntry {
 	return clonePlanEntries(entries)
 }
 
+func cloneAvailableCommands(commands []AvailableCommand) []AvailableCommand {
+	if len(commands) == 0 {
+		return nil
+	}
+	cp := make([]AvailableCommand, 0, len(commands))
+	for _, command := range commands {
+		copied := AvailableCommand{
+			Name:        command.Name,
+			Description: command.Description,
+		}
+		if command.Input != nil {
+			input := *command.Input
+			copied.Input = &input
+		}
+		cp = append(cp, copied)
+	}
+	return cp
+}
+
+func cloneAvailableCommandsOrEmpty(commands []AvailableCommand) []AvailableCommand {
+	if len(commands) == 0 {
+		return []AvailableCommand{}
+	}
+	return cloneAvailableCommands(commands)
+}
+
 func planEntriesFromTurnPlan(steps []codex.TurnPlanStep) []PlanEntry {
 	entries := make([]PlanEntry, 0, len(steps))
 	for _, step := range steps {
@@ -2473,6 +2555,79 @@ func (s *Server) currentAuthMode() string {
 		return ""
 	}
 	return s.authMode
+}
+
+func (s *Server) sessionAvailableCommands() []AvailableCommand {
+	s.authMu.Lock()
+	authenticated := s.authLoggedIn
+	s.authMu.Unlock()
+
+	commands := cloneAvailableCommands(s.options.AvailableCommands)
+	if authenticated {
+		return commands
+	}
+	return filterAvailableCommands(commands, "logout")
+}
+
+func (s *Server) emitAvailableCommandUpdate(sessionID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	s.emitUpdates([]SessionUpdateParams{
+		{
+			SessionID:         sessionID,
+			Type:              "available_commands_update",
+			AvailableCommands: s.sessionAvailableCommands(),
+		},
+	})
+}
+
+func (s *Server) emitAvailableCommandUpdates(sessionIDs []string) {
+	if len(sessionIDs) == 0 {
+		return
+	}
+	commands := s.sessionAvailableCommands()
+	seen := make(map[string]struct{}, len(sessionIDs))
+	updates := make([]SessionUpdateParams, 0, len(sessionIDs))
+	for _, rawSessionID := range sessionIDs {
+		sessionID := strings.TrimSpace(rawSessionID)
+		if sessionID == "" {
+			continue
+		}
+		if _, ok := seen[sessionID]; ok {
+			continue
+		}
+		seen[sessionID] = struct{}{}
+		updates = append(updates, SessionUpdateParams{
+			SessionID:         sessionID,
+			Type:              "available_commands_update",
+			AvailableCommands: commands,
+		})
+	}
+	s.emitUpdates(updates)
+}
+
+func filterAvailableCommands(commands []AvailableCommand, names ...string) []AvailableCommand {
+	if len(commands) == 0 || len(names) == 0 {
+		return nil
+	}
+	allowed := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			continue
+		}
+		allowed[trimmed] = struct{}{}
+	}
+	filtered := make([]AvailableCommand, 0, len(commands))
+	for _, command := range commands {
+		if _, ok := allowed[command.Name]; !ok {
+			continue
+		}
+		filtered = append(filtered, command)
+	}
+	return filtered
 }
 
 func (s *Server) requireAuth(id json.RawMessage, method string) bool {
@@ -3152,6 +3307,7 @@ func (s *Server) handleLogoutSlash(ctx context.Context, id json.RawMessage, sess
 				Delta:     recovery,
 			},
 		})
+		s.emitAvailableCommandUpdates(s.sessions.SessionIDs())
 		return "end_turn", nil
 	})
 }

@@ -6,7 +6,7 @@
 ## 项目概览
 - 项目：acp-adapter（基于 Codex App Server 的 ACP 适配器，同时支持 Claude Code CLI 子进程适配）
 - 当前阶段：Claude Adapter CLI 重构完成（C-R5 内部迭代）
-- 最近更新：2026-03-11
+- 最近更新：2026-03-13
 
 ## 关键链接/文档
 - docs/SPEC.md：技术方案（权威）
@@ -31,6 +31,22 @@
 - [x] PR5：Slash commands + Custom prompts + MCP + Auth 收尾
   - 状态：Done
   - 说明：已补齐 G1-G6、H1、I1-I3、J1（脚本化压力回归）与 MCP list/call/oauth 主流程
+
+## 2026-03-13 增量修复（ACP `available_commands_update` 主动发布）
+- 修复点：
+  - ACP `session/update` 新增标准 `update.sessionUpdate="available_commands_update"` 映射，并同步输出 `availableCommands` 列表。
+  - `session/new` / `session/load` 成功后，adapter 会主动向上游发布当前 session 的 slash command 目录。
+  - 认证态变化时刷新命令目录：
+    - `/logout` 后将当前已知 session 的命令表收敛为最小集（仅保留 `/logout`）
+    - `authenticate` 成功后向当前已知 session 重新发布完整命令表
+  - 命令目录按后端裁剪：
+    - Codex：`/review`、`/review-branch`、`/review-commit`、`/init`、`/compact`、`/logout`、`/mcp`
+    - Claude：`/review`、`/review-branch`、`/review-commit`、`/init`、`/compact`、`/logout`
+- 测试与回归：
+  - 新增 `internal/acp/server_stdio_test.go::TestBuildSessionUpdatePayloadAvailableCommands`，覆盖标准 payload 序列化。
+  - 新增 `test/integration/e2e_test.go::TestE2EAvailableCommandsPublishedAndRefreshedAfterLogout`，覆盖 Codex 新 session 发布、`/logout` 缩表、`authenticate` 恢复。
+  - 新增 `test/integration/claude_e2e_test.go::TestClaudeE2EAvailableCommandsPublishedOnSessionNew`，覆盖 Claude 新 session 主动发布且不误广告 `/mcp`。
+  - 回归通过：`go test ./...`。
 
 ## Library Embedding Program（R0-R6）
 - Current：R5 server 集成（In Progress）
