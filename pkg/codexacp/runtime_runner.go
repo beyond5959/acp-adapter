@@ -77,11 +77,12 @@ func runRuntime(
 		bridge.NewStore(),
 		logger,
 		acp.ServerOptions{
-			PatchApplyMode:   cfg.PatchApplyMode,
-			RetryTurnOnCrash: cfg.RetryTurnOnCrash,
-			Profiles:         toACPProfiles(cfg.Profiles),
-			DefaultProfile:   cfg.DefaultProfile,
-			InitialAuthMode:  cfg.InitialAuthMode,
+			PatchApplyMode:    cfg.PatchApplyMode,
+			RetryTurnOnCrash:  cfg.RetryTurnOnCrash,
+			Profiles:          toACPProfiles(cfg.Profiles),
+			DefaultProfile:    cfg.DefaultProfile,
+			InitialAuthMode:   cfg.InitialAuthMode,
+			AvailableCommands: acp.CodexAvailableCommands(),
 		},
 	)
 

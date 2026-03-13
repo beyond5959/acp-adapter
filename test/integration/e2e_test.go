@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -42,22 +43,23 @@ type rpcError struct {
 }
 
 type sessionUpdateParams struct {
-	SessionID          string                `json:"sessionId"`
-	TurnID             string                `json:"turnId"`
-	Type               string                `json:"type"`
-	Phase              string                `json:"phase,omitempty"`
-	ItemID             string                `json:"itemId,omitempty"`
-	ItemType           string                `json:"itemType,omitempty"`
-	Delta              string                `json:"delta,omitempty"`
-	Status             string                `json:"status,omitempty"`
-	Message            string                `json:"message,omitempty"`
-	ToolCallID         string                `json:"toolCallId,omitempty"`
-	Approval           string                `json:"approval,omitempty"`
-	PermissionDecision string                `json:"permissionDecision,omitempty"`
-	Todo               []todoItem            `json:"todo,omitempty"`
-	Plan               []planEntry           `json:"plan,omitempty"`
-	ConfigOptions      []sessionConfigOption `json:"configOptions,omitempty"`
-	Update             *sessionUpdatePayload `json:"update,omitempty"`
+	SessionID          string                    `json:"sessionId"`
+	TurnID             string                    `json:"turnId"`
+	Type               string                    `json:"type"`
+	Phase              string                    `json:"phase,omitempty"`
+	ItemID             string                    `json:"itemId,omitempty"`
+	ItemType           string                    `json:"itemType,omitempty"`
+	Delta              string                    `json:"delta,omitempty"`
+	Status             string                    `json:"status,omitempty"`
+	Message            string                    `json:"message,omitempty"`
+	ToolCallID         string                    `json:"toolCallId,omitempty"`
+	Approval           string                    `json:"approval,omitempty"`
+	PermissionDecision string                    `json:"permissionDecision,omitempty"`
+	Todo               []todoItem                `json:"todo,omitempty"`
+	Plan               []planEntry               `json:"plan,omitempty"`
+	ConfigOptions      []sessionConfigOption     `json:"configOptions,omitempty"`
+	AvailableCommands  []sessionAvailableCommand `json:"availableCommands,omitempty"`
+	Update             *sessionUpdatePayload     `json:"update,omitempty"`
 }
 
 type todoItem struct {
@@ -72,18 +74,46 @@ type planEntry struct {
 }
 
 type sessionUpdatePayload struct {
-	SessionUpdate string                `json:"sessionUpdate"`
-	Entries       []planEntry           `json:"entries,omitempty"`
-	Content       *sessionUpdateContent `json:"content,omitempty"`
-	ConfigOptions []sessionConfigOption `json:"configOptions,omitempty"`
-	Status        string                `json:"status,omitempty"`
-	Title         string                `json:"title,omitempty"`
-	ToolCallID    string                `json:"toolCallId,omitempty"`
+	SessionUpdate     string                    `json:"sessionUpdate"`
+	Entries           []planEntry               `json:"entries,omitempty"`
+	Content           *sessionUpdateContent     `json:"content,omitempty"`
+	ConfigOptions     []sessionConfigOption     `json:"configOptions,omitempty"`
+	AvailableCommands []sessionAvailableCommand `json:"availableCommands,omitempty"`
+	Status            string                    `json:"status,omitempty"`
+	Title             string                    `json:"title,omitempty"`
+	ToolCallID        string                    `json:"toolCallId,omitempty"`
 }
 
 type sessionUpdateContent struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
+}
+
+type sessionAvailableCommand struct {
+	Name        string                        `json:"name"`
+	Description string                        `json:"description,omitempty"`
+	Input       *sessionAvailableCommandInput `json:"input,omitempty"`
+}
+
+type sessionAvailableCommandInput struct {
+	Hint string `json:"hint,omitempty"`
+}
+
+func availableCommandNames(commands []sessionAvailableCommand) []string {
+	names := make([]string, 0, len(commands))
+	for _, command := range commands {
+		names = append(names, command.Name)
+	}
+	return names
+}
+
+func hasAvailableCommand(commands []sessionAvailableCommand, want string) bool {
+	for _, command := range commands {
+		if command.Name == want {
+			return true
+		}
+	}
+	return false
 }
 
 type sessionConfigOption struct {
@@ -539,6 +569,108 @@ func TestE2EAcceptanceA1ToA5AndB1(t *testing.T) {
 
 	// A1: stdout purity is continuously checked by rpcReader scanner.
 	h.assertStdoutPureJSONRPC()
+}
+
+func TestE2EAvailableCommandsPublishedAndRefreshedAfterLogout(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	var initialUpdate sessionUpdateParams
+	for {
+		msg := h.nextMessage(responseTimeout)
+		if msg.Method != "session/update" {
+			continue
+		}
+		update := decodeSessionUpdate(t, msg)
+		if update.SessionID != newResult.SessionID || update.Type != "available_commands_update" {
+			continue
+		}
+		initialUpdate = update
+		break
+	}
+
+	if initialUpdate.Update == nil || initialUpdate.Update.SessionUpdate != "available_commands_update" {
+		t.Fatalf("initial available commands update envelope missing: %+v", initialUpdate)
+	}
+	wantInitial := []string{"review", "review-branch", "review-commit", "init", "compact", "logout", "mcp"}
+	if got := availableCommandNames(initialUpdate.AvailableCommands); !reflect.DeepEqual(got, wantInitial) {
+		t.Fatalf("initial availableCommands=%v, want %v", got, wantInitial)
+	}
+	if got := availableCommandNames(initialUpdate.Update.AvailableCommands); !reflect.DeepEqual(got, wantInitial) {
+		t.Fatalf("nested initial availableCommands=%v, want %v", got, wantInitial)
+	}
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "/logout",
+	})
+
+	gotLogoutResp := false
+	sawLoggedOutCatalog := false
+	for !gotLogoutResp {
+		msg := h.nextMessage(responseTimeout)
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.SessionID == newResult.SessionID && update.Type == "available_commands_update" {
+				got := availableCommandNames(update.AvailableCommands)
+				if len(got) == 1 && got[0] == "logout" {
+					sawLoggedOutCatalog = true
+				}
+			}
+			continue
+		}
+		if messageID(msg) != "3" {
+			continue
+		}
+		var result struct {
+			StopReason string `json:"stopReason"`
+		}
+		unmarshalResult(t, msg, &result)
+		if result.StopReason != "end_turn" {
+			t.Fatalf("/logout expected stopReason=end_turn, got %q", result.StopReason)
+		}
+		gotLogoutResp = true
+	}
+	if !sawLoggedOutCatalog {
+		t.Fatalf("expected logout to publish a reduced available command catalog")
+	}
+
+	h.sendRequest("4", "authenticate", map[string]any{
+		"methodId": "chatgpt_subscription",
+	})
+	authResp := h.waitResponse("4", responseTimeout)
+	var authResult struct {
+		Authenticated bool `json:"authenticated"`
+	}
+	unmarshalResult(t, authResp, &authResult)
+	if !authResult.Authenticated {
+		t.Fatalf("authenticate should succeed")
+	}
+
+	sawRestoredCatalog := false
+	for !sawRestoredCatalog {
+		msg := h.nextMessage(responseTimeout)
+		if msg.Method != "session/update" {
+			continue
+		}
+		update := decodeSessionUpdate(t, msg)
+		if update.SessionID != newResult.SessionID || update.Type != "available_commands_update" {
+			continue
+		}
+		got := availableCommandNames(update.AvailableCommands)
+		if reflect.DeepEqual(got, wantInitial) {
+			sawRestoredCatalog = true
+		}
+	}
 }
 
 func TestE2ESessionListMappedFromThreadList(t *testing.T) {
@@ -1162,6 +1294,9 @@ func TestE2ENotificationRoutingBySessionAndTurn(t *testing.T) {
 				t.Fatalf("unexpected sessionId in update: %q", update.SessionID)
 			}
 			if update.TurnID == "" {
+				if update.Type == "available_commands_update" {
+					continue
+				}
 				t.Fatalf("session/update missing turnId")
 			}
 

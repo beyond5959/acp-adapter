@@ -47,6 +47,7 @@
 - ADR-0041：ACP `session/list` 映射到 Codex `thread/list`（含 archived 分页拼接）
 - ADR-0042：ACP `session/load` 映射到 Codex `thread/resume`（历史回放 + 恢复配置）
 - ADR-0043：Claude CLI `session/list` 占位 + `session/load` 部分恢复
+- ADR-0044：ACP slash command 目录发布策略（`available_commands_update`）
 
 ---
 
@@ -1053,4 +1054,41 @@
 - 验证方式（测试/验收项）：
   - `TestClaudeE2ESessionListEmptyAndLoadAllowsPrompt`
   - `go test ./test/integration -run TestClaudeE2E -count=1`
+  - `go test ./...`
+
+### ADR-0044：ACP slash command 目录发布策略（`available_commands_update`）
+- 日期：2026-03-13
+- 状态：Accepted
+- 背景：
+  - ACP slash command 文档允许 agent 在 session 创建后通过 `session/update(update.sessionUpdate="available_commands_update")` 主动发布命令目录，客户端据此渲染 slash popup。
+  - 当前 adapter 仅在 `initialize` 返回 legacy `slashCommands=true`，没有把具体命令集主动告知上游；Codex 与 Claude 也存在可广告命令集合差异（Codex 额外支持 `/mcp`）。
+- 决策：
+  - 在 ACP `session/update` 中新增 `available_commands_update` 标准映射，并携带 `availableCommands`。
+  - `session/new`、`session/load` 成功后主动发布当前 session 的命令目录。
+  - 认证态变化时刷新命令目录：
+    - `/logout` 后对当前已知 session 缩减为最小命令集（仅 `/logout`）
+    - `authenticate` 成功后对当前已知 session 重新发布完整命令集
+  - 命令目录由 runtime 显式配置：
+    - Codex runtime 使用 `review/review-branch/review-commit/init/compact/logout/mcp`
+    - Claude runtime 使用 `review/review-branch/review-commit/init/compact/logout`
+- 备选方案：
+  - 方案A：继续只返回 `slashCommands=true`，不主动发布具体命令表。
+  - 方案B：在 `initialize` 中塞入非标准命令列表字段。
+  - 方案C：遵循 ACP `available_commands_update` 标准，通过 `session/update` 主动发布并在认证态变化时刷新。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：客户端可以在无 prompt 往返的情况下发现命令；Codex/Claude 能各自广告真实支持集；认证变化后 UI 不会长期陈旧。
+  - Cons：命令目录仍是 adapter 级静态定义，不会实时反映更细粒度的后端能力变化；`authenticate` 刷新依赖当前进程内已知 session 集合。
+- 影响范围（文件/模块）：
+  - `internal/acp/server.go`
+  - `internal/acp/types.go`
+  - `internal/bridge/session_state.go`
+  - `pkg/codexacp/runtime_runner.go`
+  - `pkg/claudeacp/runtime_runner.go`
+  - `internal/acp/server_stdio_test.go`
+  - `test/integration/e2e_test.go`
+  - `test/integration/claude_e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `TestBuildSessionUpdatePayloadAvailableCommands`
+  - `TestE2EAvailableCommandsPublishedAndRefreshedAfterLogout`
+  - `TestClaudeE2EAvailableCommandsPublishedOnSessionNew`
   - `go test ./...`

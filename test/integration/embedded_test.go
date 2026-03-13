@@ -71,7 +71,16 @@ func TestEmbeddedInitializeNewPromptCancel(t *testing.T) {
 	}()
 
 	if _, err := waitEmbeddedUpdate(updates, 4*time.Second, func(msg codexacp.RPCMessage) bool {
-		return msg.Method == "session/update"
+		if msg.Method != "session/update" {
+			return false
+		}
+		var params struct {
+			TurnID string `json:"turnId"`
+		}
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			return false
+		}
+		return strings.TrimSpace(params.TurnID) != ""
 	}); err != nil {
 		t.Fatalf("wait first session/update: %v", err)
 	}

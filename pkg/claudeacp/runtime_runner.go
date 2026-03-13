@@ -55,10 +55,11 @@ func runRuntime(
 		bridge.NewStore(),
 		logger,
 		acp.ServerOptions{
-			PatchApplyMode:  cfg.PatchApplyMode,
-			Profiles:        toACPProfiles(cfg.Profiles),
-			DefaultProfile:  cfg.DefaultProfile,
-			InitialAuthMode: "claude_cli",
+			PatchApplyMode:    cfg.PatchApplyMode,
+			Profiles:          toACPProfiles(cfg.Profiles),
+			DefaultProfile:    cfg.DefaultProfile,
+			InitialAuthMode:   "claude_cli",
+			AvailableCommands: acp.ClaudeAvailableCommands(),
 		},
 	)
 

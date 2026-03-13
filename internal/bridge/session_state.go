@@ -103,6 +103,18 @@ func (s *Store) ThreadID(sessionID string) (string, error) {
 	return session.threadID, nil
 }
 
+// SessionIDs returns a snapshot of all known session ids.
+func (s *Store) SessionIDs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ids := make([]string, 0, len(s.sessions))
+	for sessionID := range s.sessions {
+		ids = append(ids, sessionID)
+	}
+	return ids
+}
+
 // BeginTurn marks a turn as active for a session.
 func (s *Store) BeginTurn(sessionID, turnID string, cancel context.CancelFunc) (string, error) {
 	s.mu.Lock()

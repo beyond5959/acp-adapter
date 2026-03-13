@@ -170,6 +170,50 @@ func TestBuildSessionUpdatePayloadPlan(t *testing.T) {
 	}
 }
 
+func TestBuildSessionUpdatePayloadAvailableCommands(t *testing.T) {
+	t.Parallel()
+
+	payload := buildSessionUpdatePayload(SessionUpdateParams{
+		SessionID: "session-1",
+		Type:      "available_commands_update",
+		AvailableCommands: []AvailableCommand{
+			{
+				Name:        "review",
+				Description: "Review workspace changes.",
+			},
+			{
+				Name:        "review-branch",
+				Description: "Review a branch diff.",
+				Input: &AvailableCommandInput{
+					Hint: "<branch>",
+				},
+			},
+		},
+	})
+
+	update, ok := payload["update"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload missing update envelope: %+v", payload)
+	}
+	if got, _ := update["sessionUpdate"].(string); got != "available_commands_update" {
+		t.Fatalf("update.sessionUpdate=%q, want available_commands_update", got)
+	}
+	entries, ok := update["availableCommands"].([]AvailableCommand)
+	if !ok {
+		t.Fatalf("update.availableCommands has unexpected type %T", update["availableCommands"])
+	}
+	if len(entries) != 2 || entries[1].Input == nil || entries[1].Input.Hint != "<branch>" {
+		t.Fatalf("update.availableCommands mismatch: %+v", entries)
+	}
+	topLevel, ok := payload["availableCommands"].([]AvailableCommand)
+	if !ok {
+		t.Fatalf("payload.availableCommands has unexpected type %T", payload["availableCommands"])
+	}
+	if len(topLevel) != 2 || topLevel[0].Name != "review" {
+		t.Fatalf("payload.availableCommands mismatch: %+v", topLevel)
+	}
+}
+
 type stdioMockAppClient struct{}
 
 func (m *stdioMockAppClient) ThreadStart(ctx context.Context, cwd string, options codex.RunOptions) (string, error) {

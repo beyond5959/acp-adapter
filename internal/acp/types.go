@@ -289,22 +289,35 @@ type PlanEntry struct {
 	Status   string `json:"status"`
 }
 
+// AvailableCommandInput describes one slash-command argument shape.
+type AvailableCommandInput struct {
+	Hint string `json:"hint,omitempty"`
+}
+
+// AvailableCommand advertises one slash command to ACP clients.
+type AvailableCommand struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description,omitempty"`
+	Input       *AvailableCommandInput `json:"input,omitempty"`
+}
+
 // SessionUpdateParams is emitted via session/update notification.
 type SessionUpdateParams struct {
-	SessionID          string          `json:"sessionId"`
-	TurnID             string          `json:"turnId"`
-	Type               string          `json:"type"`
-	Role               string          `json:"role,omitempty"`
-	Phase              string          `json:"phase,omitempty"`
-	ItemID             string          `json:"itemId,omitempty"`
-	ItemType           string          `json:"itemType,omitempty"`
-	Delta              string          `json:"delta,omitempty"`
-	Status             string          `json:"status,omitempty"`
-	Message            string          `json:"message,omitempty"`
-	ToolCallID         string          `json:"toolCallId,omitempty"`
-	Approval           string          `json:"approval,omitempty"`
-	PermissionDecision string          `json:"permissionDecision,omitempty"`
-	Todo               []TodoItem      `json:"todo,omitempty"`
-	Plan               []PlanEntry     `json:"plan,omitempty"`
-	ConfigOptions      []SessionConfig `json:"configOptions,omitempty"`
+	SessionID          string             `json:"sessionId"`
+	TurnID             string             `json:"turnId"`
+	Type               string             `json:"type"`
+	Role               string             `json:"role,omitempty"`
+	Phase              string             `json:"phase,omitempty"`
+	ItemID             string             `json:"itemId,omitempty"`
+	ItemType           string             `json:"itemType,omitempty"`
+	Delta              string             `json:"delta,omitempty"`
+	Status             string             `json:"status,omitempty"`
+	Message            string             `json:"message,omitempty"`
+	ToolCallID         string             `json:"toolCallId,omitempty"`
+	Approval           string             `json:"approval,omitempty"`
+	PermissionDecision string             `json:"permissionDecision,omitempty"`
+	Todo               []TodoItem         `json:"todo,omitempty"`
+	Plan               []PlanEntry        `json:"plan,omitempty"`
+	ConfigOptions      []SessionConfig    `json:"configOptions,omitempty"`
+	AvailableCommands  []AvailableCommand `json:"availableCommands,omitempty"`
 }
