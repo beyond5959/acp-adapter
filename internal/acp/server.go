@@ -1601,6 +1601,14 @@ func mapACPUpdateForClient(update SessionUpdateParams) map[string]any {
 			"sessionUpdate": "plan",
 			"entries":       clonePlanEntriesOrEmpty(update.Plan),
 		}
+	case "reasoning":
+		return map[string]any{
+			"sessionUpdate": "agent_thought_chunk",
+			"content": map[string]any{
+				"type": "text",
+				"text": update.Delta,
+			},
+		}
 	case "available_commands_update":
 		return map[string]any{
 			"sessionUpdate":     "available_commands_update",
@@ -3582,6 +3590,19 @@ func (t *turnLifecycle) apply(event codex.TurnEvent) ([]SessionUpdateParams, boo
 				Phase:     string(t.phase),
 				Message:   event.Message,
 				Plan:      planEntriesFromTurnPlan(event.Plan),
+			},
+		}, false, ""
+	case codex.TurnEventTypeReasoningDelta:
+		t.phase = turnPhaseStreaming
+		return []SessionUpdateParams{
+			{
+				SessionID: t.sessionID,
+				TurnID:    t.turnID,
+				Type:      "reasoning",
+				Phase:     string(t.phase),
+				ItemID:    event.ItemID,
+				ItemType:  event.ItemType,
+				Delta:     event.Delta,
 			},
 		}, false, ""
 	case codex.TurnEventTypePlanDelta:

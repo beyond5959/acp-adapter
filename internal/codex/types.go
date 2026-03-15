@@ -313,6 +313,31 @@ type PlanDeltaNotification struct {
 	Delta    string `json:"delta"`
 }
 
+// ReasoningSummaryTextDeltaNotification carries reasoning summary text chunks.
+type ReasoningSummaryTextDeltaNotification struct {
+	ThreadID     string `json:"threadId"`
+	TurnID       string `json:"turnId"`
+	ItemID       string `json:"itemId"`
+	SummaryIndex int64  `json:"summaryIndex"`
+	Delta        string `json:"delta"`
+}
+
+// ReasoningSummaryPartAddedNotification marks a new reasoning summary section.
+type ReasoningSummaryPartAddedNotification struct {
+	ThreadID     string `json:"threadId"`
+	TurnID       string `json:"turnId"`
+	ItemID       string `json:"itemId"`
+	SummaryIndex int64  `json:"summaryIndex"`
+}
+
+// ReasoningTextDeltaNotification carries raw reasoning text chunks.
+type ReasoningTextDeltaNotification struct {
+	ThreadID string `json:"threadId"`
+	TurnID   string `json:"turnId"`
+	ItemID   string `json:"itemId"`
+	Delta    string `json:"delta"`
+}
+
 // TurnPlanUpdatedNotification carries the latest full turn plan snapshot.
 type TurnPlanUpdatedNotification struct {
 	ThreadID    string         `json:"threadId"`
@@ -544,6 +569,8 @@ const (
 	TurnEventTypePlanDelta TurnEventType = "plan_delta"
 	// TurnEventTypePlanUpdated indicates the downstream plan snapshot changed.
 	TurnEventTypePlanUpdated TurnEventType = "plan_updated"
+	// TurnEventTypeReasoningDelta indicates downstream streamed reasoning text.
+	TurnEventTypeReasoningDelta TurnEventType = "reasoning_delta"
 )
 
 // TurnEvent is emitted to ACP session/prompt handler.
@@ -585,14 +612,17 @@ const (
 	methodAuthLogout                          = "auth/logout"
 	methodAccountLogout                       = "account/logout"
 
-	notificationTurnStarted           = "turn/started"
-	notificationTurnUpdate            = "turn/update"
-	notificationItemStarted           = "item/started"
-	notificationItemCompleted         = "item/completed"
-	notificationItemAgentMessageDelta = "item/agentMessage/delta"
-	notificationItemPlanDelta         = "item/plan/delta"
-	notificationTurnCompleted         = "turn/completed"
-	notificationReviewModeEntered     = "review/mode_entered"
-	notificationReviewModeExited      = "review/mode_exited"
-	notificationTurnPlanUpdated       = "turn/plan/updated"
+	notificationTurnStarted                   = "turn/started"
+	notificationTurnUpdate                    = "turn/update"
+	notificationItemStarted                   = "item/started"
+	notificationItemCompleted                 = "item/completed"
+	notificationItemAgentMessageDelta         = "item/agentMessage/delta"
+	notificationItemPlanDelta                 = "item/plan/delta"
+	notificationItemReasoningSummaryTextDelta = "item/reasoning/summaryTextDelta"
+	notificationItemReasoningSummaryPartAdded = "item/reasoning/summaryPartAdded"
+	notificationItemReasoningTextDelta        = "item/reasoning/textDelta"
+	notificationTurnCompleted                 = "turn/completed"
+	notificationReviewModeEntered             = "review/mode_entered"
+	notificationReviewModeExited              = "review/mode_exited"
+	notificationTurnPlanUpdated               = "turn/plan/updated"
 )

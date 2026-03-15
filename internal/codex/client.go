@@ -804,6 +804,51 @@ func (c *Client) handleNotification(msg RPCMessage) {
 			ItemID:   note.ItemID,
 			Delta:    note.Delta,
 		}, false)
+	case notificationItemReasoningSummaryTextDelta:
+		var note ReasoningSummaryTextDeltaNotification
+		if err := json.Unmarshal(msg.Params, &note); err != nil {
+			c.logger.Warn("ignore malformed item/reasoning/summaryTextDelta", slog.String("error", err.Error()))
+			return
+		}
+		c.pushTurnEvent(note.TurnID, TurnEvent{
+			Type:     TurnEventTypeReasoningDelta,
+			ThreadID: note.ThreadID,
+			TurnID:   note.TurnID,
+			ItemID:   note.ItemID,
+			ItemType: "reasoning_summary",
+			Delta:    note.Delta,
+		}, false)
+	case notificationItemReasoningSummaryPartAdded:
+		var note ReasoningSummaryPartAddedNotification
+		if err := json.Unmarshal(msg.Params, &note); err != nil {
+			c.logger.Warn("ignore malformed item/reasoning/summaryPartAdded", slog.String("error", err.Error()))
+			return
+		}
+		if note.SummaryIndex <= 0 {
+			return
+		}
+		c.pushTurnEvent(note.TurnID, TurnEvent{
+			Type:     TurnEventTypeReasoningDelta,
+			ThreadID: note.ThreadID,
+			TurnID:   note.TurnID,
+			ItemID:   note.ItemID,
+			ItemType: "reasoning_summary",
+			Delta:    "\n\n",
+		}, false)
+	case notificationItemReasoningTextDelta:
+		var note ReasoningTextDeltaNotification
+		if err := json.Unmarshal(msg.Params, &note); err != nil {
+			c.logger.Warn("ignore malformed item/reasoning/textDelta", slog.String("error", err.Error()))
+			return
+		}
+		c.pushTurnEvent(note.TurnID, TurnEvent{
+			Type:     TurnEventTypeReasoningDelta,
+			ThreadID: note.ThreadID,
+			TurnID:   note.TurnID,
+			ItemID:   note.ItemID,
+			ItemType: "reasoning_raw",
+			Delta:    note.Delta,
+		}, false)
 	case notificationItemCompleted:
 		var note ItemCompletedNotification
 		if err := json.Unmarshal(msg.Params, &note); err != nil {
