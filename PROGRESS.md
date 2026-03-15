@@ -6,7 +6,7 @@
 ## 项目概览
 - 项目：acp-adapter（基于 Codex App Server 的 ACP 适配器，同时支持 Claude Code CLI 子进程适配）
 - 当前阶段：Claude Adapter CLI 重构完成（C-R5 内部迭代）
-- 最近更新：2026-03-13
+- 最近更新：2026-03-15
 
 ## 关键链接/文档
 - docs/SPEC.md：技术方案（权威）
@@ -47,6 +47,21 @@
   - 新增 `test/integration/e2e_test.go::TestE2EAvailableCommandsPublishedAndRefreshedAfterLogout`，覆盖 Codex 新 session 发布、`/logout` 缩表、`authenticate` 恢复。
   - 新增 `test/integration/claude_e2e_test.go::TestClaudeE2EAvailableCommandsPublishedOnSessionNew`，覆盖 Claude 新 session 主动发布且不误广告 `/mcp`。
   - 回归通过：`go test ./...`。
+
+## 2026-03-15 增量修复（默认开启 Codex reasoning summary）
+- 修复点：
+  - Codex adapter 默认子进程启动参数改为 `codex app-server -c 'model_reasoning_summary="detailed"'`。
+  - 统一对齐两条入口：
+    - `internal/config.Parse()` 的默认 `CODEX_APP_SERVER_ARGS`
+    - `pkg/codexacp.DefaultRuntimeConfig()` 的库模式默认值
+  - `cmd/acp --help` 的默认参数说明同步更新。
+- 真实验证：
+  - 本机 `codex-cli 0.114.0` 下，默认配置时 trace 仅见空的 `reasoning` item started/completed。
+  - 加 `model_reasoning_summary="detailed"` 后，真实 app-server 会发送 `item/reasoning/summaryTextDelta`，并被桥接成 ACP `agent_thought_chunk`。
+- 测试与回归：
+  - 新增 `internal/config/config_test.go::TestDefaultCodexAppServerArgs`
+  - 新增 `pkg/codexacp/defaults_test.go::TestDefaultRuntimeConfigEnablesDetailedReasoningSummary`
+  - 回归通过：`go test ./...`
 
 ## Library Embedding Program（R0-R6）
 - Current：R5 server 集成（In Progress）

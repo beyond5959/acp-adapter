@@ -186,6 +186,30 @@
         "method": {
           "type": "string",
           "enum": [
+            "thread/metadata/update"
+          ],
+          "title": "Thread/metadata/updateRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadMetadataUpdateParams"
+        }
+      },
+      "title": "Thread/metadata/updateRequest"
+    },
+    {
+      "type": "object",
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "type": "string",
+          "enum": [
             "thread/unarchive"
           ],
           "title": "Thread/unarchiveRequestMethod"
@@ -354,6 +378,30 @@
         "method": {
           "type": "string",
           "enum": [
+            "plugin/list"
+          ],
+          "title": "Plugin/listRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/PluginListParams"
+        }
+      },
+      "title": "Plugin/listRequest"
+    },
+    {
+      "type": "object",
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "type": "string",
+          "enum": [
             "skills/remote/list"
           ],
           "title": "Skills/remote/listRequestMethod"
@@ -435,6 +483,54 @@
         }
       },
       "title": "Skills/config/writeRequest"
+    },
+    {
+      "type": "object",
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "plugin/install"
+          ],
+          "title": "Plugin/installRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/PluginInstallParams"
+        }
+      },
+      "title": "Plugin/installRequest"
+    },
+    {
+      "type": "object",
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "plugin/uninstall"
+          ],
+          "title": "Plugin/uninstallRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/PluginUninstallParams"
+        }
+      },
+      "title": "Plugin/uninstallRequest"
     },
     {
       "type": "object",
@@ -794,7 +890,7 @@
       "title": "Feedback/uploadRequest"
     },
     {
-      "description": "Execute a command (argv vector) under the server's sandbox.",
+      "description": "Execute a standalone command (argv vector) under the server's sandbox.",
       "type": "object",
       "required": [
         "id",
@@ -817,6 +913,81 @@
         }
       },
       "title": "Command/execRequest"
+    },
+    {
+      "description": "Write stdin bytes to a running `command/exec` session or close stdin.",
+      "type": "object",
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "command/exec/write"
+          ],
+          "title": "Command/exec/writeRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/CommandExecWriteParams"
+        }
+      },
+      "title": "Command/exec/writeRequest"
+    },
+    {
+      "description": "Terminate a running `command/exec` session by client-supplied `processId`.",
+      "type": "object",
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "command/exec/terminate"
+          ],
+          "title": "Command/exec/terminateRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/CommandExecTerminateParams"
+        }
+      },
+      "title": "Command/exec/terminateRequest"
+    },
+    {
+      "description": "Resize a running PTY-backed `command/exec` session by client-supplied `processId`.",
+      "type": "object",
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "command/exec/resize"
+          ],
+          "title": "Command/exec/resizeRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/CommandExecResizeParams"
+        }
+      },
+      "title": "Command/exec/resizeRequest"
     },
     {
       "type": "object",
@@ -1076,6 +1247,10 @@
                 "mcp_elicitations": {
                   "type": "boolean"
                 },
+                "request_permissions": {
+                  "default": false,
+                  "type": "boolean"
+                },
                 "rules": {
                   "type": "boolean"
                 },
@@ -1163,30 +1338,81 @@
         "mode"
       ],
       "properties": {
+        "cwd": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "mode": {
           "$ref": "#/definitions/WindowsSandboxSetupMode"
         }
       }
     },
     "CommandExecParams": {
+      "description": "Run a standalone command (argv vector) in the server sandbox without creating a thread or turn.\n\nThe final `command/exec` response is deferred until the process exits and is sent only after all `command/exec/outputDelta` notifications for that connection have been emitted.",
       "type": "object",
       "required": [
         "command"
       ],
       "properties": {
         "command": {
+          "description": "Command argv vector. Empty arrays are rejected.",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "cwd": {
+          "description": "Optional working directory. Defaults to the server cwd.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "disableOutputCap": {
+          "description": "Disable stdout/stderr capture truncation for this request.\n\nCannot be combined with `outputBytesCap`.",
+          "type": "boolean"
+        },
+        "disableTimeout": {
+          "description": "Disable the timeout entirely for this request.\n\nCannot be combined with `timeoutMs`.",
+          "type": "boolean"
+        },
+        "env": {
+          "description": "Optional environment overrides merged into the server-computed environment.\n\nMatching names override inherited values. Set a key to `null` to unset an inherited variable.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "outputBytesCap": {
+          "description": "Optional per-stream stdout/stderr capture cap in bytes.\n\nWhen omitted, the server default applies. Cannot be combined with `disableOutputCap`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "processId": {
+          "description": "Optional client-supplied, connection-scoped process id.\n\nRequired for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up `command/exec/write`, `command/exec/resize`, and `command/exec/terminate` calls. When omitted, buffered execution gets an internal id that is not exposed to the client.",
           "type": [
             "string",
             "null"
           ]
         },
         "sandboxPolicy": {
+          "description": "Optional sandbox policy for this command.\n\nUses the same shape as thread/turn execution sandbox configuration and defaults to the user's configured policy when omitted.",
           "anyOf": [
             {
               "$ref": "#/definitions/SandboxPolicy"
@@ -1196,12 +1422,117 @@
             }
           ]
         },
+        "size": {
+          "description": "Optional initial PTY size in character cells. Only valid when `tty` is true.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CommandExecTerminalSize"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "streamStdin": {
+          "description": "Allow follow-up `command/exec/write` requests to write stdin bytes.\n\nRequires a client-supplied `processId`.",
+          "type": "boolean"
+        },
+        "streamStdoutStderr": {
+          "description": "Stream stdout/stderr via `command/exec/outputDelta` notifications.\n\nStreamed bytes are not duplicated into the final response and require a client-supplied `processId`.",
+          "type": "boolean"
+        },
         "timeoutMs": {
+          "description": "Optional timeout in milliseconds.\n\nWhen omitted, the server default applies. Cannot be combined with `disableTimeout`.",
           "type": [
             "integer",
             "null"
           ],
           "format": "int64"
+        },
+        "tty": {
+          "description": "Enable PTY mode.\n\nThis implies `streamStdin` and `streamStdoutStderr`.",
+          "type": "boolean"
+        }
+      }
+    },
+    "CommandExecResizeParams": {
+      "description": "Resize a running PTY-backed `command/exec` session.",
+      "type": "object",
+      "required": [
+        "processId",
+        "size"
+      ],
+      "properties": {
+        "processId": {
+          "description": "Client-supplied, connection-scoped `processId` from the original `command/exec` request.",
+          "type": "string"
+        },
+        "size": {
+          "description": "New PTY size in character cells.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CommandExecTerminalSize"
+            }
+          ]
+        }
+      }
+    },
+    "CommandExecTerminalSize": {
+      "description": "PTY size in character cells for `command/exec` PTY sessions.",
+      "type": "object",
+      "required": [
+        "cols",
+        "rows"
+      ],
+      "properties": {
+        "cols": {
+          "description": "Terminal width in character cells.",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "rows": {
+          "description": "Terminal height in character cells.",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        }
+      }
+    },
+    "CommandExecTerminateParams": {
+      "description": "Terminate a running `command/exec` session.",
+      "type": "object",
+      "required": [
+        "processId"
+      ],
+      "properties": {
+        "processId": {
+          "description": "Client-supplied, connection-scoped `processId` from the original `command/exec` request.",
+          "type": "string"
+        }
+      }
+    },
+    "CommandExecWriteParams": {
+      "description": "Write stdin bytes to a running `command/exec` session, close stdin, or both.",
+      "type": "object",
+      "required": [
+        "processId"
+      ],
+      "properties": {
+        "closeStdin": {
+          "description": "Close stdin after writing `deltaBase64`, if present.",
+          "type": "boolean"
+        },
+        "deltaBase64": {
+          "description": "Optional base64-encoded stdin bytes to write.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "processId": {
+          "description": "Client-supplied, connection-scoped `processId` from the original `command/exec` request.",
+          "type": "string"
         }
       }
     },
@@ -1229,6 +1560,10 @@
             "string",
             "null"
           ]
+        },
+        "reloadUserConfig": {
+          "description": "When true, hot-reload the updated user config into all loaded threads after writing.",
+          "type": "boolean"
         }
       }
     },
@@ -1540,6 +1875,16 @@
             "type"
           ],
           "properties": {
+            "detail": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImageDetail"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "image_url": {
               "type": "string"
             },
@@ -1602,107 +1947,6 @@
       "enum": [
         "elevated",
         "unelevated"
-      ]
-    },
-    "WebSearchAction": {
-      "oneOf": [
-        {
-          "type": "object",
-          "required": [
-            "type"
-          ],
-          "properties": {
-            "queries": {
-              "type": [
-                "array",
-                "null"
-              ],
-              "items": {
-                "type": "string"
-              }
-            },
-            "query": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "type": "string",
-              "enum": [
-                "search"
-              ],
-              "title": "SearchWebSearchActionType"
-            }
-          },
-          "title": "SearchWebSearchAction"
-        },
-        {
-          "type": "object",
-          "required": [
-            "type"
-          ],
-          "properties": {
-            "type": {
-              "type": "string",
-              "enum": [
-                "open_page"
-              ],
-              "title": "OpenPageWebSearchActionType"
-            },
-            "url": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "title": "OpenPageWebSearchAction"
-        },
-        {
-          "type": "object",
-          "required": [
-            "type"
-          ],
-          "properties": {
-            "pattern": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "type": "string",
-              "enum": [
-                "find_in_page"
-              ],
-              "title": "FindInPageWebSearchActionType"
-            },
-            "url": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "title": "FindInPageWebSearchAction"
-        },
-        {
-          "type": "object",
-          "required": [
-            "type"
-          ],
-          "properties": {
-            "type": {
-              "type": "string",
-              "enum": [
-                "other"
-              ],
-              "title": "OtherWebSearchActionType"
-            }
-          },
-          "title": "OtherWebSearchAction"
-        }
       ]
     },
     "UserInput": {
@@ -1825,6 +2069,29 @@
         }
       ]
     },
+    "TurnSteerParams": {
+      "type": "object",
+      "required": [
+        "expectedTurnId",
+        "input",
+        "threadId"
+      ],
+      "properties": {
+        "expectedTurnId": {
+          "description": "Required active turn id precondition. The request fails when it does not match the currently active turn.",
+          "type": "string"
+        },
+        "input": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/UserInput"
+          }
+        },
+        "threadId": {
+          "type": "string"
+        }
+      }
+    },
     "GetAccountParams": {
       "type": "object",
       "properties": {
@@ -1874,6 +2141,15 @@
         "workspace-shared",
         "all-shared",
         "personal"
+      ]
+    },
+    "ImageDetail": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "low",
+        "high",
+        "original"
       ]
     },
     "InitializeCapabilities": {
@@ -2130,17 +2406,44 @@
         }
       ]
     },
-    "TurnSteerParams": {
+    "TurnStartParams": {
       "type": "object",
       "required": [
-        "expectedTurnId",
         "input",
         "threadId"
       ],
       "properties": {
-        "expectedTurnId": {
-          "description": "Required active turn id precondition. The request fails when it does not match the currently active turn.",
+        "approvalPolicy": {
+          "description": "Override the approval policy for this turn and subsequent turns.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AskForApproval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "threadId": {
           "type": "string"
+        },
+        "cwd": {
+          "description": "Override the working directory for this turn and subsequent turns.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "description": "Override the reasoning effort for this turn and subsequent turns.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "input": {
           "type": "array",
@@ -2148,8 +2451,66 @@
             "$ref": "#/definitions/UserInput"
           }
         },
-        "threadId": {
-          "type": "string"
+        "model": {
+          "description": "Override the model for this turn and subsequent turns.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outputSchema": {
+          "description": "Optional JSON Schema used to constrain the final assistant message for this turn."
+        },
+        "personality": {
+          "description": "Override the personality for this turn and subsequent turns.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Personality"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sandboxPolicy": {
+          "description": "Override the sandbox policy for this turn and subsequent turns.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SandboxPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "serviceTier": {
+          "description": "Override the service tier for this turn and subsequent turns.",
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ServiceTier"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "description": "Override the reasoning summary for this turn and subsequent turns.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },
@@ -2203,6 +2564,47 @@
         "friendly",
         "pragmatic"
       ]
+    },
+    "PluginInstallParams": {
+      "type": "object",
+      "required": [
+        "marketplacePath",
+        "pluginName"
+      ],
+      "properties": {
+        "marketplacePath": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "pluginName": {
+          "type": "string"
+        }
+      }
+    },
+    "PluginListParams": {
+      "type": "object",
+      "properties": {
+        "cwds": {
+          "description": "Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces and the official curated marketplace are considered.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          }
+        }
+      }
+    },
+    "PluginUninstallParams": {
+      "type": "object",
+      "required": [
+        "pluginId"
+      ],
+      "properties": {
+        "pluginId": {
+          "type": "string"
+        }
+      }
     },
     "ProductSurface": {
       "type": "string",
@@ -2618,7 +3020,7 @@
               "type": "string"
             },
             "output": {
-              "type": "string"
+              "$ref": "#/definitions/FunctionCallOutputPayload"
             },
             "type": {
               "type": "string",
@@ -2639,7 +3041,7 @@
             "action": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/WebSearchAction"
+                  "$ref": "#/definitions/ResponsesApiWebSearchAction"
                 },
                 {
                   "type": "null"
@@ -2668,6 +3070,40 @@
             }
           },
           "title": "WebSearchCallResponseItem"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "result",
+            "status",
+            "type"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "revised_prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "image_generation_call"
+              ],
+              "title": "ImageGenerationCallResponseItemType"
+            }
+          },
+          "title": "ImageGenerationCallResponseItem"
         },
         {
           "type": "object",
@@ -2724,6 +3160,107 @@
             }
           },
           "title": "OtherResponseItem"
+        }
+      ]
+    },
+    "ResponsesApiWebSearchAction": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "queries": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              }
+            },
+            "query": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "search"
+              ],
+              "title": "SearchResponsesApiWebSearchActionType"
+            }
+          },
+          "title": "SearchResponsesApiWebSearchAction"
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "open_page"
+              ],
+              "title": "OpenPageResponsesApiWebSearchActionType"
+            },
+            "url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "title": "OpenPageResponsesApiWebSearchAction"
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "pattern": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "find_in_page"
+              ],
+              "title": "FindInPageResponsesApiWebSearchActionType"
+            },
+            "url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "title": "FindInPageResponsesApiWebSearchAction"
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "other"
+              ],
+              "title": "OtherResponsesApiWebSearchActionType"
+            }
+          },
+          "title": "OtherResponsesApiWebSearchAction"
         }
       ]
     },
@@ -2894,6 +3431,10 @@
                 }
               ]
             },
+            "networkAccess": {
+              "default": false,
+              "type": "boolean"
+            },
             "type": {
               "type": "string",
               "enum": [
@@ -2973,6 +3514,13 @@
           },
           "title": "WorkspaceWriteSandboxPolicy"
         }
+      ]
+    },
+    "ServiceTier": {
+      "type": "string",
+      "enum": [
+        "fast",
+        "flex"
       ]
     },
     "Settings": {
@@ -3133,97 +3681,33 @@
         }
       }
     },
-    "TurnStartParams": {
+    "TurnInterruptParams": {
       "type": "object",
       "required": [
-        "input",
-        "threadId"
+        "threadId",
+        "turnId"
       ],
       "properties": {
-        "approvalPolicy": {
-          "description": "Override the approval policy for this turn and subsequent turns.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AskForApproval"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "threadId": {
           "type": "string"
         },
-        "cwd": {
-          "description": "Override the working directory for this turn and subsequent turns.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "effort": {
-          "description": "Override the reasoning effort for this turn and subsequent turns.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ReasoningEffort"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "input": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/UserInput"
-          }
-        },
-        "model": {
-          "description": "Override the model for this turn and subsequent turns.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "outputSchema": {
-          "description": "Optional JSON Schema used to constrain the final assistant message for this turn."
-        },
-        "personality": {
-          "description": "Override the personality for this turn and subsequent turns.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Personality"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "sandboxPolicy": {
-          "description": "Override the sandbox policy for this turn and subsequent turns.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/SandboxPolicy"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "summary": {
-          "description": "Override the reasoning summary for this turn and subsequent turns.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ReasoningSummary"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "turnId": {
+          "type": "string"
         }
       }
     },
     "ThreadCompactStartParams": {
+      "type": "object",
+      "required": [
+        "threadId"
+      ],
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      }
+    },
+    "ThreadUnsubscribeParams": {
       "type": "object",
       "required": [
         "threadId"
@@ -3289,6 +3773,26 @@
             "null"
           ]
         },
+        "threadId": {
+          "type": "string"
+        },
+        "serviceTier": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ServiceTier"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "sandbox": {
           "anyOf": [
             {
@@ -3298,7 +3802,15 @@
               "type": "null"
             }
           ]
-        },
+        }
+      }
+    },
+    "ThreadUnarchiveParams": {
+      "type": "object",
+      "required": [
+        "threadId"
+      ],
+      "properties": {
         "threadId": {
           "type": "string"
         }
@@ -3398,6 +3910,54 @@
         }
       }
     },
+    "ThreadMetadataGitInfoUpdateParams": {
+      "type": "object",
+      "properties": {
+        "branch": {
+          "description": "Omit to leave the stored branch unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "originUrl": {
+          "description": "Omit to leave the stored origin URL unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha": {
+          "description": "Omit to leave the stored commit unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ThreadMetadataUpdateParams": {
+      "type": "object",
+      "required": [
+        "threadId"
+      ],
+      "properties": {
+        "gitInfo": {
+          "description": "Patch the stored Git metadata for this thread. Omit a field to leave it unchanged, set it to `null` to clear it, or provide a string to replace the stored value.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadMetadataGitInfoUpdateParams"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        }
+      }
+    },
     "ThreadReadParams": {
       "type": "object",
       "required": [
@@ -3409,75 +3969,6 @@
           "default": false,
           "type": "boolean"
         },
-        "threadId": {
-          "type": "string"
-        }
-      }
-    },
-    "TurnInterruptParams": {
-      "type": "object",
-      "required": [
-        "threadId",
-        "turnId"
-      ],
-      "properties": {
-        "threadId": {
-          "type": "string"
-        },
-        "turnId": {
-          "type": "string"
-        }
-      }
-    },
-    "ThreadUnsubscribeParams": {
-      "type": "object",
-      "required": [
-        "threadId"
-      ],
-      "properties": {
-        "threadId": {
-          "type": "string"
-        }
-      }
-    },
-    "ThreadRealtimeAudioChunk": {
-      "description": "EXPERIMENTAL - thread realtime audio chunk.",
-      "type": "object",
-      "required": [
-        "data",
-        "numChannels",
-        "sampleRate"
-      ],
-      "properties": {
-        "data": {
-          "type": "string"
-        },
-        "numChannels": {
-          "type": "integer",
-          "format": "uint16",
-          "minimum": 0.0
-        },
-        "sampleRate": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
-        },
-        "samplesPerChannel": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0.0
-        }
-      }
-    },
-    "ThreadUnarchiveParams": {
-      "type": "object",
-      "required": [
-        "threadId"
-      ],
-      "properties": {
         "threadId": {
           "type": "string"
         }
@@ -3521,10 +4012,21 @@
             "null"
           ]
         },
-        "serviceName": {
-          "type": [
-            "string",
-            "null"
+        "serviceTier": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ServiceTier"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "ephemeral": {
@@ -3533,20 +4035,20 @@
             "null"
           ]
         },
-        "personality": {
+        "sandbox": {
           "anyOf": [
             {
-              "$ref": "#/definitions/Personality"
+              "$ref": "#/definitions/SandboxMode"
             },
             {
               "type": "null"
             }
           ]
         },
-        "sandbox": {
+        "personality": {
           "anyOf": [
             {
-              "$ref": "#/definitions/SandboxMode"
+              "$ref": "#/definitions/Personality"
             },
             {
               "type": "null"
@@ -3564,6 +4066,81 @@
             "string",
             "null"
           ]
+        },
+        "serviceName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ThreadSourceKind": {
+      "type": "string",
+      "enum": [
+        "cli",
+        "vscode",
+        "exec",
+        "appServer",
+        "subAgent",
+        "subAgentReview",
+        "subAgentCompact",
+        "subAgentThreadSpawn",
+        "subAgentOther",
+        "unknown"
+      ]
+    },
+    "ThreadRealtimeAudioChunk": {
+      "description": "EXPERIMENTAL - thread realtime audio chunk.",
+      "type": "object",
+      "required": [
+        "data",
+        "numChannels",
+        "sampleRate"
+      ],
+      "properties": {
+        "data": {
+          "type": "string"
+        },
+        "numChannels": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "sampleRate": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "samplesPerChannel": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    },
+    "ThreadSortKey": {
+      "type": "string",
+      "enum": [
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "ThreadSetNameParams": {
+      "type": "object",
+      "required": [
+        "name",
+        "threadId"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
         }
       }
     },
@@ -3609,10 +4186,17 @@
             "null"
           ]
         },
-        "sandbox": {
+        "serviceTier": {
           "anyOf": [
             {
-              "$ref": "#/definitions/SandboxMode"
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ServiceTier"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             {
               "type": "null"
@@ -3634,6 +4218,16 @@
         },
         "threadId": {
           "type": "string"
+        },
+        "sandbox": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SandboxMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "personality": {
           "anyOf": [
@@ -3664,43 +4258,6 @@
           "type": "string"
         }
       }
-    },
-    "ThreadSetNameParams": {
-      "type": "object",
-      "required": [
-        "name",
-        "threadId"
-      ],
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "threadId": {
-          "type": "string"
-        }
-      }
-    },
-    "ThreadSortKey": {
-      "type": "string",
-      "enum": [
-        "created_at",
-        "updated_at"
-      ]
-    },
-    "ThreadSourceKind": {
-      "type": "string",
-      "enum": [
-        "cli",
-        "vscode",
-        "exec",
-        "appServer",
-        "subAgent",
-        "subAgentReview",
-        "subAgentCompact",
-        "subAgentThreadSpawn",
-        "subAgentOther",
-        "unknown"
-      ]
     }
   }
 }

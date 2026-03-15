@@ -4,7 +4,8 @@
   "type": "object",
   "definitions": {
     "RequestId": {
-      "description": "ID of a request, which can be either a string or an integer.",
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "RequestId",
       "anyOf": [
         {
           "type": "string"
@@ -29,7 +30,7 @@
           "$ref": "#/definitions/JSONRPCErrorError"
         },
         "id": {
-          "$ref": "#/definitions/RequestId"
+          "$ref": "#/definitions/v2/RequestId"
         }
       }
     },
@@ -78,12 +79,23 @@
       ],
       "properties": {
         "id": {
-          "$ref": "#/definitions/RequestId"
+          "$ref": "#/definitions/v2/RequestId"
         },
         "method": {
           "type": "string"
         },
-        "params": true
+        "params": true,
+        "trace": {
+          "description": "Optional W3C Trace Context for distributed tracing.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/W3cTraceContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
       }
     },
     "JSONRPCResponse": {
@@ -97,9 +109,26 @@
       ],
       "properties": {
         "id": {
-          "$ref": "#/definitions/RequestId"
+          "$ref": "#/definitions/v2/RequestId"
         },
         "result": true
+      }
+    },
+    "W3cTraceContext": {
+      "type": "object",
+      "properties": {
+        "traceparent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tracestate": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
     "JSONRPCMessage": {
@@ -275,7 +304,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -300,7 +329,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -324,7 +353,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -348,7 +377,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -372,7 +401,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -396,7 +425,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -420,7 +449,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -444,7 +473,31 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "thread/metadata/update"
+              ],
+              "title": "Thread/metadata/updateRequestMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadMetadataUpdateParams"
+            }
+          },
+          "title": "Thread/metadata/updateRequest"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -468,7 +521,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -492,7 +545,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -516,7 +569,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -540,7 +593,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -564,7 +617,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -588,7 +641,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -612,7 +665,31 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "plugin/list"
+              ],
+              "title": "Plugin/listRequestMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/PluginListParams"
+            }
+          },
+          "title": "Plugin/listRequest"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -636,7 +713,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -660,7 +737,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -684,7 +761,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -708,7 +785,55 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "plugin/install"
+              ],
+              "title": "Plugin/installRequestMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/PluginInstallParams"
+            }
+          },
+          "title": "Plugin/installRequest"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "plugin/uninstall"
+              ],
+              "title": "Plugin/uninstallRequestMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/PluginUninstallParams"
+            }
+          },
+          "title": "Plugin/uninstallRequest"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -732,7 +857,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -756,7 +881,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -780,7 +905,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -804,7 +929,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -828,7 +953,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -852,7 +977,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -875,7 +1000,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -899,7 +1024,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -923,7 +1048,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -947,7 +1072,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -971,7 +1096,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -994,7 +1119,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -1017,7 +1142,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -1041,7 +1166,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -1057,7 +1182,7 @@
           "title": "Feedback/uploadRequest"
         },
         {
-          "description": "Execute a command (argv vector) under the server's sandbox.",
+          "description": "Execute a standalone command (argv vector) under the server's sandbox.",
           "type": "object",
           "required": [
             "id",
@@ -1066,7 +1191,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -1082,6 +1207,7 @@
           "title": "Command/execRequest"
         },
         {
+          "description": "Write stdin bytes to a running `command/exec` session or close stdin.",
           "type": "object",
           "required": [
             "id",
@@ -1090,7 +1216,81 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "command/exec/write"
+              ],
+              "title": "Command/exec/writeRequestMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/CommandExecWriteParams"
+            }
+          },
+          "title": "Command/exec/writeRequest"
+        },
+        {
+          "description": "Terminate a running `command/exec` session by client-supplied `processId`.",
+          "type": "object",
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "command/exec/terminate"
+              ],
+              "title": "Command/exec/terminateRequestMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/CommandExecTerminateParams"
+            }
+          },
+          "title": "Command/exec/terminateRequest"
+        },
+        {
+          "description": "Resize a running PTY-backed `command/exec` session by client-supplied `processId`.",
+          "type": "object",
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "command/exec/resize"
+              ],
+              "title": "Command/exec/resizeRequestMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/CommandExecResizeParams"
+            }
+          },
+          "title": "Command/exec/resizeRequest"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -1114,7 +1314,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -1138,7 +1338,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -1162,7 +1362,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -1186,7 +1386,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -1209,7 +1409,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -1233,7 +1433,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -1257,7 +1457,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -1283,7 +1483,7 @@
             "null"
           ],
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           }
         },
         "write": {
@@ -1292,44 +1492,41 @@
             "null"
           ],
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           }
         }
       }
     },
     "AdditionalMacOsPermissions": {
       "type": "object",
+      "required": [
+        "accessibility",
+        "automations",
+        "calendar",
+        "preferences"
+      ],
       "properties": {
         "accessibility": {
-          "type": [
-            "boolean",
-            "null"
-          ]
+          "type": "boolean"
         },
         "automations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/MacOsAutomationValue"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/definitions/MacOsAutomationPermission"
         },
         "calendar": {
+          "type": "boolean"
+        },
+        "preferences": {
+          "$ref": "#/definitions/MacOsPreferencesPermission"
+        }
+      }
+    },
+    "AdditionalNetworkPermissions": {
+      "type": "object",
+      "properties": {
+        "enabled": {
           "type": [
             "boolean",
             "null"
-          ]
-        },
-        "preferences": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/MacOsPreferencesValue"
-            },
-            {
-              "type": "null"
-            }
           ]
         }
       }
@@ -1358,9 +1555,13 @@
           ]
         },
         "network": {
-          "type": [
-            "boolean",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdditionalNetworkPermissions"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       }
@@ -1604,6 +1805,17 @@
         }
       }
     },
+    "CommandExecutionRequestApprovalSkillMetadata": {
+      "type": "object",
+      "required": [
+        "pathToSkillsMd"
+      ],
+      "properties": {
+        "pathToSkillsMd": {
+          "type": "string"
+        }
+      }
+    },
     "DynamicToolCallParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "DynamicToolCallParams",
@@ -1785,28 +1997,647 @@
         }
       }
     },
-    "MacOsAutomationValue": {
-      "anyOf": [
+    "MacOsAutomationPermission": {
+      "oneOf": [
         {
-          "type": "boolean"
+          "type": "string",
+          "enum": [
+            "none",
+            "all"
+          ]
         },
         {
+          "type": "object",
+          "required": [
+            "bundle_ids"
+          ],
+          "properties": {
+            "bundle_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "title": "BundleIdsMacOsAutomationPermission"
+        }
+      ]
+    },
+    "MacOsPreferencesPermission": {
+      "type": "string",
+      "enum": [
+        "none",
+        "read_only",
+        "read_write"
+      ]
+    },
+    "McpElicitationArrayType": {
+      "type": "string",
+      "enum": [
+        "array"
+      ]
+    },
+    "McpElicitationBooleanSchema": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "default": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/definitions/McpElicitationBooleanType"
+        }
+      },
+      "additionalProperties": false
+    },
+    "McpElicitationBooleanType": {
+      "type": "string",
+      "enum": [
+        "boolean"
+      ]
+    },
+    "McpElicitationConstOption": {
+      "type": "object",
+      "required": [
+        "const",
+        "title"
+      ],
+      "properties": {
+        "const": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "McpElicitationEnumSchema": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/McpElicitationSingleSelectEnumSchema"
+        },
+        {
+          "$ref": "#/definitions/McpElicitationMultiSelectEnumSchema"
+        },
+        {
+          "$ref": "#/definitions/McpElicitationLegacyTitledEnumSchema"
+        }
+      ]
+    },
+    "McpElicitationLegacyTitledEnumSchema": {
+      "type": "object",
+      "required": [
+        "enum",
+        "type"
+      ],
+      "properties": {
+        "default": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enum": {
           "type": "array",
           "items": {
             "type": "string"
           }
+        },
+        "enumNames": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/definitions/McpElicitationStringType"
+        }
+      },
+      "additionalProperties": false
+    },
+    "McpElicitationMultiSelectEnumSchema": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/McpElicitationUntitledMultiSelectEnumSchema"
+        },
+        {
+          "$ref": "#/definitions/McpElicitationTitledMultiSelectEnumSchema"
         }
       ]
     },
-    "MacOsPreferencesValue": {
+    "McpElicitationNumberSchema": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "default": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "maximum": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "minimum": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/definitions/McpElicitationNumberType"
+        }
+      },
+      "additionalProperties": false
+    },
+    "McpElicitationNumberType": {
+      "type": "string",
+      "enum": [
+        "number",
+        "integer"
+      ]
+    },
+    "McpElicitationObjectType": {
+      "type": "string",
+      "enum": [
+        "object"
+      ]
+    },
+    "McpElicitationPrimitiveSchema": {
       "anyOf": [
         {
-          "type": "boolean"
+          "$ref": "#/definitions/McpElicitationEnumSchema"
         },
         {
-          "type": "string"
+          "$ref": "#/definitions/McpElicitationStringSchema"
+        },
+        {
+          "$ref": "#/definitions/McpElicitationNumberSchema"
+        },
+        {
+          "$ref": "#/definitions/McpElicitationBooleanSchema"
         }
       ]
+    },
+    "McpElicitationSchema": {
+      "description": "Typed form schema for MCP `elicitation/create` requests.\n\nThis matches the `requestedSchema` shape from the MCP 2025-11-25 `ElicitRequestFormParams` schema.",
+      "type": "object",
+      "required": [
+        "properties",
+        "type"
+      ],
+      "properties": {
+        "$schema": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "properties": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/McpElicitationPrimitiveSchema"
+          }
+        },
+        "required": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "type": {
+          "$ref": "#/definitions/McpElicitationObjectType"
+        }
+      },
+      "additionalProperties": false
+    },
+    "McpElicitationSingleSelectEnumSchema": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/McpElicitationUntitledSingleSelectEnumSchema"
+        },
+        {
+          "$ref": "#/definitions/McpElicitationTitledSingleSelectEnumSchema"
+        }
+      ]
+    },
+    "McpElicitationStringFormat": {
+      "type": "string",
+      "enum": [
+        "email",
+        "uri",
+        "date",
+        "date-time"
+      ]
+    },
+    "McpElicitationStringSchema": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "default": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "format": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/McpElicitationStringFormat"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "maxLength": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "minLength": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/definitions/McpElicitationStringType"
+        }
+      },
+      "additionalProperties": false
+    },
+    "McpElicitationStringType": {
+      "type": "string",
+      "enum": [
+        "string"
+      ]
+    },
+    "McpElicitationTitledEnumItems": {
+      "type": "object",
+      "required": [
+        "anyOf"
+      ],
+      "properties": {
+        "anyOf": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/McpElicitationConstOption"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "McpElicitationTitledMultiSelectEnumSchema": {
+      "type": "object",
+      "required": [
+        "items",
+        "type"
+      ],
+      "properties": {
+        "default": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "items": {
+          "$ref": "#/definitions/McpElicitationTitledEnumItems"
+        },
+        "maxItems": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "minItems": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/definitions/McpElicitationArrayType"
+        }
+      },
+      "additionalProperties": false
+    },
+    "McpElicitationTitledSingleSelectEnumSchema": {
+      "type": "object",
+      "required": [
+        "oneOf",
+        "type"
+      ],
+      "properties": {
+        "default": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "oneOf": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/McpElicitationConstOption"
+          }
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/definitions/McpElicitationStringType"
+        }
+      },
+      "additionalProperties": false
+    },
+    "McpElicitationUntitledEnumItems": {
+      "type": "object",
+      "required": [
+        "enum",
+        "type"
+      ],
+      "properties": {
+        "enum": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "type": {
+          "$ref": "#/definitions/McpElicitationStringType"
+        }
+      },
+      "additionalProperties": false
+    },
+    "McpElicitationUntitledMultiSelectEnumSchema": {
+      "type": "object",
+      "required": [
+        "items",
+        "type"
+      ],
+      "properties": {
+        "default": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "items": {
+          "$ref": "#/definitions/McpElicitationUntitledEnumItems"
+        },
+        "maxItems": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "minItems": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/definitions/McpElicitationArrayType"
+        }
+      },
+      "additionalProperties": false
+    },
+    "McpElicitationUntitledSingleSelectEnumSchema": {
+      "type": "object",
+      "required": [
+        "enum",
+        "type"
+      ],
+      "properties": {
+        "default": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enum": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/definitions/McpElicitationStringType"
+        }
+      },
+      "additionalProperties": false
+    },
+    "McpServerElicitationRequestParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "McpServerElicitationRequestParams",
+      "type": "object",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "message",
+            "mode",
+            "requestedSchema"
+          ],
+          "properties": {
+            "_meta": true,
+            "message": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "form"
+              ]
+            },
+            "requestedSchema": {
+              "$ref": "#/definitions/McpElicitationSchema"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "elicitationId",
+            "message",
+            "mode",
+            "url"
+          ],
+          "properties": {
+            "_meta": true,
+            "elicitationId": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "url"
+              ]
+            },
+            "url": {
+              "type": "string"
+            }
+          }
+        }
+      ],
+      "required": [
+        "serverName",
+        "threadId"
+      ],
+      "properties": {
+        "serverName": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "description": "Active Codex turn when this elicitation was observed, if app-server could correlate one.\n\nThis is nullable because MCP models elicitation as a standalone server-to-client request identified by the MCP server request id. It may be triggered during a turn, but turn context is app-server correlation rather than part of the protocol identity of the elicitation itself.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
     },
     "NetworkApprovalContext": {
       "type": "object",
@@ -1965,6 +2796,37 @@
         }
       ]
     },
+    "PermissionsRequestApprovalParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "PermissionsRequestApprovalParams",
+      "type": "object",
+      "required": [
+        "itemId",
+        "permissions",
+        "threadId",
+        "turnId"
+      ],
+      "properties": {
+        "itemId": {
+          "type": "string"
+        },
+        "permissions": {
+          "$ref": "#/definitions/AdditionalPermissionProfile"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      }
+    },
     "ToolRequestUserInputOption": {
       "description": "EXPERIMENTAL. Defines a single selectable option for request_user_input.",
       "type": "object",
@@ -2062,7 +2924,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -2087,7 +2949,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -2112,7 +2974,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -2128,6 +2990,56 @@
           "title": "Item/tool/requestUserInputRequest"
         },
         {
+          "description": "Request input for an MCP server elicitation.",
+          "type": "object",
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "mcpServer/elicitation/request"
+              ],
+              "title": "McpServer/elicitation/requestRequestMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/McpServerElicitationRequestParams"
+            }
+          },
+          "title": "McpServer/elicitation/requestRequest"
+        },
+        {
+          "description": "Request approval for additional permissions from the user.",
+          "type": "object",
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "item/permissions/requestApproval"
+              ],
+              "title": "Item/permissions/requestApprovalRequestMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/PermissionsRequestApprovalParams"
+            }
+          },
+          "title": "Item/permissions/requestApprovalRequest"
+        },
+        {
           "description": "Execute a dynamic tool call on the client.",
           "type": "object",
           "required": [
@@ -2137,7 +3049,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -2161,7 +3073,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -2186,7 +3098,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -2211,7 +3123,7 @@
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
             "method": {
               "type": "string",
@@ -2460,6 +3372,26 @@
             "method": {
               "type": "string",
               "enum": [
+                "skills/changed"
+              ],
+              "title": "Skills/changedNotificationMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/SkillsChangedNotification"
+            }
+          },
+          "title": "Skills/changedNotification"
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
                 "thread/name/updated"
               ],
               "title": "Thread/name/updatedNotificationMethod"
@@ -2520,6 +3452,26 @@
             "method": {
               "type": "string",
               "enum": [
+                "hook/started"
+              ],
+              "title": "Hook/startedNotificationMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/HookStartedNotification"
+            }
+          },
+          "title": "Hook/startedNotification"
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
                 "turn/completed"
               ],
               "title": "Turn/completedNotificationMethod"
@@ -2529,6 +3481,26 @@
             }
           },
           "title": "Turn/completedNotification"
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "hook/completed"
+              ],
+              "title": "Hook/completedNotificationMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/HookCompletedNotification"
+            }
+          },
+          "title": "Hook/completedNotification"
         },
         {
           "type": "object",
@@ -2652,6 +3624,27 @@
           "title": "Item/plan/deltaNotification"
         },
         {
+          "description": "Stream base64-encoded stdout/stderr chunks for a running `command/exec` session.",
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "command/exec/outputDelta"
+              ],
+              "title": "Command/exec/outputDeltaNotificationMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/CommandExecOutputDeltaNotification"
+            }
+          },
+          "title": "Command/exec/outputDeltaNotification"
+        },
+        {
           "type": "object",
           "required": [
             "method",
@@ -2710,6 +3703,26 @@
             }
           },
           "title": "Item/fileChange/outputDeltaNotification"
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "serverRequest/resolved"
+              ],
+              "title": "ServerRequest/resolvedNotificationMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ServerRequestResolvedNotification"
+            }
+          },
+          "title": "ServerRequest/resolvedNotification"
         },
         {
           "type": "object",
@@ -3288,7 +4301,7 @@
           "description": "Thread ID of the receiver/new agent.",
           "allOf": [
             {
-              "$ref": "#/definitions/ThreadId"
+              "$ref": "#/definitions/v2/ThreadId"
             }
           ]
         }
@@ -3327,7 +4340,7 @@
           "description": "Thread ID of the receiver/new agent.",
           "allOf": [
             {
-              "$ref": "#/definitions/ThreadId"
+              "$ref": "#/definitions/v2/ThreadId"
             }
           ]
         }
@@ -3383,6 +4396,69 @@
         }
       }
     },
+    "ElicitationRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "message",
+            "mode",
+            "requested_schema"
+          ],
+          "properties": {
+            "_meta": true,
+            "message": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "form"
+              ]
+            },
+            "requested_schema": true
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "elicitation_id",
+            "message",
+            "mode",
+            "url"
+          ],
+          "properties": {
+            "_meta": true,
+            "elicitation_id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "url"
+              ]
+            },
+            "url": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "ExecApprovalRequestSkillMetadata": {
+      "type": "object",
+      "required": [
+        "path_to_skills_md"
+      ],
+      "properties": {
+        "path_to_skills_md": {
+          "type": "string"
+        }
+      }
+    },
     "ExecCommandSource": {
       "type": "string",
       "enum": [
@@ -3416,7 +4492,7 @@
             "null"
           ],
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           }
         },
         "write": {
@@ -3425,7 +4501,7 @@
             "null"
           ],
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           }
         }
       }
@@ -3451,38 +4527,30 @@
         }
       }
     },
-    "MacOsPermissions": {
+    "MacOsSeatbeltProfileExtensions": {
       "type": "object",
       "properties": {
-        "accessibility": {
-          "type": [
-            "boolean",
-            "null"
-          ]
+        "macos_accessibility": {
+          "default": false,
+          "type": "boolean"
         },
-        "automations": {
-          "anyOf": [
+        "macos_automation": {
+          "default": "none",
+          "allOf": [
             {
-              "$ref": "#/definitions/MacOsAutomationValue"
-            },
-            {
-              "type": "null"
+              "$ref": "#/definitions/MacOsAutomationPermission"
             }
           ]
         },
-        "calendar": {
-          "type": [
-            "boolean",
-            "null"
-          ]
+        "macos_calendar": {
+          "default": false,
+          "type": "boolean"
         },
-        "preferences": {
-          "anyOf": [
+        "macos_preferences": {
+          "default": "read_only",
+          "allOf": [
             {
-              "$ref": "#/definitions/MacOsPreferencesValue"
-            },
-            {
-              "type": "null"
+              "$ref": "#/definitions/MacOsPreferencesPermission"
             }
           ]
         }
@@ -3590,6 +4658,17 @@
         }
       ]
     },
+    "NetworkPermissions": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
     "PermissionProfile": {
       "type": "object",
       "properties": {
@@ -3606,7 +4685,7 @@
         "macos": {
           "anyOf": [
             {
-              "$ref": "#/definitions/MacOsPermissions"
+              "$ref": "#/definitions/MacOsSeatbeltProfileExtensions"
             },
             {
               "type": "null"
@@ -3614,9 +4693,13 @@
           ]
         },
         "network": {
-          "type": [
-            "boolean",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NetworkPermissions"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       }
@@ -3673,15 +4756,21 @@
         {
           "type": "object",
           "required": [
-            "SessionCreated"
+            "SessionUpdated"
           ],
           "properties": {
-            "SessionCreated": {
+            "SessionUpdated": {
               "type": "object",
               "required": [
                 "session_id"
               ],
               "properties": {
+                "instructions": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "session_id": {
                   "type": "string"
                 }
@@ -3689,28 +4778,33 @@
             }
           },
           "additionalProperties": false,
-          "title": "SessionCreatedRealtimeEvent"
+          "title": "SessionUpdatedRealtimeEvent"
         },
         {
           "type": "object",
           "required": [
-            "SessionUpdated"
+            "InputTranscriptDelta"
           ],
           "properties": {
-            "SessionUpdated": {
-              "type": "object",
-              "properties": {
-                "backend_prompt": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                }
-              }
+            "InputTranscriptDelta": {
+              "$ref": "#/definitions/RealtimeTranscriptDelta"
             }
           },
           "additionalProperties": false,
-          "title": "SessionUpdatedRealtimeEvent"
+          "title": "InputTranscriptDeltaRealtimeEvent"
+        },
+        {
+          "type": "object",
+          "required": [
+            "OutputTranscriptDelta"
+          ],
+          "properties": {
+            "OutputTranscriptDelta": {
+              "$ref": "#/definitions/RealtimeTranscriptDelta"
+            }
+          },
+          "additionalProperties": false,
+          "title": "OutputTranscriptDeltaRealtimeEvent"
         },
         {
           "type": "object",
@@ -3739,6 +4833,40 @@
         {
           "type": "object",
           "required": [
+            "ConversationItemDone"
+          ],
+          "properties": {
+            "ConversationItemDone": {
+              "type": "object",
+              "required": [
+                "item_id"
+              ],
+              "properties": {
+                "item_id": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "additionalProperties": false,
+          "title": "ConversationItemDoneRealtimeEvent"
+        },
+        {
+          "type": "object",
+          "required": [
+            "HandoffRequested"
+          ],
+          "properties": {
+            "HandoffRequested": {
+              "$ref": "#/definitions/RealtimeHandoffRequested"
+            }
+          },
+          "additionalProperties": false,
+          "title": "HandoffRequestedRealtimeEvent"
+        },
+        {
+          "type": "object",
+          "required": [
             "Error"
           ],
           "properties": {
@@ -3751,6 +4879,58 @@
         }
       ]
     },
+    "RealtimeHandoffRequested": {
+      "type": "object",
+      "required": [
+        "active_transcript",
+        "handoff_id",
+        "input_transcript",
+        "item_id"
+      ],
+      "properties": {
+        "active_transcript": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealtimeTranscriptEntry"
+          }
+        },
+        "handoff_id": {
+          "type": "string"
+        },
+        "input_transcript": {
+          "type": "string"
+        },
+        "item_id": {
+          "type": "string"
+        }
+      }
+    },
+    "RealtimeTranscriptDelta": {
+      "type": "object",
+      "required": [
+        "delta"
+      ],
+      "properties": {
+        "delta": {
+          "type": "string"
+        }
+      }
+    },
+    "RealtimeTranscriptEntry": {
+      "type": "object",
+      "required": [
+        "role",
+        "text"
+      ],
+      "properties": {
+        "role": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      }
+    },
     "RejectConfig": {
       "type": "object",
       "required": [
@@ -3761,6 +4941,11 @@
       "properties": {
         "mcp_elicitations": {
           "description": "Reject MCP elicitation prompts.",
+          "type": "boolean"
+        },
+        "request_permissions": {
+          "description": "Reject approval prompts related to built-in permission requests.",
+          "default": false,
           "type": "boolean"
         },
         "rules": {
@@ -4029,14 +5214,10 @@
     "SessionNetworkProxyRuntime": {
       "type": "object",
       "required": [
-        "admin_addr",
         "http_addr",
         "socks_addr"
       ],
       "properties": {
-        "admin_addr": {
-          "type": "string"
-        },
         "http_addr": {
           "type": "string"
         },
@@ -4128,7 +5309,7 @@
             "content": {
               "type": "array",
               "items": {
-                "$ref": "#/definitions/UserInput"
+                "$ref": "#/definitions/v2/UserInput"
               }
             },
             "id": {
@@ -4166,7 +5347,7 @@
               "description": "Optional phase metadata carried through from `ResponseItem::Message`.\n\nThis is currently used by TUI rendering to distinguish mid-turn commentary from a final answer and avoid status-indicator jitter.",
               "anyOf": [
                 {
-                  "$ref": "#/definitions/MessagePhase"
+                  "$ref": "#/definitions/v2/MessagePhase"
                 },
                 {
                   "type": "null"
@@ -4251,7 +5432,7 @@
           ],
           "properties": {
             "action": {
-              "$ref": "#/definitions/WebSearchAction"
+              "$ref": "#/definitions/v2/ResponsesApiWebSearchAction"
             },
             "id": {
               "type": "string"
@@ -4268,6 +5449,46 @@
             }
           },
           "title": "WebSearchTurnItem"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "result",
+            "status",
+            "type"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "revised_prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "saved_path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "ImageGeneration"
+              ],
+              "title": "ImageGenerationTurnItemType"
+            }
+          },
+          "title": "ImageGenerationTurnItem"
         },
         {
           "type": "object",
@@ -4899,6 +6120,16 @@
                 }
               ]
             },
+            "service_tier": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/v2/ServiceTier"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "session_id": {
               "$ref": "#/definitions/v2/ThreadId"
             },
@@ -5108,7 +6339,7 @@
           ],
           "properties": {
             "action": {
-              "$ref": "#/definitions/v2/WebSearchAction"
+              "$ref": "#/definitions/v2/ResponsesApiWebSearchAction"
             },
             "call_id": {
               "type": "string"
@@ -5125,6 +6356,66 @@
             }
           },
           "title": "WebSearchEndEventMsg"
+        },
+        {
+          "type": "object",
+          "required": [
+            "call_id",
+            "type"
+          ],
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "image_generation_begin"
+              ],
+              "title": "ImageGenerationBeginEventMsgType"
+            }
+          },
+          "title": "ImageGenerationBeginEventMsg"
+        },
+        {
+          "type": "object",
+          "required": [
+            "call_id",
+            "result",
+            "status",
+            "type"
+          ],
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "revised_prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "saved_path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "image_generation_end"
+              ],
+              "title": "ImageGenerationEndEventMsgType"
+            }
+          },
+          "title": "ImageGenerationEndEventMsg"
         },
         {
           "description": "Notification that the server is about to execute a command.",
@@ -5501,6 +6792,17 @@
                 "null"
               ]
             },
+            "skill_metadata": {
+              "description": "Optional skill metadata when the approval was triggered by a skill script.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ExecApprovalRequestSkillMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "turn_id": {
               "description": "Turn ID that this command belongs to. Uses `#[serde(default)]` for backwards compatibility.",
               "default": "",
@@ -5515,6 +6817,42 @@
             }
           },
           "title": "ExecApprovalRequestEventMsg"
+        },
+        {
+          "type": "object",
+          "required": [
+            "call_id",
+            "permissions",
+            "type"
+          ],
+          "properties": {
+            "call_id": {
+              "description": "Responses API call id for the associated tool call, if available.",
+              "type": "string"
+            },
+            "permissions": {
+              "$ref": "#/definitions/PermissionProfile"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "turn_id": {
+              "description": "Turn ID that this request belongs to. Uses `#[serde(default)]` for backwards compatibility.",
+              "default": "",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "request_permissions"
+              ],
+              "title": "RequestPermissionsEventMsgType"
+            }
+          },
+          "title": "RequestPermissionsEventMsg"
         },
         {
           "type": "object",
@@ -5647,19 +6985,26 @@
           "type": "object",
           "required": [
             "id",
-            "message",
+            "request",
             "server_name",
             "type"
           ],
           "properties": {
             "id": {
-              "$ref": "#/definitions/RequestId"
+              "$ref": "#/definitions/v2/RequestId"
             },
-            "message": {
-              "type": "string"
+            "request": {
+              "$ref": "#/definitions/ElicitationRequest"
             },
             "server_name": {
               "type": "string"
+            },
+            "turn_id": {
+              "description": "Turn ID that this elicitation belongs to, when known.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "type": {
               "type": "string",
@@ -6394,6 +7739,58 @@
         {
           "type": "object",
           "required": [
+            "run",
+            "type"
+          ],
+          "properties": {
+            "run": {
+              "$ref": "#/definitions/v2/HookRunSummary"
+            },
+            "turn_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "hook_started"
+              ],
+              "title": "HookStartedEventMsgType"
+            }
+          },
+          "title": "HookStartedEventMsg"
+        },
+        {
+          "type": "object",
+          "required": [
+            "run",
+            "type"
+          ],
+          "properties": {
+            "run": {
+              "$ref": "#/definitions/v2/HookRunSummary"
+            },
+            "turn_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "hook_completed"
+              ],
+              "title": "HookCompletedEventMsgType"
+            }
+          },
+          "title": "HookCompletedEventMsg"
+        },
+        {
+          "type": "object",
+          "required": [
             "delta",
             "item_id",
             "thread_id",
@@ -7091,6 +8488,10 @@
                   "mcp_elicitations": {
                     "type": "boolean"
                   },
+                  "request_permissions": {
+                    "default": false,
+                    "type": "boolean"
+                  },
                   "rules": {
                     "type": "boolean"
                   },
@@ -7138,6 +8539,13 @@
           "danger-full-access"
         ]
       },
+      "ServiceTier": {
+        "type": "string",
+        "enum": [
+          "fast",
+          "flex"
+        ]
+      },
       "ThreadStartParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "ThreadStartParams",
@@ -7178,10 +8586,21 @@
               "null"
             ]
           },
-          "serviceName": {
-            "type": [
-              "string",
-              "null"
+          "serviceTier": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ServiceTier"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "ephemeral": {
@@ -7190,20 +8609,20 @@
               "null"
             ]
           },
-          "personality": {
+          "sandbox": {
             "anyOf": [
               {
-                "$ref": "#/definitions/v2/Personality"
+                "$ref": "#/definitions/v2/SandboxMode"
               },
               {
                 "type": "null"
               }
             ]
           },
-          "sandbox": {
+          "personality": {
             "anyOf": [
               {
-                "$ref": "#/definitions/v2/SandboxMode"
+                "$ref": "#/definitions/v2/Personality"
               },
               {
                 "type": "null"
@@ -7217,6 +8636,12 @@
             ]
           },
           "modelProvider": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "serviceName": {
             "type": [
               "string",
               "null"
@@ -7331,6 +8756,16 @@
               "type"
             ],
             "properties": {
+              "detail": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ImageDetail"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "image_url": {
                 "type": "string"
               },
@@ -7395,6 +8830,15 @@
             }
           }
         }
+      },
+      "ImageDetail": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "low",
+          "high",
+          "original"
+        ]
       },
       "LocalShellAction": {
         "oneOf": [
@@ -7794,7 +9238,7 @@
                 "type": "string"
               },
               "output": {
-                "type": "string"
+                "$ref": "#/definitions/v2/FunctionCallOutputPayload"
               },
               "type": {
                 "type": "string",
@@ -7815,7 +9259,7 @@
               "action": {
                 "anyOf": [
                   {
-                    "$ref": "#/definitions/v2/WebSearchAction"
+                    "$ref": "#/definitions/v2/ResponsesApiWebSearchAction"
                   },
                   {
                     "type": "null"
@@ -7844,6 +9288,40 @@
               }
             },
             "title": "WebSearchCallResponseItem"
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "result",
+              "status",
+              "type"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "result": {
+                "type": "string"
+              },
+              "revised_prompt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "image_generation_call"
+                ],
+                "title": "ImageGenerationCallResponseItemType"
+              }
+            },
+            "title": "ImageGenerationCallResponseItem"
           },
           {
             "type": "object",
@@ -7903,7 +9381,7 @@
           }
         ]
       },
-      "WebSearchAction": {
+      "ResponsesApiWebSearchAction": {
         "oneOf": [
           {
             "type": "object",
@@ -7931,10 +9409,10 @@
                 "enum": [
                   "search"
                 ],
-                "title": "SearchWebSearchActionType"
+                "title": "SearchResponsesApiWebSearchActionType"
               }
             },
-            "title": "SearchWebSearchAction"
+            "title": "SearchResponsesApiWebSearchAction"
           },
           {
             "type": "object",
@@ -7947,7 +9425,7 @@
                 "enum": [
                   "open_page"
                 ],
-                "title": "OpenPageWebSearchActionType"
+                "title": "OpenPageResponsesApiWebSearchActionType"
               },
               "url": {
                 "type": [
@@ -7956,7 +9434,7 @@
                 ]
               }
             },
-            "title": "OpenPageWebSearchAction"
+            "title": "OpenPageResponsesApiWebSearchAction"
           },
           {
             "type": "object",
@@ -7975,7 +9453,7 @@
                 "enum": [
                   "find_in_page"
                 ],
-                "title": "FindInPageWebSearchActionType"
+                "title": "FindInPageResponsesApiWebSearchActionType"
               },
               "url": {
                 "type": [
@@ -7984,7 +9462,7 @@
                 ]
               }
             },
-            "title": "FindInPageWebSearchAction"
+            "title": "FindInPageResponsesApiWebSearchAction"
           },
           {
             "type": "object",
@@ -7997,10 +9475,10 @@
                 "enum": [
                   "other"
                 ],
-                "title": "OtherWebSearchActionType"
+                "title": "OtherResponsesApiWebSearchActionType"
               }
             },
-            "title": "OtherWebSearchAction"
+            "title": "OtherResponsesApiWebSearchAction"
           }
         ]
       },
@@ -8048,10 +9526,17 @@
               "null"
             ]
           },
-          "sandbox": {
+          "serviceTier": {
             "anyOf": [
               {
-                "$ref": "#/definitions/v2/SandboxMode"
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ServiceTier"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               {
                 "type": "null"
@@ -8073,6 +9558,16 @@
           },
           "threadId": {
             "type": "string"
+          },
+          "sandbox": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SandboxMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "personality": {
             "anyOf": [
@@ -8143,6 +9638,26 @@
               "null"
             ]
           },
+          "threadId": {
+            "type": "string"
+          },
+          "serviceTier": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ServiceTier"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "sandbox": {
             "anyOf": [
               {
@@ -8152,9 +9667,6 @@
                 "type": "null"
               }
             ]
-          },
-          "threadId": {
-            "type": "string"
           }
         }
       },
@@ -8174,49 +9686,6 @@
       "ThreadUnsubscribeParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "ThreadUnsubscribeParams",
-        "type": "object",
-        "required": [
-          "threadId"
-        ],
-        "properties": {
-          "threadId": {
-            "type": "string"
-          }
-        }
-      },
-      "ThreadSetNameParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "ThreadSetNameParams",
-        "type": "object",
-        "required": [
-          "name",
-          "threadId"
-        ],
-        "properties": {
-          "name": {
-            "type": "string"
-          },
-          "threadId": {
-            "type": "string"
-          }
-        }
-      },
-      "ThreadUnarchiveParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "ThreadUnarchiveParams",
-        "type": "object",
-        "required": [
-          "threadId"
-        ],
-        "properties": {
-          "threadId": {
-            "type": "string"
-          }
-        }
-      },
-      "ThreadCompactStartParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "ThreadCompactStartParams",
         "type": "object",
         "required": [
           "threadId"
@@ -8249,6 +9718,148 @@
           },
           "success": {
             "type": "boolean"
+          }
+        }
+      },
+      "WindowsSandboxSetupCompletedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "WindowsSandboxSetupCompletedNotification",
+        "type": "object",
+        "required": [
+          "mode",
+          "success"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "$ref": "#/definitions/v2/WindowsSandboxSetupMode"
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ThreadSetNameParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadSetNameParams",
+        "type": "object",
+        "required": [
+          "name",
+          "threadId"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        }
+      },
+      "ThreadMetadataGitInfoUpdateParams": {
+        "type": "object",
+        "properties": {
+          "branch": {
+            "description": "Omit to leave the stored branch unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "originUrl": {
+            "description": "Omit to leave the stored origin URL unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sha": {
+            "description": "Omit to leave the stored commit unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ThreadMetadataUpdateParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadMetadataUpdateParams",
+        "type": "object",
+        "required": [
+          "threadId"
+        ],
+        "properties": {
+          "gitInfo": {
+            "description": "Patch the stored Git metadata for this thread. Omit a field to leave it unchanged, set it to `null` to clear it, or provide a string to replace the stored value.",
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadMetadataGitInfoUpdateParams"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "threadId": {
+            "type": "string"
+          }
+        }
+      },
+      "ThreadUnarchiveParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadUnarchiveParams",
+        "type": "object",
+        "required": [
+          "threadId"
+        ],
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        }
+      },
+      "ThreadCompactStartParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadCompactStartParams",
+        "type": "object",
+        "required": [
+          "threadId"
+        ],
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        }
+      },
+      "WindowsWorldWritableWarningNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "WindowsWorldWritableWarningNotification",
+        "type": "object",
+        "required": [
+          "extraCount",
+          "failedScan",
+          "samplePaths"
+        ],
+        "properties": {
+          "extraCount": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0.0
+          },
+          "failedScan": {
+            "type": "boolean"
+          },
+          "samplePaths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -8457,6 +10068,27 @@
           }
         }
       },
+      "AbsolutePathBuf": {
+        "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
+        "type": "string"
+      },
+      "PluginListParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "PluginListParams",
+        "type": "object",
+        "properties": {
+          "cwds": {
+            "description": "Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces and the official curated marketplace are considered.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
+            }
+          }
+        }
+      },
       "HazelnutScope": {
         "type": "string",
         "enum": [
@@ -8567,9 +10199,35 @@
           }
         }
       },
-      "AbsolutePathBuf": {
-        "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
-        "type": "string"
+      "PluginInstallParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "PluginInstallParams",
+        "type": "object",
+        "required": [
+          "marketplacePath",
+          "pluginName"
+        ],
+        "properties": {
+          "marketplacePath": {
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
+          },
+          "pluginName": {
+            "type": "string"
+          }
+        }
+      },
+      "PluginUninstallParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "PluginUninstallParams",
+        "type": "object",
+        "required": [
+          "pluginId"
+        ],
+        "properties": {
+          "pluginId": {
+            "type": "string"
+          }
+        }
       },
       "ByteRange": {
         "type": "object",
@@ -8733,6 +10391,10 @@
                     "$ref": "#/definitions/v2/ReadOnlyAccess"
                   }
                 ]
+              },
+              "networkAccess": {
+                "default": false,
+                "type": "boolean"
               },
               "type": {
                 "type": "string",
@@ -9065,6 +10727,24 @@
               }
             ]
           },
+          "serviceTier": {
+            "description": "Override the service tier for this turn and subsequent turns.",
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ServiceTier"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "summary": {
             "description": "Override the reasoning summary for this turn and subsequent turns.",
             "anyOf": [
@@ -9120,26 +10800,23 @@
           }
         }
       },
-      "WindowsSandboxSetupCompletedNotification": {
+      "ThreadRealtimeClosedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "WindowsSandboxSetupCompletedNotification",
+        "title": "ThreadRealtimeClosedNotification",
+        "description": "EXPERIMENTAL - emitted when thread realtime transport closes.",
         "type": "object",
         "required": [
-          "mode",
-          "success"
+          "threadId"
         ],
         "properties": {
-          "error": {
+          "reason": {
             "type": [
               "string",
               "null"
             ]
           },
-          "mode": {
-            "$ref": "#/definitions/v2/WindowsSandboxSetupMode"
-          },
-          "success": {
-            "type": "boolean"
+          "threadId": {
+            "type": "string"
           }
         }
       },
@@ -9175,52 +10852,6 @@
           }
         }
       },
-      "WindowsWorldWritableWarningNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "WindowsWorldWritableWarningNotification",
-        "type": "object",
-        "required": [
-          "extraCount",
-          "failedScan",
-          "samplePaths"
-        ],
-        "properties": {
-          "extraCount": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0.0
-          },
-          "failedScan": {
-            "type": "boolean"
-          },
-          "samplePaths": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        }
-      },
-      "ThreadRealtimeClosedNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "ThreadRealtimeClosedNotification",
-        "description": "EXPERIMENTAL - emitted when thread realtime transport closes.",
-        "type": "object",
-        "required": [
-          "threadId"
-        ],
-        "properties": {
-          "reason": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "threadId": {
-            "type": "string"
-          }
-        }
-      },
       "ThreadRealtimeErrorNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "ThreadRealtimeErrorNotification",
@@ -9234,6 +10865,40 @@
           "message": {
             "type": "string"
           },
+          "threadId": {
+            "type": "string"
+          }
+        }
+      },
+      "ThreadRealtimeOutputAudioDeltaNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadRealtimeOutputAudioDeltaNotification",
+        "description": "EXPERIMENTAL - streamed output audio emitted by thread realtime.",
+        "type": "object",
+        "required": [
+          "audio",
+          "threadId"
+        ],
+        "properties": {
+          "audio": {
+            "$ref": "#/definitions/v2/ThreadRealtimeAudioChunk"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        }
+      },
+      "ThreadRealtimeItemAddedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadRealtimeItemAddedNotification",
+        "description": "EXPERIMENTAL - raw non-audio thread realtime item emitted by the backend.",
+        "type": "object",
+        "required": [
+          "item",
+          "threadId"
+        ],
+        "properties": {
+          "item": true,
           "threadId": {
             "type": "string"
           }
@@ -9419,36 +11084,61 @@
           }
         }
       },
-      "ThreadRealtimeOutputAudioDeltaNotification": {
+      "ThreadRealtimeStartedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "ThreadRealtimeOutputAudioDeltaNotification",
-        "description": "EXPERIMENTAL - streamed output audio emitted by thread realtime.",
+        "title": "ThreadRealtimeStartedNotification",
+        "description": "EXPERIMENTAL - emitted when thread realtime startup is accepted.",
         "type": "object",
         "required": [
-          "audio",
           "threadId"
         ],
         "properties": {
-          "audio": {
-            "$ref": "#/definitions/v2/ThreadRealtimeAudioChunk"
+          "sessionId": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "threadId": {
             "type": "string"
           }
         }
       },
-      "ThreadRealtimeItemAddedNotification": {
+      "ConfigWarningNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "ThreadRealtimeItemAddedNotification",
-        "description": "EXPERIMENTAL - raw non-audio thread realtime item emitted by the backend.",
+        "title": "ConfigWarningNotification",
         "type": "object",
         "required": [
-          "item",
-          "threadId"
+          "summary"
         ],
         "properties": {
-          "item": true,
-          "threadId": {
+          "details": {
+            "description": "Optional extra guidance or error details.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "Optional path to the config file that triggered the warning.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "range": {
+            "description": "Optional range for the error location inside the config file.",
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/TextRange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "description": "Concise summary of the warning.",
             "type": "string"
           }
         }
@@ -9520,6 +11210,16 @@
           "mode"
         ],
         "properties": {
+          "cwd": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "mode": {
             "$ref": "#/definitions/v2/WindowsSandboxSetupMode"
           }
@@ -9652,27 +11352,90 @@
           }
         }
       },
+      "CommandExecTerminalSize": {
+        "description": "PTY size in character cells for `command/exec` PTY sessions.",
+        "type": "object",
+        "required": [
+          "cols",
+          "rows"
+        ],
+        "properties": {
+          "cols": {
+            "description": "Terminal width in character cells.",
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0.0
+          },
+          "rows": {
+            "description": "Terminal height in character cells.",
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0.0
+          }
+        }
+      },
       "CommandExecParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "CommandExecParams",
+        "description": "Run a standalone command (argv vector) in the server sandbox without creating a thread or turn.\n\nThe final `command/exec` response is deferred until the process exits and is sent only after all `command/exec/outputDelta` notifications for that connection have been emitted.",
         "type": "object",
         "required": [
           "command"
         ],
         "properties": {
           "command": {
+            "description": "Command argv vector. Empty arrays are rejected.",
             "type": "array",
             "items": {
               "type": "string"
             }
           },
           "cwd": {
+            "description": "Optional working directory. Defaults to the server cwd.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "disableOutputCap": {
+            "description": "Disable stdout/stderr capture truncation for this request.\n\nCannot be combined with `outputBytesCap`.",
+            "type": "boolean"
+          },
+          "disableTimeout": {
+            "description": "Disable the timeout entirely for this request.\n\nCannot be combined with `timeoutMs`.",
+            "type": "boolean"
+          },
+          "env": {
+            "description": "Optional environment overrides merged into the server-computed environment.\n\nMatching names override inherited values. Set a key to `null` to unset an inherited variable.",
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "outputBytesCap": {
+            "description": "Optional per-stream stdout/stderr capture cap in bytes.\n\nWhen omitted, the server default applies. Cannot be combined with `disableOutputCap`.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint",
+            "minimum": 0.0
+          },
+          "processId": {
+            "description": "Optional client-supplied, connection-scoped process id.\n\nRequired for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up `command/exec/write`, `command/exec/resize`, and `command/exec/terminate` calls. When omitted, buffered execution gets an internal id that is not exposed to the client.",
             "type": [
               "string",
               "null"
             ]
           },
           "sandboxPolicy": {
+            "description": "Optional sandbox policy for this command.\n\nUses the same shape as thread/turn execution sandbox configuration and defaults to the user's configured policy when omitted.",
             "anyOf": [
               {
                 "$ref": "#/definitions/v2/SandboxPolicy"
@@ -9682,12 +11445,101 @@
               }
             ]
           },
+          "size": {
+            "description": "Optional initial PTY size in character cells. Only valid when `tty` is true.",
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/CommandExecTerminalSize"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "streamStdin": {
+            "description": "Allow follow-up `command/exec/write` requests to write stdin bytes.\n\nRequires a client-supplied `processId`.",
+            "type": "boolean"
+          },
+          "streamStdoutStderr": {
+            "description": "Stream stdout/stderr via `command/exec/outputDelta` notifications.\n\nStreamed bytes are not duplicated into the final response and require a client-supplied `processId`.",
+            "type": "boolean"
+          },
           "timeoutMs": {
+            "description": "Optional timeout in milliseconds.\n\nWhen omitted, the server default applies. Cannot be combined with `disableTimeout`.",
             "type": [
               "integer",
               "null"
             ],
             "format": "int64"
+          },
+          "tty": {
+            "description": "Enable PTY mode.\n\nThis implies `streamStdin` and `streamStdoutStderr`.",
+            "type": "boolean"
+          }
+        }
+      },
+      "CommandExecWriteParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "CommandExecWriteParams",
+        "description": "Write stdin bytes to a running `command/exec` session, close stdin, or both.",
+        "type": "object",
+        "required": [
+          "processId"
+        ],
+        "properties": {
+          "closeStdin": {
+            "description": "Close stdin after writing `deltaBase64`, if present.",
+            "type": "boolean"
+          },
+          "deltaBase64": {
+            "description": "Optional base64-encoded stdin bytes to write.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "processId": {
+            "description": "Client-supplied, connection-scoped `processId` from the original `command/exec` request.",
+            "type": "string"
+          }
+        }
+      },
+      "CommandExecTerminateParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "CommandExecTerminateParams",
+        "description": "Terminate a running `command/exec` session.",
+        "type": "object",
+        "required": [
+          "processId"
+        ],
+        "properties": {
+          "processId": {
+            "description": "Client-supplied, connection-scoped `processId` from the original `command/exec` request.",
+            "type": "string"
+          }
+        }
+      },
+      "CommandExecResizeParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "CommandExecResizeParams",
+        "description": "Resize a running PTY-backed `command/exec` session.",
+        "type": "object",
+        "required": [
+          "processId",
+          "size"
+        ],
+        "properties": {
+          "processId": {
+            "description": "Client-supplied, connection-scoped `processId` from the original `command/exec` request.",
+            "type": "string"
+          },
+          "size": {
+            "description": "New PTY size in character cells.",
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/CommandExecTerminalSize"
+              }
+            ]
           }
         }
       },
@@ -9859,6 +11711,10 @@
               "string",
               "null"
             ]
+          },
+          "reloadUserConfig": {
+            "description": "When true, hot-reload the updated user config into all loaded threads after writing.",
+            "type": "boolean"
           }
         }
       },
@@ -10444,6 +12300,7 @@
           "cliVersion",
           "createdAt",
           "cwd",
+          "ephemeral",
           "id",
           "modelProvider",
           "preview",
@@ -10479,6 +12336,10 @@
           "cwd": {
             "description": "Working directory captured for the thread.",
             "type": "string"
+          },
+          "ephemeral": {
+            "description": "Whether the thread is ephemeral and should not be materialized on disk.",
+            "type": "boolean"
           },
           "gitInfo": {
             "description": "Optional Git metadata captured when the thread was created.",
@@ -11026,6 +12887,40 @@
             "type": "object",
             "required": [
               "id",
+              "result",
+              "status",
+              "type"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "result": {
+                "type": "string"
+              },
+              "revisedPrompt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "imageGeneration"
+                ],
+                "title": "ImageGenerationThreadItemType"
+              }
+            },
+            "title": "ImageGenerationThreadItem"
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
               "review",
               "type"
             ],
@@ -11238,6 +13133,107 @@
           "inProgress"
         ]
       },
+      "WebSearchAction": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "queries": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "string"
+                }
+              },
+              "query": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "search"
+                ],
+                "title": "SearchWebSearchActionType"
+              }
+            },
+            "title": "SearchWebSearchAction"
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "openPage"
+                ],
+                "title": "OpenPageWebSearchActionType"
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "title": "OpenPageWebSearchAction"
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "pattern": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "findInPage"
+                ],
+                "title": "FindInPageWebSearchActionType"
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "title": "FindInPageWebSearchAction"
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "other"
+                ],
+                "title": "OtherWebSearchActionType"
+              }
+            },
+            "title": "OtherWebSearchAction"
+          }
+        ]
+      },
       "ThreadStartResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "ThreadStartResponse",
@@ -11275,6 +13271,16 @@
           },
           "sandbox": {
             "$ref": "#/definitions/v2/SandboxPolicy"
+          },
+          "serviceTier": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ServiceTier"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "thread": {
             "$ref": "#/definitions/v2/Thread"
@@ -11319,6 +13325,16 @@
           "sandbox": {
             "$ref": "#/definitions/v2/SandboxPolicy"
           },
+          "serviceTier": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ServiceTier"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "thread": {
             "$ref": "#/definitions/v2/Thread"
           }
@@ -11362,6 +13378,16 @@
           "sandbox": {
             "$ref": "#/definitions/v2/SandboxPolicy"
           },
+          "serviceTier": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ServiceTier"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "thread": {
             "$ref": "#/definitions/v2/Thread"
           }
@@ -11393,10 +13419,59 @@
           }
         }
       },
+      "TextRange": {
+        "type": "object",
+        "required": [
+          "end",
+          "start"
+        ],
+        "properties": {
+          "end": {
+            "$ref": "#/definitions/v2/TextPosition"
+          },
+          "start": {
+            "$ref": "#/definitions/v2/TextPosition"
+          }
+        }
+      },
+      "TextPosition": {
+        "type": "object",
+        "required": [
+          "column",
+          "line"
+        ],
+        "properties": {
+          "column": {
+            "description": "1-based column number (in Unicode scalar values).",
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0.0
+          },
+          "line": {
+            "description": "1-based line number.",
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0.0
+          }
+        }
+      },
       "ThreadSetNameResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "ThreadSetNameResponse",
         "type": "object"
+      },
+      "ThreadMetadataUpdateResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadMetadataUpdateResponse",
+        "type": "object",
+        "required": [
+          "thread"
+        ],
+        "properties": {
+          "thread": {
+            "$ref": "#/definitions/v2/Thread"
+          }
+        }
       },
       "ThreadUnarchiveResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -11416,22 +13491,23 @@
         "title": "ThreadCompactStartResponse",
         "type": "object"
       },
-      "ThreadRealtimeStartedNotification": {
+      "DeprecationNoticeNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "ThreadRealtimeStartedNotification",
-        "description": "EXPERIMENTAL - emitted when thread realtime startup is accepted.",
+        "title": "DeprecationNoticeNotification",
         "type": "object",
         "required": [
-          "threadId"
+          "summary"
         ],
         "properties": {
-          "sessionId": {
+          "details": {
+            "description": "Optional extra guidance, such as migration steps or rationale.",
             "type": [
               "string",
               "null"
             ]
           },
-          "threadId": {
+          "summary": {
+            "description": "Concise summary of what is deprecated.",
             "type": "string"
           }
         }
@@ -11727,6 +13803,206 @@
           }
         }
       },
+      "PluginInterface": {
+        "type": "object",
+        "required": [
+          "capabilities",
+          "screenshots"
+        ],
+        "properties": {
+          "brandColor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "composerIcon": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "defaultPrompt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "developerName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "displayName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "logo": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "longDescription": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "privacyPolicyUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "screenshots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
+            }
+          },
+          "shortDescription": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "termsOfServiceUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "websiteUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "PluginMarketplaceEntry": {
+        "type": "object",
+        "required": [
+          "name",
+          "path",
+          "plugins"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
+          },
+          "plugins": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/v2/PluginSummary"
+            }
+          }
+        }
+      },
+      "PluginSource": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "path",
+              "type"
+            ],
+            "properties": {
+              "path": {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "local"
+                ],
+                "title": "LocalPluginSourceType"
+              }
+            },
+            "title": "LocalPluginSource"
+          }
+        ]
+      },
+      "PluginSummary": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "id",
+          "installed",
+          "name",
+          "source"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "installed": {
+            "type": "boolean"
+          },
+          "interface": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PluginInterface"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/definitions/v2/PluginSource"
+          }
+        }
+      },
+      "PluginListResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "PluginListResponse",
+        "type": "object",
+        "required": [
+          "marketplaces"
+        ],
+        "properties": {
+          "marketplaces": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/v2/PluginMarketplaceEntry"
+            }
+          }
+        }
+      },
       "RemoteSkillSummary": {
         "type": "object",
         "required": [
@@ -11902,6 +14178,13 @@
           },
           "name": {
             "type": "string"
+          },
+          "pluginDisplayNames": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -12066,6 +14349,55 @@
           }
         }
       },
+      "AppSummary": {
+        "description": "EXPERIMENTAL - app metadata summary for plugin-install responses.",
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "installUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "PluginInstallResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "PluginInstallResponse",
+        "type": "object",
+        "required": [
+          "appsNeedingAuth"
+        ],
+        "properties": {
+          "appsNeedingAuth": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/v2/AppSummary"
+            }
+          }
+        }
+      },
+      "PluginUninstallResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "PluginUninstallResponse",
+        "type": "object"
+      },
       "TurnStartResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "TurnStartResponse",
@@ -12097,98 +14429,85 @@
         "title": "TurnInterruptResponse",
         "type": "object"
       },
-      "ConfigWarningNotification": {
+      "ModelReroutedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "ConfigWarningNotification",
+        "title": "ModelReroutedNotification",
         "type": "object",
         "required": [
-          "summary"
+          "fromModel",
+          "reason",
+          "threadId",
+          "toModel",
+          "turnId"
         ],
         "properties": {
-          "details": {
-            "description": "Optional extra guidance or error details.",
-            "type": [
-              "string",
-              "null"
-            ]
+          "fromModel": {
+            "type": "string"
           },
-          "path": {
-            "description": "Optional path to the config file that triggered the warning.",
-            "type": [
-              "string",
-              "null"
-            ]
+          "reason": {
+            "$ref": "#/definitions/v2/ModelRerouteReason"
           },
-          "range": {
-            "description": "Optional range for the error location inside the config file.",
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/TextRange"
-              },
-              {
-                "type": "null"
-              }
-            ]
+          "threadId": {
+            "type": "string"
           },
-          "summary": {
-            "description": "Concise summary of the warning.",
+          "toModel": {
+            "type": "string"
+          },
+          "turnId": {
             "type": "string"
           }
         }
       },
-      "TextRange": {
-        "type": "object",
-        "required": [
-          "end",
-          "start"
-        ],
-        "properties": {
-          "end": {
-            "$ref": "#/definitions/v2/TextPosition"
-          },
-          "start": {
-            "$ref": "#/definitions/v2/TextPosition"
-          }
-        }
+      "ModelRerouteReason": {
+        "type": "string",
+        "enum": [
+          "highRiskCyberActivity"
+        ]
       },
-      "TextPosition": {
-        "type": "object",
-        "required": [
-          "column",
-          "line"
-        ],
-        "properties": {
-          "column": {
-            "description": "1-based column number (in Unicode scalar values).",
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0.0
-          },
-          "line": {
-            "description": "1-based line number.",
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0.0
-          }
-        }
-      },
-      "DeprecationNoticeNotification": {
+      "ContextCompactedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "DeprecationNoticeNotification",
+        "title": "ContextCompactedNotification",
+        "description": "Deprecated: Use `ContextCompaction` item type instead.",
         "type": "object",
         "required": [
-          "summary"
+          "threadId",
+          "turnId"
         ],
         "properties": {
-          "details": {
-            "description": "Optional extra guidance, such as migration steps or rationale.",
-            "type": [
-              "string",
-              "null"
-            ]
+          "threadId": {
+            "type": "string"
           },
-          "summary": {
-            "description": "Concise summary of what is deprecated.",
+          "turnId": {
+            "type": "string"
+          }
+        }
+      },
+      "ReasoningTextDeltaNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ReasoningTextDeltaNotification",
+        "type": "object",
+        "required": [
+          "contentIndex",
+          "delta",
+          "itemId",
+          "threadId",
+          "turnId"
+        ],
+        "properties": {
+          "contentIndex": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "delta": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
             "type": "string"
           }
         }
@@ -12243,6 +14562,16 @@
           "supportedReasoningEfforts"
         ],
         "properties": {
+          "availabilityNux": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ModelAvailabilityNux"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "defaultReasoningEffort": {
             "$ref": "#/definitions/v2/ReasoningEffort"
           },
@@ -12285,6 +14614,56 @@
             "type": "boolean"
           },
           "upgrade": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "upgradeInfo": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ModelUpgradeInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ModelAvailabilityNux": {
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "ModelUpgradeInfo": {
+        "type": "object",
+        "required": [
+          "model"
+        ],
+        "properties": {
+          "migrationMarkdown": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "modelLink": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "upgradeCopy": {
             "type": [
               "string",
               "null"
@@ -12489,28 +14868,25 @@
           }
         }
       },
-      "ModelReroutedNotification": {
+      "ReasoningSummaryPartAddedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "ModelReroutedNotification",
+        "title": "ReasoningSummaryPartAddedNotification",
         "type": "object",
         "required": [
-          "fromModel",
-          "reason",
+          "itemId",
+          "summaryIndex",
           "threadId",
-          "toModel",
           "turnId"
         ],
         "properties": {
-          "fromModel": {
+          "itemId": {
             "type": "string"
           },
-          "reason": {
-            "$ref": "#/definitions/v2/ModelRerouteReason"
+          "summaryIndex": {
+            "type": "integer",
+            "format": "int64"
           },
           "threadId": {
-            "type": "string"
-          },
-          "toModel": {
             "type": "string"
           },
           "turnId": {
@@ -12518,11 +14894,35 @@
           }
         }
       },
-      "ModelRerouteReason": {
-        "type": "string",
-        "enum": [
-          "highRiskCyberActivity"
-        ]
+      "ReasoningSummaryTextDeltaNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ReasoningSummaryTextDeltaNotification",
+        "type": "object",
+        "required": [
+          "delta",
+          "itemId",
+          "summaryIndex",
+          "threadId",
+          "turnId"
+        ],
+        "properties": {
+          "delta": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "summaryIndex": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        }
       },
       "McpServerOauthLoginResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -12994,6 +15394,7 @@
       "CommandExecResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "CommandExecResponse",
+        "description": "Final buffered result for `command/exec`.",
         "type": "object",
         "required": [
           "exitCode",
@@ -13002,16 +15403,37 @@
         ],
         "properties": {
           "exitCode": {
+            "description": "Process exit code.",
             "type": "integer",
             "format": "int32"
           },
           "stderr": {
+            "description": "Buffered stderr capture.\n\nEmpty when stderr was streamed via `command/exec/outputDelta`.",
             "type": "string"
           },
           "stdout": {
+            "description": "Buffered stdout capture.\n\nEmpty when stdout was streamed via `command/exec/outputDelta`.",
             "type": "string"
           }
         }
+      },
+      "CommandExecWriteResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "CommandExecWriteResponse",
+        "description": "Empty success response for `command/exec/write`.",
+        "type": "object"
+      },
+      "CommandExecTerminateResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "CommandExecTerminateResponse",
+        "description": "Empty success response for `command/exec/terminate`.",
+        "type": "object"
+      },
+      "CommandExecResizeResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "CommandExecResizeResponse",
+        "description": "Empty success response for `command/exec/resize`.",
+        "type": "object"
       },
       "AnalyticsConfig": {
         "type": "object",
@@ -13299,6 +15721,16 @@
               }
             ]
           },
+          "service_tier": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ServiceTier"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "tools": {
             "anyOf": [
               {
@@ -13574,6 +16006,26 @@
               }
             ]
           },
+          "service_tier": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ServiceTier"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tools": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ToolsV2"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "web_search": {
             "anyOf": [
               {
@@ -13621,9 +16073,13 @@
             ]
           },
           "web_search": {
-            "type": [
-              "boolean",
-              "null"
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/WebSearchToolConfig"
+              },
+              {
+                "type": "null"
+              }
             ]
           }
         }
@@ -13637,6 +16093,44 @@
           "high"
         ]
       },
+      "WebSearchContextSize": {
+        "type": "string",
+        "enum": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      "WebSearchLocation": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "country": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timezone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "WebSearchMode": {
         "type": "string",
         "enum": [
@@ -13644,6 +16138,41 @@
           "cached",
           "live"
         ]
+      },
+      "WebSearchToolConfig": {
+        "type": "object",
+        "properties": {
+          "allowed_domains": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "context_size": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/WebSearchContextSize"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/WebSearchLocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
       },
       "ConfigReadResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -13794,6 +16323,15 @@
                 "type": "null"
               }
             ]
+          },
+          "featureRequirements": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "type": "boolean"
+            }
           }
         }
       },
@@ -13831,12 +16369,6 @@
             }
           },
           "dangerouslyAllowAllUnixSockets": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "dangerouslyAllowNonLoopbackAdmin": {
             "type": [
               "boolean",
               "null"
@@ -14066,6 +16598,12 @@
           }
         }
       },
+      "SkillsChangedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "SkillsChangedNotification",
+        "description": "Notification emitted when watched local skill files change.\n\nTreat this as an invalidation signal and re-run `skills/list` with the client's current parameters when refreshed skill metadata is needed.",
+        "type": "object"
+      },
       "ThreadNameUpdatedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "ThreadNameUpdatedNotification",
@@ -14177,6 +16715,165 @@
           }
         }
       },
+      "HookEventName": {
+        "type": "string",
+        "enum": [
+          "sessionStart",
+          "stop"
+        ]
+      },
+      "HookExecutionMode": {
+        "type": "string",
+        "enum": [
+          "sync",
+          "async"
+        ]
+      },
+      "HookHandlerType": {
+        "type": "string",
+        "enum": [
+          "command",
+          "prompt",
+          "agent"
+        ]
+      },
+      "HookOutputEntry": {
+        "type": "object",
+        "required": [
+          "kind",
+          "text"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/definitions/v2/HookOutputEntryKind"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "HookOutputEntryKind": {
+        "type": "string",
+        "enum": [
+          "warning",
+          "stop",
+          "feedback",
+          "context",
+          "error"
+        ]
+      },
+      "HookRunStatus": {
+        "type": "string",
+        "enum": [
+          "running",
+          "completed",
+          "failed",
+          "blocked",
+          "stopped"
+        ]
+      },
+      "HookRunSummary": {
+        "type": "object",
+        "required": [
+          "displayOrder",
+          "entries",
+          "eventName",
+          "executionMode",
+          "handlerType",
+          "id",
+          "scope",
+          "sourcePath",
+          "startedAt",
+          "status"
+        ],
+        "properties": {
+          "completedAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "displayOrder": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "durationMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/v2/HookOutputEntry"
+            }
+          },
+          "eventName": {
+            "$ref": "#/definitions/v2/HookEventName"
+          },
+          "executionMode": {
+            "$ref": "#/definitions/v2/HookExecutionMode"
+          },
+          "handlerType": {
+            "$ref": "#/definitions/v2/HookHandlerType"
+          },
+          "id": {
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/definitions/v2/HookScope"
+          },
+          "sourcePath": {
+            "type": "string"
+          },
+          "startedAt": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "$ref": "#/definitions/v2/HookRunStatus"
+          },
+          "statusMessage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "HookScope": {
+        "type": "string",
+        "enum": [
+          "thread",
+          "turn"
+        ]
+      },
+      "HookStartedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "HookStartedNotification",
+        "type": "object",
+        "required": [
+          "run",
+          "threadId"
+        ],
+        "properties": {
+          "run": {
+            "$ref": "#/definitions/v2/HookRunSummary"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "TurnCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "TurnCompletedNotification",
@@ -14191,6 +16888,29 @@
           },
           "turn": {
             "$ref": "#/definitions/v2/Turn"
+          }
+        }
+      },
+      "HookCompletedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "HookCompletedNotification",
+        "type": "object",
+        "required": [
+          "run",
+          "threadId"
+        ],
+        "properties": {
+          "run": {
+            "$ref": "#/definitions/v2/HookRunSummary"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -14383,6 +17103,59 @@
           }
         }
       },
+      "CommandExecOutputStream": {
+        "description": "Stream label for `command/exec/outputDelta` notifications.",
+        "oneOf": [
+          {
+            "description": "stdout stream. PTY mode multiplexes terminal output here.",
+            "type": "string",
+            "enum": [
+              "stdout"
+            ]
+          },
+          {
+            "description": "stderr stream.",
+            "type": "string",
+            "enum": [
+              "stderr"
+            ]
+          }
+        ]
+      },
+      "CommandExecOutputDeltaNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "CommandExecOutputDeltaNotification",
+        "description": "Base64-encoded output chunk emitted for a streaming `command/exec` request.\n\nThese notifications are connection-scoped. If the originating connection closes, the server terminates the process.",
+        "type": "object",
+        "required": [
+          "capReached",
+          "deltaBase64",
+          "processId",
+          "stream"
+        ],
+        "properties": {
+          "capReached": {
+            "description": "`true` on the final streamed chunk for a stream when `outputBytesCap` truncated later output on that stream.",
+            "type": "boolean"
+          },
+          "deltaBase64": {
+            "description": "Base64-encoded output bytes.",
+            "type": "string"
+          },
+          "processId": {
+            "description": "Client-supplied, connection-scoped `processId` from the original `command/exec` request.",
+            "type": "string"
+          },
+          "stream": {
+            "description": "Output stream for this chunk.",
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/CommandExecOutputStream"
+              }
+            ]
+          }
+        }
+      },
       "CommandExecutionOutputDeltaNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "CommandExecutionOutputDeltaNotification",
@@ -14458,6 +17231,34 @@
             "type": "string"
           },
           "turnId": {
+            "type": "string"
+          }
+        }
+      },
+      "RequestId": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "integer",
+            "format": "int64"
+          }
+        ]
+      },
+      "ServerRequestResolvedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ServerRequestResolvedNotification",
+        "type": "object",
+        "required": [
+          "requestId",
+          "threadId"
+        ],
+        "properties": {
+          "requestId": {
+            "$ref": "#/definitions/v2/RequestId"
+          },
+          "threadId": {
             "type": "string"
           }
         }
@@ -14550,6 +17351,16 @@
                 "type": "null"
               }
             ]
+          },
+          "planType": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PlanType"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -14580,110 +17391,6 @@
             "items": {
               "$ref": "#/definitions/v2/AppInfo"
             }
-          }
-        }
-      },
-      "ReasoningSummaryTextDeltaNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "ReasoningSummaryTextDeltaNotification",
-        "type": "object",
-        "required": [
-          "delta",
-          "itemId",
-          "summaryIndex",
-          "threadId",
-          "turnId"
-        ],
-        "properties": {
-          "delta": {
-            "type": "string"
-          },
-          "itemId": {
-            "type": "string"
-          },
-          "summaryIndex": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "threadId": {
-            "type": "string"
-          },
-          "turnId": {
-            "type": "string"
-          }
-        }
-      },
-      "ReasoningSummaryPartAddedNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "ReasoningSummaryPartAddedNotification",
-        "type": "object",
-        "required": [
-          "itemId",
-          "summaryIndex",
-          "threadId",
-          "turnId"
-        ],
-        "properties": {
-          "itemId": {
-            "type": "string"
-          },
-          "summaryIndex": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "threadId": {
-            "type": "string"
-          },
-          "turnId": {
-            "type": "string"
-          }
-        }
-      },
-      "ReasoningTextDeltaNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "ReasoningTextDeltaNotification",
-        "type": "object",
-        "required": [
-          "contentIndex",
-          "delta",
-          "itemId",
-          "threadId",
-          "turnId"
-        ],
-        "properties": {
-          "contentIndex": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "delta": {
-            "type": "string"
-          },
-          "itemId": {
-            "type": "string"
-          },
-          "threadId": {
-            "type": "string"
-          },
-          "turnId": {
-            "type": "string"
-          }
-        }
-      },
-      "ContextCompactedNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "ContextCompactedNotification",
-        "description": "Deprecated: Use `ContextCompaction` item type instead.",
-        "type": "object",
-        "required": [
-          "threadId",
-          "turnId"
-        ],
-        "properties": {
-          "threadId": {
-            "type": "string"
-          },
-          "turnId": {
-            "type": "string"
           }
         }
       }
@@ -14737,37 +17444,33 @@
         }
       }
     },
-    "ToolRequestUserInputResponse": {
+    "PermissionsRequestApprovalResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "ToolRequestUserInputResponse",
-      "description": "EXPERIMENTAL. Response payload mapping question ids to answers.",
+      "title": "PermissionsRequestApprovalResponse",
       "type": "object",
       "required": [
-        "answers"
+        "permissions"
       ],
       "properties": {
-        "answers": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/definitions/ToolRequestUserInputAnswer"
-          }
+        "permissions": {
+          "$ref": "#/definitions/GrantedPermissionProfile"
+        },
+        "scope": {
+          "default": "turn",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PermissionGrantScope"
+            }
+          ]
         }
       }
     },
-    "ToolRequestUserInputAnswer": {
-      "description": "EXPERIMENTAL. Captures a user's answer to a request_user_input question.",
-      "type": "object",
-      "required": [
-        "answers"
-      ],
-      "properties": {
-        "answers": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      }
+    "PermissionGrantScope": {
+      "type": "string",
+      "enum": [
+        "turn",
+        "session"
+      ]
     },
     "CommandExecutionRequestApprovalResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -14824,6 +17527,137 @@
       "properties": {
         "decision": {
           "$ref": "#/definitions/FileChangeApprovalDecision"
+        }
+      }
+    },
+    "ToolRequestUserInputAnswer": {
+      "description": "EXPERIMENTAL. Captures a user's answer to a request_user_input question.",
+      "type": "object",
+      "required": [
+        "answers"
+      ],
+      "properties": {
+        "answers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ToolRequestUserInputResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ToolRequestUserInputResponse",
+      "description": "EXPERIMENTAL. Response payload mapping question ids to answers.",
+      "type": "object",
+      "required": [
+        "answers"
+      ],
+      "properties": {
+        "answers": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/ToolRequestUserInputAnswer"
+          }
+        }
+      }
+    },
+    "McpServerElicitationAction": {
+      "type": "string",
+      "enum": [
+        "accept",
+        "decline",
+        "cancel"
+      ]
+    },
+    "McpServerElicitationRequestResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "McpServerElicitationRequestResponse",
+      "type": "object",
+      "required": [
+        "action"
+      ],
+      "properties": {
+        "_meta": {
+          "description": "Optional client metadata for form-mode action handling."
+        },
+        "action": {
+          "$ref": "#/definitions/McpServerElicitationAction"
+        },
+        "content": {
+          "description": "Structured user input for accepted elicitations, mirroring RMCP `CreateElicitationResult`.\n\nThis is nullable because decline/cancel responses have no content."
+        }
+      }
+    },
+    "GrantedMacOsPermissions": {
+      "type": "object",
+      "properties": {
+        "accessibility": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "automations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MacOsAutomationPermission"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "calendar": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "preferences": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MacOsPreferencesPermission"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "GrantedPermissionProfile": {
+      "type": "object",
+      "properties": {
+        "fileSystem": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdditionalFileSystemPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "macos": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GrantedMacOsPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "network": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdditionalNetworkPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     }

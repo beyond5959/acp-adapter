@@ -77,6 +77,24 @@
         }
       ]
     },
+    "serviceTier": {
+      "description": "Override the service tier for this turn and subsequent turns.",
+      "anyOf": [
+        {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ServiceTier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "summary": {
       "description": "Override the reasoning summary for this turn and subsequent turns.",
       "anyOf": [
@@ -120,6 +138,10 @@
               ],
               "properties": {
                 "mcp_elicitations": {
+                  "type": "boolean"
+                },
+                "request_permissions": {
+                  "default": false,
                   "type": "boolean"
                 },
                 "rules": {
@@ -307,6 +329,10 @@
                 }
               ]
             },
+            "networkAccess": {
+              "default": false,
+              "type": "boolean"
+            },
             "type": {
               "type": "string",
               "enum": [
@@ -386,6 +412,13 @@
           },
           "title": "WorkspaceWriteSandboxPolicy"
         }
+      ]
+    },
+    "ServiceTier": {
+      "type": "string",
+      "enum": [
+        "fast",
+        "flex"
       ]
     },
     "Settings": {

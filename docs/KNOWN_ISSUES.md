@@ -46,6 +46,7 @@
 - KI-0040：`session/load` 已实现，但历史 session 标识与回放仍有局限
 - KI-0041：Claude CLI `session/list` / `session/load` 仅做占位与部分恢复
 - KI-0042：`available_commands_update` 目前仍是 adapter 级命令目录
+- KI-0043：默认开启 detailed reasoning summary 会增加输出与 token 消耗
 
 ---
 
@@ -571,3 +572,19 @@
 - 后续计划：
   - 若下游后续补充 priority 元数据，再升级 ACP plan 映射以透传真实优先级。
   - 若下游后续为 delta/item-completed 提供结构化状态，再升级 fallback 路径以透传真实状态。
+
+## KI-0043：默认开启 detailed reasoning summary 会增加输出与 token 消耗
+- 现象：
+  - 适配器现在默认以 `codex app-server -c 'model_reasoning_summary="detailed"'` 启动真实 Codex 后端。
+  - 这会让真实 app-server 更积极地输出 `item/reasoning/summaryTextDelta`，从而在 ACP 上游看到 `agent_thought_chunk`。
+- 影响：
+  - reasoning summary 会增加流式输出体积，也可能增加模型侧 reasoning summary 相关 token 消耗。
+  - 对只关心最终答案的客户端，thought UI 可能显得更“吵”。
+- 复现：
+  - 使用默认 `cmd/acp --adapter codex` 或 `pkg/codexacp.DefaultRuntimeConfig()` 启动，观察 trace 中 reasoning summary delta。
+- Workaround：
+  - 若不想默认输出 thought summary，可显式覆盖：
+    - `CODEX_APP_SERVER_ARGS='app-server -c model_reasoning_summary="none"'`
+    - 或 `--app-server-args 'app-server -c model_reasoning_summary="none"'`
+- 后续计划：
+  - 评估把 reasoning summary detail 暴露为适配器一级显式配置，而不是仅靠透传 app-server args。

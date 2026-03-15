@@ -48,6 +48,7 @@
 - ADR-0042：ACP `session/load` 映射到 Codex `thread/resume`（历史回放 + 恢复配置）
 - ADR-0043：Claude CLI `session/list` 占位 + `session/load` 部分恢复
 - ADR-0044：ACP slash command 目录发布策略（`available_commands_update`）
+- ADR-0045：默认开启 Codex reasoning summary（app-server `-c model_reasoning_summary="detailed"`）
 
 ---
 
@@ -1092,3 +1093,27 @@
   - `TestE2EAvailableCommandsPublishedAndRefreshedAfterLogout`
   - `TestClaudeE2EAvailableCommandsPublishedOnSessionNew`
   - `go test ./...`
+
+### ADR-0045：默认开启 Codex reasoning summary（app-server `-c model_reasoning_summary="detailed"`）
+- 日期：2026-03-15
+- 状态：Accepted
+- 背景：
+  - 真实 `codex app-server` 在本机默认配置下只发送空的 `reasoning` item started/completed，不发送 `item/reasoning/summaryTextDelta`，导致 ACP 上游看不到实际 thought chunk。
+  - 实测在 app-server 启动参数增加 `-c model_reasoning_summary="detailed"` 后，会稳定出现 reasoning summary delta，并被适配器映射为 ACP `agent_thought_chunk`。
+- 决策：
+  - 对 `codex` 默认子进程启动参数增加 `-c model_reasoning_summary="detailed"`。
+  - CLI 入口与库入口统一采用该默认值；若用户显式提供 `CODEX_APP_SERVER_ARGS` 或 `--app-server-args`，仍以用户覆盖为准。
+- 备选方案：
+  - 方案A：维持默认关闭，只在文档中提示用户自行配置。
+  - 方案B：适配器默认开启 reasoning summary。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：真实链路默认即可看到 reasoning summary，ACP `agent_thought_chunk` 更符合协议预期，也更利于调试与前端展示。
+  - Cons：会增加部分输出与 token 开销；summary 内容仍受模型/后端策略影响，不保证 raw reasoning。
+- 影响范围（文件/模块）：
+  - `internal/config/config.go`
+  - `cmd/acp/main.go`
+  - `pkg/codexacp/runtime.go`
+- 验证方式（测试/验收项）：
+  - `TestDefaultCodexAppServerArgs`
+  - `TestDefaultRuntimeConfigEnablesDetailedReasoningSummary`
+  - 本机真实 trace 对照：默认无 reasoning delta；开启后出现 `item/reasoning/summaryTextDelta`

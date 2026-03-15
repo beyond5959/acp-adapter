@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+const defaultCodexAppServerArgsRaw = `app-server -c model_reasoning_summary="detailed"`
+
 // ProfileConfig describes one named prompt/runtime profile.
 type ProfileConfig struct {
 	Model              string `json:"model,omitempty"`
@@ -47,7 +49,7 @@ func Parse() Config {
 	defaultCommand := firstNonEmpty(os.Getenv("CODEX_APP_SERVER_CMD"), "codex")
 	defaultArgsRaw := os.Getenv("CODEX_APP_SERVER_ARGS")
 	if defaultArgsRaw == "" && defaultCommand == "codex" {
-		defaultArgsRaw = "app-server"
+		defaultArgsRaw = defaultCodexAppServerArgsRaw
 	}
 
 	defaultLogLevel := firstNonEmpty(os.Getenv("LOG_LEVEL"), "info")
@@ -99,6 +101,11 @@ func splitArgs(raw string) []string {
 		return nil
 	}
 	return strings.Fields(raw)
+}
+
+// DefaultCodexAppServerArgs returns the adapter's default codex app-server args.
+func DefaultCodexAppServerArgs() []string {
+	return splitArgs(defaultCodexAppServerArgsRaw)
 }
 
 func firstNonEmpty(values ...string) string {
