@@ -38,7 +38,7 @@ Flags (shared):
 
 Flags (--adapter codex):
   --app-server-cmd   App server command (default: codex, env: CODEX_APP_SERVER_CMD)
-  --app-server-args  App server args, space separated (default: app-server)
+  --app-server-args  App server args, space separated (default: app-server -c model_reasoning_summary="detailed")
   --retry-turn-on-crash  Retry current turn once after crash (default: true)
 
 Flags (--adapter claude):
@@ -77,7 +77,11 @@ func run(ctx context.Context, args []string) error {
 
 	// ---- codex-specific flags ----
 	appServerCmd := fs.String("app-server-cmd", firstEnv("CODEX_APP_SERVER_CMD", "codex"), "app server command")
-	appServerArgs := fs.String("app-server-args", firstEnv("CODEX_APP_SERVER_ARGS", "app-server"), "app server args")
+	appServerArgs := fs.String(
+		"app-server-args",
+		firstEnv("CODEX_APP_SERVER_ARGS", strings.Join(config.DefaultCodexAppServerArgs(), " ")),
+		"app server args",
+	)
 	retryOnCrash := fs.Bool("retry-turn-on-crash", parseBoolDefault(os.Getenv("RETRY_TURN_ON_CRASH"), true), "retry turn on crash")
 
 	// ---- claude-specific flags ----

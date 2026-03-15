@@ -183,6 +183,10 @@
                 "mcp_elicitations": {
                   "type": "boolean"
                 },
+                "request_permissions": {
+                  "default": false,
+                  "type": "boolean"
+                },
                 "rules": {
                   "type": "boolean"
                 },
@@ -353,6 +357,16 @@
           "anyOf": [
             {
               "$ref": "#/definitions/SandboxWorkspaceWrite"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "service_tier": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ServiceTier"
             },
             {
               "type": "null"
@@ -634,6 +648,26 @@
             }
           ]
         },
+        "service_tier": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ServiceTier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tools": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolsV2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "web_search": {
           "anyOf": [
             {
@@ -711,6 +745,13 @@
         }
       }
     },
+    "ServiceTier": {
+      "type": "string",
+      "enum": [
+        "fast",
+        "flex"
+      ]
+    },
     "ToolsV2": {
       "type": "object",
       "properties": {
@@ -721,9 +762,13 @@
           ]
         },
         "web_search": {
-          "type": [
-            "boolean",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WebSearchToolConfig"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       }
@@ -737,6 +782,44 @@
         "high"
       ]
     },
+    "WebSearchContextSize": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "WebSearchLocation": {
+      "type": "object",
+      "properties": {
+        "city": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "country": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "region": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timezone": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "WebSearchMode": {
       "type": "string",
       "enum": [
@@ -744,6 +827,41 @@
         "cached",
         "live"
       ]
+    },
+    "WebSearchToolConfig": {
+      "type": "object",
+      "properties": {
+        "allowed_domains": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "context_size": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WebSearchContextSize"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "location": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WebSearchLocation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

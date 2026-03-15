@@ -38,10 +38,21 @@
         "null"
       ]
     },
-    "serviceName": {
-      "type": [
-        "string",
-        "null"
+    "serviceTier": {
+      "anyOf": [
+        {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ServiceTier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
       ]
     },
     "ephemeral": {
@@ -50,20 +61,20 @@
         "null"
       ]
     },
-    "personality": {
+    "sandbox": {
       "anyOf": [
         {
-          "$ref": "#/definitions/Personality"
+          "$ref": "#/definitions/SandboxMode"
         },
         {
           "type": "null"
         }
       ]
     },
-    "sandbox": {
+    "personality": {
       "anyOf": [
         {
-          "$ref": "#/definitions/SandboxMode"
+          "$ref": "#/definitions/Personality"
         },
         {
           "type": "null"
@@ -77,6 +88,12 @@
       ]
     },
     "modelProvider": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "serviceName": {
       "type": [
         "string",
         "null"
@@ -110,6 +127,10 @@
               ],
               "properties": {
                 "mcp_elicitations": {
+                  "type": "boolean"
+                },
+                "request_permissions": {
+                  "default": false,
                   "type": "boolean"
                 },
                 "rules": {
@@ -157,6 +178,13 @@
         "read-only",
         "workspace-write",
         "danger-full-access"
+      ]
+    },
+    "ServiceTier": {
+      "type": "string",
+      "enum": [
+        "fast",
+        "flex"
       ]
     }
   }

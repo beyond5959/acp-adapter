@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/beyond5959/acp-adapter/internal/acp"
+	"github.com/beyond5959/acp-adapter/internal/config"
 )
 
 const (
@@ -46,7 +47,7 @@ type RuntimeConfig struct {
 func DefaultRuntimeConfig() RuntimeConfig {
 	return RuntimeConfig{
 		AppServerCommand: defaultAppServerCommand,
-		AppServerArgs:    []string{"app-server"},
+		AppServerArgs:    config.DefaultCodexAppServerArgs(),
 		TraceJSONFile:    defaultTraceJSONFile,
 		LogLevel:         "info",
 		PatchApplyMode:   defaultPatchApplyMode,

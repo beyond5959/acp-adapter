@@ -885,6 +885,40 @@
           "type": "object",
           "required": [
             "id",
+            "result",
+            "status",
+            "type"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "revisedPrompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "imageGeneration"
+              ],
+              "title": "ImageGenerationThreadItemType"
+            }
+          },
+          "title": "ImageGenerationThreadItem"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
             "review",
             "type"
           ],

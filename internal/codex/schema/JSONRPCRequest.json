@@ -14,7 +14,18 @@
     "method": {
       "type": "string"
     },
-    "params": true
+    "params": true,
+    "trace": {
+      "description": "Optional W3C Trace Context for distributed tracing.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/W3cTraceContext"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
   },
   "definitions": {
     "RequestId": {
@@ -27,6 +38,23 @@
           "format": "int64"
         }
       ]
+    },
+    "W3cTraceContext": {
+      "type": "object",
+      "properties": {
+        "traceparent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tracestate": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
     }
   }
 }

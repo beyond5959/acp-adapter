@@ -745,6 +745,28 @@ func (s *fakeServer) runTurn(
 		return
 	}
 
+	if strings.Contains(lowerInput, "reasoning summary probe") {
+		reasoningItemID := fmt.Sprintf("reasoning-%s", turnID)
+		s.writeReasoningSummaryPartAdded(threadID, turnID, reasoningItemID, 0)
+		s.writeReasoningSummaryTextDelta(threadID, turnID, reasoningItemID, 0, "Inspect repository state.")
+		s.writeReasoningSummaryPartAdded(threadID, turnID, reasoningItemID, 1)
+		s.writeReasoningSummaryTextDelta(threadID, turnID, reasoningItemID, 1, "Confirm reasoning plumbing.")
+		s.writeAgentMessageDelta(threadID, turnID, itemID, "done")
+		s.writeItemCompleted(threadID, turnID, itemID, "agent_message")
+		s.writeTurnCompleted(threadID, turnID, "end_turn")
+		return
+	}
+
+	if strings.Contains(lowerInput, "reasoning raw probe") {
+		reasoningItemID := fmt.Sprintf("reasoning-%s", turnID)
+		s.writeReasoningTextDelta(threadID, turnID, reasoningItemID, "Raw reasoning step 1. ")
+		s.writeReasoningTextDelta(threadID, turnID, reasoningItemID, "Raw reasoning step 2.")
+		s.writeAgentMessageDelta(threadID, turnID, itemID, "done")
+		s.writeItemCompleted(threadID, turnID, itemID, "agent_message")
+		s.writeTurnCompleted(threadID, turnID, "end_turn")
+		return
+	}
+
 	if strings.Contains(lowerInput, "todo") {
 		checklist := "\n- [ ] capture requirements\n- [ ] implement mapping\n"
 		if strings.Contains(lowerInput, "continue") ||
@@ -944,6 +966,45 @@ func (s *fakeServer) writeAgentMessageDelta(threadID, turnID, itemID, delta stri
 
 func (s *fakeServer) writePlanDelta(threadID, turnID, itemID, delta string) {
 	s.writeNotification("item/plan/delta", codex.PlanDeltaNotification{
+		ThreadID: threadID,
+		TurnID:   turnID,
+		ItemID:   itemID,
+		Delta:    delta,
+	})
+}
+
+func (s *fakeServer) writeReasoningSummaryTextDelta(
+	threadID string,
+	turnID string,
+	itemID string,
+	summaryIndex int64,
+	delta string,
+) {
+	s.writeNotification("item/reasoning/summaryTextDelta", codex.ReasoningSummaryTextDeltaNotification{
+		ThreadID:     threadID,
+		TurnID:       turnID,
+		ItemID:       itemID,
+		SummaryIndex: summaryIndex,
+		Delta:        delta,
+	})
+}
+
+func (s *fakeServer) writeReasoningSummaryPartAdded(
+	threadID string,
+	turnID string,
+	itemID string,
+	summaryIndex int64,
+) {
+	s.writeNotification("item/reasoning/summaryPartAdded", codex.ReasoningSummaryPartAddedNotification{
+		ThreadID:     threadID,
+		TurnID:       turnID,
+		ItemID:       itemID,
+		SummaryIndex: summaryIndex,
+	})
+}
+
+func (s *fakeServer) writeReasoningTextDelta(threadID, turnID, itemID, delta string) {
+	s.writeNotification("item/reasoning/textDelta", codex.ReasoningTextDeltaNotification{
 		ThreadID: threadID,
 		TurnID:   turnID,
 		ItemID:   itemID,

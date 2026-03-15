@@ -606,6 +606,16 @@
             }
           ]
         },
+        "service_tier": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ServiceTier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "session_id": {
           "$ref": "#/definitions/ThreadId"
         },
@@ -815,7 +825,7 @@
       ],
       "properties": {
         "action": {
-          "$ref": "#/definitions/WebSearchAction"
+          "$ref": "#/definitions/ResponsesApiWebSearchAction"
         },
         "call_id": {
           "type": "string"
@@ -832,6 +842,66 @@
         }
       },
       "title": "WebSearchEndEventMsg"
+    },
+    {
+      "type": "object",
+      "required": [
+        "call_id",
+        "type"
+      ],
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "image_generation_begin"
+          ],
+          "title": "ImageGenerationBeginEventMsgType"
+        }
+      },
+      "title": "ImageGenerationBeginEventMsg"
+    },
+    {
+      "type": "object",
+      "required": [
+        "call_id",
+        "result",
+        "status",
+        "type"
+      ],
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "result": {
+          "type": "string"
+        },
+        "revised_prompt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "saved_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "image_generation_end"
+          ],
+          "title": "ImageGenerationEndEventMsgType"
+        }
+      },
+      "title": "ImageGenerationEndEventMsg"
     },
     {
       "description": "Notification that the server is about to execute a command.",
@@ -1208,6 +1278,17 @@
             "null"
           ]
         },
+        "skill_metadata": {
+          "description": "Optional skill metadata when the approval was triggered by a skill script.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ExecApprovalRequestSkillMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "turn_id": {
           "description": "Turn ID that this command belongs to. Uses `#[serde(default)]` for backwards compatibility.",
           "default": "",
@@ -1222,6 +1303,42 @@
         }
       },
       "title": "ExecApprovalRequestEventMsg"
+    },
+    {
+      "type": "object",
+      "required": [
+        "call_id",
+        "permissions",
+        "type"
+      ],
+      "properties": {
+        "call_id": {
+          "description": "Responses API call id for the associated tool call, if available.",
+          "type": "string"
+        },
+        "permissions": {
+          "$ref": "#/definitions/PermissionProfile"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn_id": {
+          "description": "Turn ID that this request belongs to. Uses `#[serde(default)]` for backwards compatibility.",
+          "default": "",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "request_permissions"
+          ],
+          "title": "RequestPermissionsEventMsgType"
+        }
+      },
+      "title": "RequestPermissionsEventMsg"
     },
     {
       "type": "object",
@@ -1354,7 +1471,7 @@
       "type": "object",
       "required": [
         "id",
-        "message",
+        "request",
         "server_name",
         "type"
       ],
@@ -1362,11 +1479,18 @@
         "id": {
           "$ref": "#/definitions/RequestId"
         },
-        "message": {
-          "type": "string"
+        "request": {
+          "$ref": "#/definitions/ElicitationRequest"
         },
         "server_name": {
           "type": "string"
+        },
+        "turn_id": {
+          "description": "Turn ID that this elicitation belongs to, when known.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "type": {
           "type": "string",
@@ -2097,6 +2221,58 @@
         }
       },
       "title": "ItemCompletedEventMsg"
+    },
+    {
+      "type": "object",
+      "required": [
+        "run",
+        "type"
+      ],
+      "properties": {
+        "run": {
+          "$ref": "#/definitions/HookRunSummary"
+        },
+        "turn_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "hook_started"
+          ],
+          "title": "HookStartedEventMsgType"
+        }
+      },
+      "title": "HookStartedEventMsg"
+    },
+    {
+      "type": "object",
+      "required": [
+        "run",
+        "type"
+      ],
+      "properties": {
+        "run": {
+          "$ref": "#/definitions/HookRunSummary"
+        },
+        "turn_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "hook_completed"
+          ],
+          "title": "HookCompletedEventMsgType"
+        }
+      },
+      "title": "HookCompletedEventMsg"
     },
     {
       "type": "object",
@@ -3312,6 +3488,58 @@
         }
       ]
     },
+    "ElicitationRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "message",
+            "mode",
+            "requested_schema"
+          ],
+          "properties": {
+            "_meta": true,
+            "message": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "form"
+              ]
+            },
+            "requested_schema": true
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "elicitation_id",
+            "message",
+            "mode",
+            "url"
+          ],
+          "properties": {
+            "_meta": true,
+            "elicitation_id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "url"
+              ]
+            },
+            "url": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
     "EventMsg": {
       "description": "Response event from the agent NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.",
       "oneOf": [
@@ -3918,6 +4146,16 @@
                 }
               ]
             },
+            "service_tier": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ServiceTier"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "session_id": {
               "$ref": "#/definitions/ThreadId"
             },
@@ -4127,7 +4365,7 @@
           ],
           "properties": {
             "action": {
-              "$ref": "#/definitions/WebSearchAction"
+              "$ref": "#/definitions/ResponsesApiWebSearchAction"
             },
             "call_id": {
               "type": "string"
@@ -4144,6 +4382,66 @@
             }
           },
           "title": "WebSearchEndEventMsg"
+        },
+        {
+          "type": "object",
+          "required": [
+            "call_id",
+            "type"
+          ],
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "image_generation_begin"
+              ],
+              "title": "ImageGenerationBeginEventMsgType"
+            }
+          },
+          "title": "ImageGenerationBeginEventMsg"
+        },
+        {
+          "type": "object",
+          "required": [
+            "call_id",
+            "result",
+            "status",
+            "type"
+          ],
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "revised_prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "saved_path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "image_generation_end"
+              ],
+              "title": "ImageGenerationEndEventMsgType"
+            }
+          },
+          "title": "ImageGenerationEndEventMsg"
         },
         {
           "description": "Notification that the server is about to execute a command.",
@@ -4520,6 +4818,17 @@
                 "null"
               ]
             },
+            "skill_metadata": {
+              "description": "Optional skill metadata when the approval was triggered by a skill script.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ExecApprovalRequestSkillMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "turn_id": {
               "description": "Turn ID that this command belongs to. Uses `#[serde(default)]` for backwards compatibility.",
               "default": "",
@@ -4534,6 +4843,42 @@
             }
           },
           "title": "ExecApprovalRequestEventMsg"
+        },
+        {
+          "type": "object",
+          "required": [
+            "call_id",
+            "permissions",
+            "type"
+          ],
+          "properties": {
+            "call_id": {
+              "description": "Responses API call id for the associated tool call, if available.",
+              "type": "string"
+            },
+            "permissions": {
+              "$ref": "#/definitions/PermissionProfile"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "turn_id": {
+              "description": "Turn ID that this request belongs to. Uses `#[serde(default)]` for backwards compatibility.",
+              "default": "",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "request_permissions"
+              ],
+              "title": "RequestPermissionsEventMsgType"
+            }
+          },
+          "title": "RequestPermissionsEventMsg"
         },
         {
           "type": "object",
@@ -4666,7 +5011,7 @@
           "type": "object",
           "required": [
             "id",
-            "message",
+            "request",
             "server_name",
             "type"
           ],
@@ -4674,11 +5019,18 @@
             "id": {
               "$ref": "#/definitions/RequestId"
             },
-            "message": {
-              "type": "string"
+            "request": {
+              "$ref": "#/definitions/ElicitationRequest"
             },
             "server_name": {
               "type": "string"
+            },
+            "turn_id": {
+              "description": "Turn ID that this elicitation belongs to, when known.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "type": {
               "type": "string",
@@ -5413,6 +5765,58 @@
         {
           "type": "object",
           "required": [
+            "run",
+            "type"
+          ],
+          "properties": {
+            "run": {
+              "$ref": "#/definitions/HookRunSummary"
+            },
+            "turn_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "hook_started"
+              ],
+              "title": "HookStartedEventMsgType"
+            }
+          },
+          "title": "HookStartedEventMsg"
+        },
+        {
+          "type": "object",
+          "required": [
+            "run",
+            "type"
+          ],
+          "properties": {
+            "run": {
+              "$ref": "#/definitions/HookRunSummary"
+            },
+            "turn_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "hook_completed"
+              ],
+              "title": "HookCompletedEventMsgType"
+            }
+          },
+          "title": "HookCompletedEventMsg"
+        },
+        {
+          "type": "object",
+          "required": [
             "delta",
             "item_id",
             "thread_id",
@@ -6081,6 +6485,17 @@
         }
       ]
     },
+    "ExecApprovalRequestSkillMetadata": {
+      "type": "object",
+      "required": [
+        "path_to_skills_md"
+      ],
+      "properties": {
+        "path_to_skills_md": {
+          "type": "string"
+        }
+      }
+    },
     "ExecCommandSource": {
       "type": "string",
       "enum": [
@@ -6184,7 +6599,7 @@
             "null"
           ],
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/AbsolutePathBuf"
           }
         },
         "write": {
@@ -6193,7 +6608,7 @@
             "null"
           ],
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/AbsolutePathBuf"
           }
         }
       }
@@ -6241,6 +6656,16 @@
             "type"
           ],
           "properties": {
+            "detail": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImageDetail"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "image_url": {
               "type": "string"
             },
@@ -6327,6 +6752,151 @@
         }
       }
     },
+    "HookEventName": {
+      "type": "string",
+      "enum": [
+        "session_start",
+        "stop"
+      ]
+    },
+    "HookExecutionMode": {
+      "type": "string",
+      "enum": [
+        "sync",
+        "async"
+      ]
+    },
+    "HookHandlerType": {
+      "type": "string",
+      "enum": [
+        "command",
+        "prompt",
+        "agent"
+      ]
+    },
+    "HookOutputEntry": {
+      "type": "object",
+      "required": [
+        "kind",
+        "text"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/HookOutputEntryKind"
+        },
+        "text": {
+          "type": "string"
+        }
+      }
+    },
+    "HookOutputEntryKind": {
+      "type": "string",
+      "enum": [
+        "warning",
+        "stop",
+        "feedback",
+        "context",
+        "error"
+      ]
+    },
+    "HookRunStatus": {
+      "type": "string",
+      "enum": [
+        "running",
+        "completed",
+        "failed",
+        "blocked",
+        "stopped"
+      ]
+    },
+    "HookRunSummary": {
+      "type": "object",
+      "required": [
+        "display_order",
+        "entries",
+        "event_name",
+        "execution_mode",
+        "handler_type",
+        "id",
+        "scope",
+        "source_path",
+        "started_at",
+        "status"
+      ],
+      "properties": {
+        "completed_at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "display_order": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "duration_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/HookOutputEntry"
+          }
+        },
+        "event_name": {
+          "$ref": "#/definitions/HookEventName"
+        },
+        "execution_mode": {
+          "$ref": "#/definitions/HookExecutionMode"
+        },
+        "handler_type": {
+          "$ref": "#/definitions/HookHandlerType"
+        },
+        "id": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/definitions/HookScope"
+        },
+        "source_path": {
+          "type": "string"
+        },
+        "started_at": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "status": {
+          "$ref": "#/definitions/HookRunStatus"
+        },
+        "status_message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "HookScope": {
+      "type": "string",
+      "enum": [
+        "thread",
+        "turn"
+      ]
+    },
+    "ImageDetail": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "low",
+        "high",
+        "original"
+      ]
+    },
     "LocalShellAction": {
       "oneOf": [
         {
@@ -6391,65 +6961,69 @@
         "incomplete"
       ]
     },
-    "MacOsAutomationValue": {
-      "anyOf": [
+    "MacOsAutomationPermission": {
+      "oneOf": [
         {
-          "type": "boolean"
+          "type": "string",
+          "enum": [
+            "none",
+            "all"
+          ]
         },
         {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
+          "type": "object",
+          "required": [
+            "bundle_ids"
+          ],
+          "properties": {
+            "bundle_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "title": "BundleIdsMacOsAutomationPermission"
         }
       ]
     },
-    "MacOsPermissions": {
+    "MacOsPreferencesPermission": {
+      "type": "string",
+      "enum": [
+        "none",
+        "read_only",
+        "read_write"
+      ]
+    },
+    "MacOsSeatbeltProfileExtensions": {
       "type": "object",
       "properties": {
-        "accessibility": {
-          "type": [
-            "boolean",
-            "null"
-          ]
+        "macos_accessibility": {
+          "default": false,
+          "type": "boolean"
         },
-        "automations": {
-          "anyOf": [
+        "macos_automation": {
+          "default": "none",
+          "allOf": [
             {
-              "$ref": "#/definitions/MacOsAutomationValue"
-            },
-            {
-              "type": "null"
+              "$ref": "#/definitions/MacOsAutomationPermission"
             }
           ]
         },
-        "calendar": {
-          "type": [
-            "boolean",
-            "null"
-          ]
+        "macos_calendar": {
+          "default": false,
+          "type": "boolean"
         },
-        "preferences": {
-          "anyOf": [
+        "macos_preferences": {
+          "default": "read_only",
+          "allOf": [
             {
-              "$ref": "#/definitions/MacOsPreferencesValue"
-            },
-            {
-              "type": "null"
+              "$ref": "#/definitions/MacOsPreferencesPermission"
             }
           ]
         }
       }
-    },
-    "MacOsPreferencesValue": {
-      "anyOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "type": "string"
-        }
-      ]
     },
     "McpAuthStatus": {
       "type": "string",
@@ -6627,6 +7201,17 @@
         "socks5_udp"
       ]
     },
+    "NetworkPermissions": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
     "NetworkPolicyAmendment": {
       "type": "object",
       "required": [
@@ -6784,7 +7369,7 @@
         "macos": {
           "anyOf": [
             {
-              "$ref": "#/definitions/MacOsPermissions"
+              "$ref": "#/definitions/MacOsSeatbeltProfileExtensions"
             },
             {
               "type": "null"
@@ -6792,9 +7377,13 @@
           ]
         },
         "network": {
-          "type": [
-            "boolean",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NetworkPermissions"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       }
@@ -7002,15 +7591,21 @@
         {
           "type": "object",
           "required": [
-            "SessionCreated"
+            "SessionUpdated"
           ],
           "properties": {
-            "SessionCreated": {
+            "SessionUpdated": {
               "type": "object",
               "required": [
                 "session_id"
               ],
               "properties": {
+                "instructions": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "session_id": {
                   "type": "string"
                 }
@@ -7018,28 +7613,33 @@
             }
           },
           "additionalProperties": false,
-          "title": "SessionCreatedRealtimeEvent"
+          "title": "SessionUpdatedRealtimeEvent"
         },
         {
           "type": "object",
           "required": [
-            "SessionUpdated"
+            "InputTranscriptDelta"
           ],
           "properties": {
-            "SessionUpdated": {
-              "type": "object",
-              "properties": {
-                "backend_prompt": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                }
-              }
+            "InputTranscriptDelta": {
+              "$ref": "#/definitions/RealtimeTranscriptDelta"
             }
           },
           "additionalProperties": false,
-          "title": "SessionUpdatedRealtimeEvent"
+          "title": "InputTranscriptDeltaRealtimeEvent"
+        },
+        {
+          "type": "object",
+          "required": [
+            "OutputTranscriptDelta"
+          ],
+          "properties": {
+            "OutputTranscriptDelta": {
+              "$ref": "#/definitions/RealtimeTranscriptDelta"
+            }
+          },
+          "additionalProperties": false,
+          "title": "OutputTranscriptDeltaRealtimeEvent"
         },
         {
           "type": "object",
@@ -7068,6 +7668,40 @@
         {
           "type": "object",
           "required": [
+            "ConversationItemDone"
+          ],
+          "properties": {
+            "ConversationItemDone": {
+              "type": "object",
+              "required": [
+                "item_id"
+              ],
+              "properties": {
+                "item_id": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "additionalProperties": false,
+          "title": "ConversationItemDoneRealtimeEvent"
+        },
+        {
+          "type": "object",
+          "required": [
+            "HandoffRequested"
+          ],
+          "properties": {
+            "HandoffRequested": {
+              "$ref": "#/definitions/RealtimeHandoffRequested"
+            }
+          },
+          "additionalProperties": false,
+          "title": "HandoffRequestedRealtimeEvent"
+        },
+        {
+          "type": "object",
+          "required": [
             "Error"
           ],
           "properties": {
@@ -7079,6 +7713,58 @@
           "title": "ErrorRealtimeEvent"
         }
       ]
+    },
+    "RealtimeHandoffRequested": {
+      "type": "object",
+      "required": [
+        "active_transcript",
+        "handoff_id",
+        "input_transcript",
+        "item_id"
+      ],
+      "properties": {
+        "active_transcript": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealtimeTranscriptEntry"
+          }
+        },
+        "handoff_id": {
+          "type": "string"
+        },
+        "input_transcript": {
+          "type": "string"
+        },
+        "item_id": {
+          "type": "string"
+        }
+      }
+    },
+    "RealtimeTranscriptDelta": {
+      "type": "object",
+      "required": [
+        "delta"
+      ],
+      "properties": {
+        "delta": {
+          "type": "string"
+        }
+      }
+    },
+    "RealtimeTranscriptEntry": {
+      "type": "object",
+      "required": [
+        "role",
+        "text"
+      ],
+      "properties": {
+        "role": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      }
     },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
@@ -7170,6 +7856,11 @@
       "properties": {
         "mcp_elicitations": {
           "description": "Reject MCP elicitation prompts.",
+          "type": "boolean"
+        },
+        "request_permissions": {
+          "description": "Reject approval prompts related to built-in permission requests.",
+          "default": false,
           "type": "boolean"
         },
         "rules": {
@@ -7596,7 +8287,7 @@
               "type": "string"
             },
             "output": {
-              "type": "string"
+              "$ref": "#/definitions/FunctionCallOutputPayload"
             },
             "type": {
               "type": "string",
@@ -7617,7 +8308,7 @@
             "action": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/WebSearchAction"
+                  "$ref": "#/definitions/ResponsesApiWebSearchAction"
                 },
                 {
                   "type": "null"
@@ -7646,6 +8337,40 @@
             }
           },
           "title": "WebSearchCallResponseItem"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "result",
+            "status",
+            "type"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "revised_prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "image_generation_call"
+              ],
+              "title": "ImageGenerationCallResponseItemType"
+            }
+          },
+          "title": "ImageGenerationCallResponseItem"
         },
         {
           "type": "object",
@@ -7702,6 +8427,107 @@
             }
           },
           "title": "OtherResponseItem"
+        }
+      ]
+    },
+    "ResponsesApiWebSearchAction": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "queries": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              }
+            },
+            "query": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "search"
+              ],
+              "title": "SearchResponsesApiWebSearchActionType"
+            }
+          },
+          "title": "SearchResponsesApiWebSearchAction"
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "open_page"
+              ],
+              "title": "OpenPageResponsesApiWebSearchActionType"
+            },
+            "url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "title": "OpenPageResponsesApiWebSearchAction"
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "pattern": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "find_in_page"
+              ],
+              "title": "FindInPageResponsesApiWebSearchActionType"
+            },
+            "url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "title": "FindInPageResponsesApiWebSearchAction"
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "other"
+              ],
+              "title": "OtherResponsesApiWebSearchActionType"
+            }
+          },
+          "title": "OtherResponsesApiWebSearchAction"
         }
       ]
     },
@@ -8033,6 +8859,10 @@
                 }
               ]
             },
+            "network_access": {
+              "description": "When set to `true`, outbound network access is allowed. `false` by default.",
+              "type": "boolean"
+            },
             "type": {
               "type": "string",
               "enum": [
@@ -8118,17 +8948,20 @@
         }
       ]
     },
+    "ServiceTier": {
+      "type": "string",
+      "enum": [
+        "fast",
+        "flex"
+      ]
+    },
     "SessionNetworkProxyRuntime": {
       "type": "object",
       "required": [
-        "admin_addr",
         "http_addr",
         "socks_addr"
       ],
       "properties": {
-        "admin_addr": {
-          "type": "string"
-        },
         "http_addr": {
           "type": "string"
         },
@@ -8602,7 +9435,7 @@
           ],
           "properties": {
             "action": {
-              "$ref": "#/definitions/WebSearchAction"
+              "$ref": "#/definitions/ResponsesApiWebSearchAction"
             },
             "id": {
               "type": "string"
@@ -8619,6 +9452,46 @@
             }
           },
           "title": "WebSearchTurnItem"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "result",
+            "status",
+            "type"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "revised_prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "saved_path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "ImageGeneration"
+              ],
+              "title": "ImageGenerationTurnItemType"
+            }
+          },
+          "title": "ImageGenerationTurnItem"
         },
         {
           "type": "object",
@@ -8741,7 +9614,7 @@
           "title": "SkillUserInput"
         },
         {
-          "description": "Explicit mention selected by the user (name + app://connector id).",
+          "description": "Explicit structured mention selected by the user.\n\n`path` identifies the exact mention target, for example `app://<connector-id>` or `plugin://<plugin-name>@<marketplace-name>`.",
           "type": "object",
           "required": [
             "name",
@@ -8764,107 +9637,6 @@
             }
           },
           "title": "MentionUserInput"
-        }
-      ]
-    },
-    "WebSearchAction": {
-      "oneOf": [
-        {
-          "type": "object",
-          "required": [
-            "type"
-          ],
-          "properties": {
-            "queries": {
-              "type": [
-                "array",
-                "null"
-              ],
-              "items": {
-                "type": "string"
-              }
-            },
-            "query": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "type": "string",
-              "enum": [
-                "search"
-              ],
-              "title": "SearchWebSearchActionType"
-            }
-          },
-          "title": "SearchWebSearchAction"
-        },
-        {
-          "type": "object",
-          "required": [
-            "type"
-          ],
-          "properties": {
-            "type": {
-              "type": "string",
-              "enum": [
-                "open_page"
-              ],
-              "title": "OpenPageWebSearchActionType"
-            },
-            "url": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "title": "OpenPageWebSearchAction"
-        },
-        {
-          "type": "object",
-          "required": [
-            "type"
-          ],
-          "properties": {
-            "pattern": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "type": "string",
-              "enum": [
-                "find_in_page"
-              ],
-              "title": "FindInPageWebSearchActionType"
-            },
-            "url": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "title": "FindInPageWebSearchAction"
-        },
-        {
-          "type": "object",
-          "required": [
-            "type"
-          ],
-          "properties": {
-            "type": {
-              "type": "string",
-              "enum": [
-                "other"
-              ],
-              "title": "OtherWebSearchActionType"
-            }
-          },
-          "title": "OtherWebSearchAction"
         }
       ]
     }

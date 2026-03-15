@@ -652,6 +652,7 @@
         "cliVersion",
         "createdAt",
         "cwd",
+        "ephemeral",
         "id",
         "modelProvider",
         "preview",
@@ -687,6 +688,10 @@
         "cwd": {
           "description": "Working directory captured for the thread.",
           "type": "string"
+        },
+        "ephemeral": {
+          "description": "Whether the thread is ephemeral and should not be materialized on disk.",
+          "type": "boolean"
         },
         "gitInfo": {
           "description": "Optional Git metadata captured when the thread was created.",
@@ -1229,6 +1234,40 @@
             }
           },
           "title": "ImageViewThreadItem"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "result",
+            "status",
+            "type"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "revisedPrompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "imageGeneration"
+              ],
+              "title": "ImageGenerationThreadItemType"
+            }
+          },
+          "title": "ImageGenerationThreadItem"
         },
         {
           "type": "object",

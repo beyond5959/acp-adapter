@@ -36,6 +36,16 @@
     "sandbox": {
       "$ref": "#/definitions/SandboxPolicy"
     },
+    "serviceTier": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ServiceTier"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "thread": {
       "$ref": "#/definitions/Thread"
     }
@@ -71,6 +81,10 @@
               ],
               "properties": {
                 "mcp_elicitations": {
+                  "type": "boolean"
+                },
+                "request_permissions": {
+                  "default": false,
                   "type": "boolean"
                 },
                 "rules": {
@@ -697,6 +711,10 @@
                 }
               ]
             },
+            "networkAccess": {
+              "default": false,
+              "type": "boolean"
+            },
             "type": {
               "type": "string",
               "enum": [
@@ -776,6 +794,13 @@
           },
           "title": "WorkspaceWriteSandboxPolicy"
         }
+      ]
+    },
+    "ServiceTier": {
+      "type": "string",
+      "enum": [
+        "fast",
+        "flex"
       ]
     },
     "SessionSource": {
@@ -899,6 +924,7 @@
         "cliVersion",
         "createdAt",
         "cwd",
+        "ephemeral",
         "id",
         "modelProvider",
         "preview",
@@ -934,6 +960,10 @@
         "cwd": {
           "description": "Working directory captured for the thread.",
           "type": "string"
+        },
+        "ephemeral": {
+          "description": "Whether the thread is ephemeral and should not be materialized on disk.",
+          "type": "boolean"
         },
         "gitInfo": {
           "description": "Optional Git metadata captured when the thread was created.",
@@ -1476,6 +1506,40 @@
             }
           },
           "title": "ImageViewThreadItem"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "result",
+            "status",
+            "type"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "revisedPrompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "imageGeneration"
+              ],
+              "title": "ImageGenerationThreadItemType"
+            }
+          },
+          "title": "ImageGenerationThreadItem"
         },
         {
           "type": "object",

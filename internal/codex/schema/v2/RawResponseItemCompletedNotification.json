@@ -126,6 +126,16 @@
             "type"
           ],
           "properties": {
+            "detail": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImageDetail"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "image_url": {
               "type": "string"
             },
@@ -190,6 +200,15 @@
           }
         }
       }
+    },
+    "ImageDetail": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "low",
+        "high",
+        "original"
+      ]
     },
     "LocalShellAction": {
       "oneOf": [
@@ -589,7 +608,7 @@
               "type": "string"
             },
             "output": {
-              "type": "string"
+              "$ref": "#/definitions/FunctionCallOutputPayload"
             },
             "type": {
               "type": "string",
@@ -610,7 +629,7 @@
             "action": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/WebSearchAction"
+                  "$ref": "#/definitions/ResponsesApiWebSearchAction"
                 },
                 {
                   "type": "null"
@@ -639,6 +658,40 @@
             }
           },
           "title": "WebSearchCallResponseItem"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "result",
+            "status",
+            "type"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "revised_prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "image_generation_call"
+              ],
+              "title": "ImageGenerationCallResponseItemType"
+            }
+          },
+          "title": "ImageGenerationCallResponseItem"
         },
         {
           "type": "object",
@@ -698,7 +751,7 @@
         }
       ]
     },
-    "WebSearchAction": {
+    "ResponsesApiWebSearchAction": {
       "oneOf": [
         {
           "type": "object",
@@ -726,10 +779,10 @@
               "enum": [
                 "search"
               ],
-              "title": "SearchWebSearchActionType"
+              "title": "SearchResponsesApiWebSearchActionType"
             }
           },
-          "title": "SearchWebSearchAction"
+          "title": "SearchResponsesApiWebSearchAction"
         },
         {
           "type": "object",
@@ -742,7 +795,7 @@
               "enum": [
                 "open_page"
               ],
-              "title": "OpenPageWebSearchActionType"
+              "title": "OpenPageResponsesApiWebSearchActionType"
             },
             "url": {
               "type": [
@@ -751,7 +804,7 @@
               ]
             }
           },
-          "title": "OpenPageWebSearchAction"
+          "title": "OpenPageResponsesApiWebSearchAction"
         },
         {
           "type": "object",
@@ -770,7 +823,7 @@
               "enum": [
                 "find_in_page"
               ],
-              "title": "FindInPageWebSearchActionType"
+              "title": "FindInPageResponsesApiWebSearchActionType"
             },
             "url": {
               "type": [
@@ -779,7 +832,7 @@
               ]
             }
           },
-          "title": "FindInPageWebSearchAction"
+          "title": "FindInPageResponsesApiWebSearchAction"
         },
         {
           "type": "object",
@@ -792,10 +845,10 @@
               "enum": [
                 "other"
               ],
-              "title": "OtherWebSearchActionType"
+              "title": "OtherResponsesApiWebSearchActionType"
             }
           },
-          "title": "OtherWebSearchAction"
+          "title": "OtherResponsesApiWebSearchAction"
         }
       ]
     }
