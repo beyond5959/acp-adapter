@@ -64,10 +64,16 @@
 - 修复点：
   - `internal/codex/client` 现在会保留 `item/started` / `item/completed` 中 `commandExecution` item 的结构化字段：`command`、`commandActions`、`cwd`、`status`、`exitCode`、`aggregatedOutput`。
   - `internal/acp/server` 新增 runtime command tool-call 桥接：把 `commandExecution` item 的 started/completed/failed 生命周期映射成 ACP `session/update(type="tool_call_update")`。
-  - ACP `toolCallId` 直接复用 app-server `commandExecution` item id，`title/message` 使用真实命令字符串；当已经发出结构化 command tool call update 时，不再退回普通 `status item_started/item_completed`。
+  - ACP `toolCallId` 直接复用 app-server `commandExecution` item id，`title/message` 使用真实命令字符串；标准 `update.content.text` 现在也会填充：
+    - `in_progress`：命令字符串
+    - `item/commandExecution/outputDelta`：逐块命令输出文本
+    - `completed/failed`：优先 `aggregatedOutput`，否则回退到命令/exit code 摘要
+  - runtime command output 透传时不再对 `outputDelta` / `aggregatedOutput` 做 `TrimSpace`，避免尾部换行和纯空白 chunk 在 ACP `tool_call_update.content.text` 中丢失。
+  - 当已经发出结构化 command tool call update 时，不再退回普通 `status item_started/item_completed`。
   - 对 approval 驱动的 command tool call 增加去重，避免与后续 runtime `commandExecution` item 重复发送相同状态。
 - 测试与回归：
   - 新增 `test/integration/e2e_test.go::TestE2ECommandExecutionItemsMappedToToolCallUpdates`，覆盖 fake app-server 的 commandExecution item -> ACP tool_call_update 映射。
+  - 新增 `test/integration/e2e_test.go::TestE2ECommandExecutionOutputDeltaMappedToToolCallContent`，覆盖 fake app-server 的 `item/commandExecution/outputDelta` -> ACP `tool_call_update.content` 流式桥接。
   - 新增 `test/integration/e2e_test.go::TestE2ERealCodexCommandExecutionMappedToToolCalls`，覆盖真实 codex trace 中 `commandExecution` / `aggregatedOutput` 与 ACP `tool_call_update` 的 id 对齐。
   - 全量通过：`go test ./...`
 

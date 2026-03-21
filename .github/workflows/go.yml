@@ -169,6 +169,8 @@ jobs:
     
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
     - name: Download all artifacts
       uses: actions/download-artifact@v4
@@ -179,11 +181,37 @@ jobs:
     - name: List artifacts
       run: ls -la artifacts/
 
+    - name: Build release notes from commit messages
+      run: |
+        CURRENT_TAG=${GITHUB_REF#refs/tags/}
+        PREVIOUS_TAG=$(git tag --sort=-version:refname | grep -Fxv "$CURRENT_TAG" | head -n 1 || true)
+
+        {
+          echo "# ${CURRENT_TAG}"
+          echo ""
+          echo "## Commits"
+          echo ""
+
+          if [ -n "$PREVIOUS_TAG" ]; then
+            git log "${PREVIOUS_TAG}..${CURRENT_TAG}" --format='%s' \
+              | grep -Ev '^(Merge pull request|Merge branch)\b' \
+              | sed 's/^/- /'
+          else
+            git log "${CURRENT_TAG}" --format='%s' \
+              | grep -Ev '^(Merge pull request|Merge branch)\b' \
+              | sed 's/^/- /'
+          fi
+        } > release-notes.md
+
+        if ! grep -q '^- ' release-notes.md; then
+          echo "- No commits found." >> release-notes.md
+        fi
+
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
       with:
         files: artifacts/*
-        generate_release_notes: true
+        body_path: release-notes.md
         draft: false
         prerelease: ${{ contains(github.ref, '-alpha') || contains(github.ref, '-beta') || contains(github.ref, '-rc') }}
       env:
