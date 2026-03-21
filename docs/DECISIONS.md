@@ -49,6 +49,7 @@
 - ADR-0043：Claude CLI `session/list` 占位 + `session/load` 部分恢复
 - ADR-0044：ACP slash command 目录发布策略（`available_commands_update`）
 - ADR-0045：默认开启 Codex reasoning summary（app-server `-c model_reasoning_summary="detailed"`）
+- ADR-0046：Codex runtime `commandExecution` 映射为 ACP `tool_call_update`
 
 ---
 
@@ -1117,3 +1118,34 @@
   - `TestDefaultCodexAppServerArgs`
   - `TestDefaultRuntimeConfigEnablesDetailedReasoningSummary`
   - 本机真实 trace 对照：默认无 reasoning delta；开启后出现 `item/reasoning/summaryTextDelta`
+
+### ADR-0046：Codex runtime `commandExecution` 映射为 ACP `tool_call_update`
+- 日期：2026-03-21
+- 状态：Accepted
+- 背景：
+  - 真实 `codex app-server` 在普通项目问答（例如「这是什么项目？」）期间，会把运行时命令作为结构化 `item/started` / `item/completed` `commandExecution` item 发出，并在 completed payload 里带 `aggregatedOutput`。
+  - 旧实现只把 item 裁成 `id/type/text`，导致上游 ACP 只能看到普通 `status item_started/item_completed`，收不到符合协议语义的 command tool call。
+- 决策：
+  - 在 `internal/codex/client` 保留 `commandExecution` item 的结构化字段（`command`、`commandActions`、`cwd`、`status`、`exitCode`、`aggregatedOutput`）。
+  - 在 `internal/acp/server` 中，遇到 `item/started|completed(type=commandExecution)` 时，优先桥接成 ACP `session/update(type="tool_call_update")`：
+    - `toolCallId` 复用 app-server item id
+    - started -> `status="in_progress"`
+    - completed/failed/declined -> `status="completed|failed"`
+    - `title/message` 使用真实命令字符串
+  - 当结构化 command tool call 已经发出时，抑制同一 item 的 generic `status item_started/item_completed` fallback；同时对 permission 路径与 runtime item 路径做同 id 去重。
+- 备选方案：
+  - 方案A：继续只发普通 `status` 更新，让 ACP client 自己从 `itemType=commandExecution` 猜测工具调用。
+  - 方案B：直接把 runtime `commandExecution` 生命周期桥接成 ACP 标准 `tool_call_update`。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：真实 codex 链路下，ACP client 终于能以标准 tool-call 语义收到命令调用；`toolCallId` 能与 app-server trace 一一对齐，便于调试与回归。
+  - Cons：当前只桥接 tool-call 生命周期；`item/commandExecution/outputDelta` 的逐块 stdout/stderr 仍未单独映射，详见 KI-0044。
+- 影响范围（文件/模块）：
+  - `internal/codex/types.go`
+  - `internal/codex/client.go`
+  - `internal/acp/server.go`
+  - `testdata/fake_codex_app_server/main.go`
+  - `test/integration/e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `TestE2ECommandExecutionItemsMappedToToolCallUpdates`
+  - `TestE2ERealCodexCommandExecutionMappedToToolCalls`
+  - `go test ./...`

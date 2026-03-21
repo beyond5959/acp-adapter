@@ -790,6 +790,7 @@ func (c *Client) handleNotification(msg RPCMessage) {
 			ItemID:   itemID,
 			ItemType: itemType,
 			ItemText: itemText(note.Item),
+			Command:  commandExecutionFromItem(note.Item),
 		}, false)
 	case notificationItemPlanDelta:
 		var note PlanDeltaNotification
@@ -872,6 +873,7 @@ func (c *Client) handleNotification(msg RPCMessage) {
 			ItemID:   itemID,
 			ItemType: itemType,
 			ItemText: itemText(note.Item),
+			Command:  commandExecutionFromItem(note.Item),
 		}, false)
 	case notificationTurnCompleted:
 		var note TurnCompletedNotification
@@ -941,7 +943,39 @@ func itemText(item *ThreadItemRef) string {
 	if item == nil {
 		return ""
 	}
+	if strings.EqualFold(strings.TrimSpace(item.Type), "commandExecution") && item.AggregatedOutput != nil {
+		return strings.TrimSpace(*item.AggregatedOutput)
+	}
 	return strings.TrimSpace(item.Text)
+}
+
+func commandExecutionFromItem(item *ThreadItemRef) *CommandExecution {
+	if item == nil {
+		return nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(item.Type), "commandExecution") {
+		return nil
+	}
+	cmd := &CommandExecution{
+		ID:             strings.TrimSpace(item.ID),
+		Command:        strings.TrimSpace(item.Command),
+		CommandActions: append([]CommandAction(nil), item.CommandActions...),
+		CWD:            strings.TrimSpace(item.CWD),
+		ProcessID:      strings.TrimSpace(item.ProcessID),
+		Status:         strings.TrimSpace(item.Status),
+	}
+	if item.AggregatedOutput != nil {
+		cmd.AggregatedOutput = strings.TrimSpace(*item.AggregatedOutput)
+	}
+	if item.DurationMs != nil {
+		durationMs := *item.DurationMs
+		cmd.DurationMs = &durationMs
+	}
+	if item.ExitCode != nil {
+		exitCode := *item.ExitCode
+		cmd.ExitCode = &exitCode
+	}
+	return cmd
 }
 
 func effectiveTurnID(turnID string, turn *TurnRef) string {

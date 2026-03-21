@@ -13,7 +13,7 @@
       "type": "string"
     },
     "permissions": {
-      "$ref": "#/definitions/AdditionalPermissionProfile"
+      "$ref": "#/definitions/RequestPermissionProfile"
     },
     "reason": {
       "type": [
@@ -56,29 +56,6 @@
         }
       }
     },
-    "AdditionalMacOsPermissions": {
-      "type": "object",
-      "required": [
-        "accessibility",
-        "automations",
-        "calendar",
-        "preferences"
-      ],
-      "properties": {
-        "accessibility": {
-          "type": "boolean"
-        },
-        "automations": {
-          "$ref": "#/definitions/MacOsAutomationPermission"
-        },
-        "calendar": {
-          "type": "boolean"
-        },
-        "preferences": {
-          "$ref": "#/definitions/MacOsPreferencesPermission"
-        }
-      }
-    },
     "AdditionalNetworkPermissions": {
       "type": "object",
       "properties": {
@@ -90,23 +67,13 @@
         }
       }
     },
-    "AdditionalPermissionProfile": {
+    "RequestPermissionProfile": {
       "type": "object",
       "properties": {
         "fileSystem": {
           "anyOf": [
             {
               "$ref": "#/definitions/AdditionalFileSystemPermissions"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "macos": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AdditionalMacOsPermissions"
             },
             {
               "type": "null"
@@ -123,42 +90,8 @@
             }
           ]
         }
-      }
-    },
-    "MacOsAutomationPermission": {
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "none",
-            "all"
-          ]
-        },
-        {
-          "type": "object",
-          "required": [
-            "bundle_ids"
-          ],
-          "properties": {
-            "bundle_ids": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          },
-          "additionalProperties": false,
-          "title": "BundleIdsMacOsAutomationPermission"
-        }
-      ]
-    },
-    "MacOsPreferencesPermission": {
-      "type": "string",
-      "enum": [
-        "none",
-        "read_only",
-        "read_write"
-      ]
+      },
+      "additionalProperties": false
     }
   }
 }

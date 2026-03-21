@@ -47,6 +47,7 @@
 - KI-0041：Claude CLI `session/list` / `session/load` 仅做占位与部分恢复
 - KI-0042：`available_commands_update` 目前仍是 adapter 级命令目录
 - KI-0043：默认开启 detailed reasoning summary 会增加输出与 token 消耗
+- KI-0044：runtime `commandExecution` 的 stdout/stderr 尚未逐块桥接
 
 ---
 
@@ -588,3 +589,21 @@
     - 或 `--app-server-args 'app-server -c model_reasoning_summary="none"'`
 - 后续计划：
   - 评估把 reasoning summary detail 暴露为适配器一级显式配置，而不是仅靠透传 app-server args。
+
+## KI-0044：runtime `commandExecution` 的 stdout/stderr 尚未逐块桥接
+- 现象：
+  - 适配器现在已经把 `item/started|completed(type=commandExecution)` 映射成 ACP `tool_call_update`，并在真实 trace 中确认 `toolCallId` 与 app-server item id 对齐。
+  - 但 `item/commandExecution/outputDelta` 仍未单独桥接；当前上游 ACP client 只能看到 command tool call 的开始/结束状态。
+  - 命令的最终 stdout/stderr 仍主要存在于 app-server `item/completed.params.item.aggregatedOutput` 与 trace 文件中。
+- 影响：
+  - ACP client 可以知道命令已开始、完成或失败，但还不能实时显示逐块终端输出。
+  - 依赖流式命令输出的 UI 目前只能展示 tool-call lifecycle，无法完整复现 codex app 的终端输出体验。
+- 复现：
+  - 使用真实 `codex app-server` 运行项目问答（例如「这是什么项目？」），观察 trace：
+    - app-server 会发送 `item/commandExecution/outputDelta` / `item/completed.commandExecution.aggregatedOutput`
+    - adapter 当前只向 ACP 发 `tool_call_update`
+- Workaround：
+  - 调试时开启 `--trace-json`，直接查看 app-server trace 中的 `aggregatedOutput`。
+  - 若只需要知道命令是否执行及其命令行内容，现有 `tool_call_update` 已可满足。
+- 后续计划：
+  - 评估把 `item/commandExecution/outputDelta` 与 completed `aggregatedOutput` 映射到 ACP 可消费的非聊天输出通道，补齐 D1 中的实时 stdout/stderr 展示体验。

@@ -3,9 +3,19 @@
   "title": "InitializeResponse",
   "type": "object",
   "required": [
+    "platformFamily",
+    "platformOs",
     "userAgent"
   ],
   "properties": {
+    "platformFamily": {
+      "description": "Platform family for the running app-server target, for example `\"unix\"` or `\"windows\"`.",
+      "type": "string"
+    },
+    "platformOs": {
+      "description": "Operating system for the running app-server target, for example `\"macos\"`, `\"linux\"`, or `\"windows\"`.",
+      "type": "string"
+    },
     "userAgent": {
       "type": "string"
     }

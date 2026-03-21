@@ -112,6 +112,7 @@ type turnLifecycle struct {
 	phase                 turnPhase
 	cancelRequested       bool
 	messageBuffer         strings.Builder
+	toolCallStatus        map[string]string
 	hasAuthoritativePlan  bool
 	fallbackPlanItemOrder []string
 	fallbackPlanItemText  map[string]string
@@ -3489,6 +3490,7 @@ func (t *turnLifecycle) markCancelRequested() {
 func (t *turnLifecycle) resetForRetry() {
 	t.phase = turnPhaseStarted
 	t.messageBuffer.Reset()
+	t.toolCallStatus = nil
 }
 
 func (t *turnLifecycle) startedUpdate() []SessionUpdateParams {
@@ -3517,6 +3519,7 @@ func (t *turnLifecycle) cancelledUpdate() []SessionUpdateParams {
 }
 
 func (t *turnLifecycle) toolCallInProgressUpdates(event codex.TurnEvent) []SessionUpdateParams {
+	t.rememberToolCallStatus(event.Approval.ToolCallID, "in_progress")
 	t.phase = turnPhaseStreaming
 	return []SessionUpdateParams{
 		{
@@ -3538,6 +3541,7 @@ func (t *turnLifecycle) toolCallOutcomeUpdate(
 	status string,
 	message string,
 ) SessionUpdateParams {
+	t.rememberToolCallStatus(event.Approval.ToolCallID, status)
 	return SessionUpdateParams{
 		SessionID:          t.sessionID,
 		TurnID:             t.turnID,
@@ -3627,6 +3631,9 @@ func (t *turnLifecycle) apply(event codex.TurnEvent) ([]SessionUpdateParams, boo
 		}, false, ""
 	case codex.TurnEventTypeItemStarted:
 		t.phase = turnPhaseStreaming
+		if update, ok := t.commandExecutionToolCallUpdate(event); ok {
+			return []SessionUpdateParams{update}, false, ""
+		}
 		if isPlanItemType(event.ItemType) {
 			t.rememberFallbackPlanItem(event.ItemID)
 			if !t.hasAuthoritativePlan && strings.TrimSpace(event.ItemText) != "" {
@@ -3667,6 +3674,9 @@ func (t *turnLifecycle) apply(event codex.TurnEvent) ([]SessionUpdateParams, boo
 		}, false, ""
 	case codex.TurnEventTypeItemCompleted:
 		t.phase = turnPhaseStreaming
+		if update, ok := t.commandExecutionToolCallUpdate(event); ok {
+			return []SessionUpdateParams{update}, false, ""
+		}
 		statusUpdate := SessionUpdateParams{
 			SessionID: t.sessionID,
 			TurnID:    t.turnID,
@@ -3759,6 +3769,121 @@ func (t *turnLifecycle) apply(event codex.TurnEvent) ([]SessionUpdateParams, boo
 	default:
 		return nil, false, ""
 	}
+}
+
+func (t *turnLifecycle) commandExecutionToolCallUpdate(event codex.TurnEvent) (SessionUpdateParams, bool) {
+	if !strings.EqualFold(strings.TrimSpace(event.ItemType), "commandExecution") || event.Command == nil {
+		return SessionUpdateParams{}, false
+	}
+
+	toolCallID := strings.TrimSpace(event.ItemID)
+	if toolCallID == "" {
+		toolCallID = strings.TrimSpace(event.Command.ID)
+	}
+	if toolCallID == "" {
+		return SessionUpdateParams{}, false
+	}
+
+	status := commandExecutionACPStatus(event)
+	if status == "" || !t.shouldEmitRuntimeToolCallStatus(toolCallID, status) {
+		return SessionUpdateParams{}, false
+	}
+
+	return SessionUpdateParams{
+		SessionID:  t.sessionID,
+		TurnID:     t.turnID,
+		Type:       "tool_call_update",
+		Phase:      string(t.phase),
+		ItemID:     event.ItemID,
+		ItemType:   event.ItemType,
+		Status:     status,
+		ToolCallID: toolCallID,
+		Approval:   string(codex.ApprovalKindCommand),
+		Message:    commandExecutionTitle(event.Command, status),
+	}, true
+}
+
+func (t *turnLifecycle) rememberToolCallStatus(toolCallID string, status string) {
+	toolCallID = strings.TrimSpace(toolCallID)
+	status = strings.TrimSpace(status)
+	if toolCallID == "" || status == "" {
+		return
+	}
+	if t.toolCallStatus == nil {
+		t.toolCallStatus = make(map[string]string)
+	}
+	t.toolCallStatus[toolCallID] = status
+}
+
+func (t *turnLifecycle) shouldEmitRuntimeToolCallStatus(toolCallID string, status string) bool {
+	toolCallID = strings.TrimSpace(toolCallID)
+	status = strings.TrimSpace(status)
+	if toolCallID == "" || status == "" {
+		return false
+	}
+	if t.toolCallStatus == nil {
+		t.toolCallStatus = make(map[string]string)
+	}
+	prev := strings.TrimSpace(t.toolCallStatus[toolCallID])
+	switch {
+	case prev == "":
+		t.toolCallStatus[toolCallID] = status
+		return true
+	case prev == status:
+		return false
+	case prev == "completed", prev == "failed":
+		return false
+	default:
+		t.toolCallStatus[toolCallID] = status
+		return true
+	}
+}
+
+func commandExecutionACPStatus(event codex.TurnEvent) string {
+	if event.Command != nil {
+		switch strings.ToLower(strings.TrimSpace(event.Command.Status)) {
+		case "inprogress":
+			return "in_progress"
+		case "completed":
+			if event.Command.ExitCode != nil && *event.Command.ExitCode != 0 {
+				return "failed"
+			}
+			return "completed"
+		case "failed", "declined":
+			return "failed"
+		}
+	}
+
+	switch event.Type {
+	case codex.TurnEventTypeItemStarted:
+		return "in_progress"
+	case codex.TurnEventTypeItemCompleted:
+		if event.Command != nil && event.Command.ExitCode != nil && *event.Command.ExitCode != 0 {
+			return "failed"
+		}
+		return "completed"
+	default:
+		return ""
+	}
+}
+
+func commandExecutionTitle(command *codex.CommandExecution, status string) string {
+	if command == nil {
+		return "command"
+	}
+	title := strings.TrimSpace(command.Command)
+	if title == "" {
+		title = "command"
+	}
+	if status == "failed" && command.ExitCode != nil {
+		return fmt.Sprintf("%s (exit %d)", title, *command.ExitCode)
+	}
+	if status == "failed" {
+		if rawStatus := strings.TrimSpace(command.Status); rawStatus != "" {
+			return fmt.Sprintf("%s (%s)", title, rawStatus)
+		}
+	}
+	return title
 }
 
 func (t *turnLifecycle) fallbackStopReason() string {

@@ -151,24 +151,6 @@
         }
       ]
     },
-    "FunctionCallOutputPayload": {
-      "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`body` serializes directly as the wire value for `function_call_output.output`. `success` remains internal metadata for downstream handling.",
-      "type": "object",
-      "required": [
-        "body"
-      ],
-      "properties": {
-        "body": {
-          "$ref": "#/definitions/FunctionCallOutputBody"
-        },
-        "success": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      }
-    },
     "GhostCommit": {
       "description": "Details of a ghost commit created from a repository state.",
       "type": "object",
@@ -416,7 +398,6 @@
         {
           "type": "object",
           "required": [
-            "id",
             "summary",
             "type"
           ],
@@ -436,10 +417,6 @@
                 "string",
                 "null"
               ]
-            },
-            "id": {
-              "writeOnly": true,
-              "type": "string"
             },
             "summary": {
               "type": "array",
@@ -521,6 +498,12 @@
             "name": {
               "type": "string"
             },
+            "namespace": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "type": {
               "type": "string",
               "enum": [
@@ -534,6 +517,47 @@
         {
           "type": "object",
           "required": [
+            "arguments",
+            "execution",
+            "type"
+          ],
+          "properties": {
+            "arguments": true,
+            "call_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "execution": {
+              "type": "string"
+            },
+            "id": {
+              "writeOnly": true,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "tool_search_call"
+              ],
+              "title": "ToolSearchCallResponseItemType"
+            }
+          },
+          "title": "ToolSearchCallResponseItem"
+        },
+        {
+          "type": "object",
+          "required": [
             "call_id",
             "output",
             "type"
@@ -543,7 +567,7 @@
               "type": "string"
             },
             "output": {
-              "$ref": "#/definitions/FunctionCallOutputPayload"
+              "$ref": "#/definitions/FunctionCallOutputBody"
             },
             "type": {
               "type": "string",
@@ -607,8 +631,14 @@
             "call_id": {
               "type": "string"
             },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "output": {
-              "$ref": "#/definitions/FunctionCallOutputPayload"
+              "$ref": "#/definitions/FunctionCallOutputBody"
             },
             "type": {
               "type": "string",
@@ -619,6 +649,41 @@
             }
           },
           "title": "CustomToolCallOutputResponseItem"
+        },
+        {
+          "type": "object",
+          "required": [
+            "execution",
+            "status",
+            "tools",
+            "type"
+          ],
+          "properties": {
+            "call_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "execution": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "tools": {
+              "type": "array",
+              "items": true
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "tool_search_output"
+              ],
+              "title": "ToolSearchOutputResponseItemType"
+            }
+          },
+          "title": "ToolSearchOutputResponseItem"
         },
         {
           "type": "object",

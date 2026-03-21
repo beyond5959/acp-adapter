@@ -649,6 +649,10 @@ func (s *fakeServer) runTurn(
 		s.runApprovalTurn(threadID, turnID, lowerInput, control)
 		return
 	}
+	if strings.Contains(lowerInput, "command execution mapping") {
+		s.runCommandExecutionTurn(threadID, turnID, control)
+		return
+	}
 
 	itemID := fmt.Sprintf("item-%s", turnID)
 	s.writeTurnStarted(threadID, turnID)
@@ -857,6 +861,56 @@ func (s *fakeServer) runApprovalTurn(threadID, turnID, input string, control *tu
 	s.writeTurnCompleted(threadID, turnID, "end_turn")
 }
 
+func (s *fakeServer) runCommandExecutionTurn(threadID, turnID string, control *turnControl) {
+	defer s.removeTurn(turnID)
+
+	commandItemID := fmt.Sprintf("command-%s", turnID)
+	messageItemID := fmt.Sprintf("item-%s", turnID)
+
+	s.writeTurnStarted(threadID, turnID)
+	select {
+	case <-control.cancel:
+		s.writeTurnCompleted(threadID, turnID, "cancelled")
+		return
+	default:
+	}
+
+	command := `/bin/zsh -lc "pwd"`
+	s.writeCommandExecutionStarted(
+		threadID,
+		turnID,
+		commandItemID,
+		command,
+		"/Users/niuniu/Code/acp-adapter",
+		[]codex.CommandAction{{
+			Type:    "read",
+			Command: "pwd",
+			Name:    "cwd",
+		}},
+	)
+	output := "/Users/niuniu/Code/acp-adapter\n"
+	s.writeCommandExecutionCompleted(
+		threadID,
+		turnID,
+		commandItemID,
+		command,
+		"/Users/niuniu/Code/acp-adapter",
+		[]codex.CommandAction{{
+			Type:    "read",
+			Command: "pwd",
+			Name:    "cwd",
+		}},
+		output,
+		0,
+		"completed",
+	)
+
+	s.writeItemStarted(threadID, turnID, messageItemID, "agent_message")
+	s.writeAgentMessageDelta(threadID, turnID, messageItemID, "done")
+	s.writeItemCompleted(threadID, turnID, messageItemID, "agent_message")
+	s.writeTurnCompleted(threadID, turnID, "end_turn")
+}
+
 func (s *fakeServer) runReviewTurn(
 	threadID string,
 	turnID string,
@@ -1040,6 +1094,62 @@ func (s *fakeServer) writeItemCompleted(threadID, turnID, itemID, itemType strin
 		TurnID:   turnID,
 		ItemID:   itemID,
 		ItemType: itemType,
+	})
+}
+
+func (s *fakeServer) writeCommandExecutionStarted(
+	threadID string,
+	turnID string,
+	itemID string,
+	command string,
+	cwd string,
+	actions []codex.CommandAction,
+) {
+	s.writeNotification("item/started", codex.ItemStartedNotification{
+		ThreadID: threadID,
+		TurnID:   turnID,
+		ItemID:   itemID,
+		ItemType: "commandExecution",
+		Item: &codex.ThreadItemRef{
+			ID:             itemID,
+			Type:           "commandExecution",
+			Command:        command,
+			CommandActions: append([]codex.CommandAction(nil), actions...),
+			CWD:            cwd,
+			ProcessID:      fmt.Sprintf("process-%s", itemID),
+			Status:         "inProgress",
+		},
+	})
+}
+
+func (s *fakeServer) writeCommandExecutionCompleted(
+	threadID string,
+	turnID string,
+	itemID string,
+	command string,
+	cwd string,
+	actions []codex.CommandAction,
+	aggregatedOutput string,
+	exitCode int,
+	status string,
+) {
+	output := aggregatedOutput
+	s.writeNotification("item/completed", codex.ItemCompletedNotification{
+		ThreadID: threadID,
+		TurnID:   turnID,
+		ItemID:   itemID,
+		ItemType: "commandExecution",
+		Item: &codex.ThreadItemRef{
+			ID:               itemID,
+			Type:             "commandExecution",
+			Command:          command,
+			CommandActions:   append([]codex.CommandAction(nil), actions...),
+			CWD:              cwd,
+			AggregatedOutput: &output,
+			ProcessID:        fmt.Sprintf("process-%s", itemID),
+			ExitCode:         &exitCode,
+			Status:           status,
+		},
 	})
 }
 

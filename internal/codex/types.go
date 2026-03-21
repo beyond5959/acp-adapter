@@ -294,9 +294,39 @@ type TurnRef struct {
 
 // ThreadItemRef is a minimal item object shape used by item started/completed notifications.
 type ThreadItemRef struct {
-	ID   string `json:"id,omitempty"`
-	Type string `json:"type,omitempty"`
-	Text string `json:"text,omitempty"`
+	ID               string          `json:"id,omitempty"`
+	Type             string          `json:"type,omitempty"`
+	Text             string          `json:"text,omitempty"`
+	Command          string          `json:"command,omitempty"`
+	CommandActions   []CommandAction `json:"commandActions,omitempty"`
+	CWD              string          `json:"cwd,omitempty"`
+	AggregatedOutput *string         `json:"aggregatedOutput,omitempty"`
+	DurationMs       *int64          `json:"durationMs,omitempty"`
+	ExitCode         *int            `json:"exitCode,omitempty"`
+	ProcessID        string          `json:"processId,omitempty"`
+	Status           string          `json:"status,omitempty"`
+}
+
+// CommandAction is app-server's best-effort structured interpretation of one shell command segment.
+type CommandAction struct {
+	Type    string  `json:"type,omitempty"`
+	Command string  `json:"command,omitempty"`
+	Name    string  `json:"name,omitempty"`
+	Path    *string `json:"path,omitempty"`
+	Query   *string `json:"query,omitempty"`
+}
+
+// CommandExecution describes one runtime command tool call emitted by app-server items.
+type CommandExecution struct {
+	ID               string
+	Command          string
+	CommandActions   []CommandAction
+	CWD              string
+	AggregatedOutput string
+	DurationMs       *int64
+	ExitCode         *int
+	ProcessID        string
+	Status           string
 }
 
 // ReviewModeNotification indicates review mode lifecycle transitions.
@@ -581,6 +611,7 @@ type TurnEvent struct {
 	ItemID     string
 	ItemType   string
 	ItemText   string
+	Command    *CommandExecution
 	Delta      string
 	StopReason string
 	Message    string

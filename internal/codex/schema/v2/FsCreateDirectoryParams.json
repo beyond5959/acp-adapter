@@ -1,21 +1,26 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "PluginListParams",
+  "title": "FsCreateDirectoryParams",
+  "description": "Create a directory on the host filesystem.",
   "type": "object",
+  "required": [
+    "path"
+  ],
   "properties": {
-    "cwds": {
-      "description": "Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces and the official curated marketplace are considered.",
-      "type": [
-        "array",
-        "null"
-      ],
-      "items": {
-        "$ref": "#/definitions/AbsolutePathBuf"
-      }
+    "path": {
+      "description": "Absolute directory path to create.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ]
     },
-    "forceRemoteSync": {
-      "description": "When true, reconcile the official curated marketplace against the remote plugin state before listing marketplaces.",
-      "type": "boolean"
+    "recursive": {
+      "description": "Whether parent directories should also be created. Defaults to `true`.",
+      "type": [
+        "boolean",
+        "null"
+      ]
     }
   },
   "definitions": {
