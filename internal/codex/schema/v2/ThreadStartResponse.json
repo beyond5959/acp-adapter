@@ -4,6 +4,7 @@
   "type": "object",
   "required": [
     "approvalPolicy",
+    "approvalsReviewer",
     "cwd",
     "model",
     "modelProvider",
@@ -13,6 +14,14 @@
   "properties": {
     "approvalPolicy": {
       "$ref": "#/definitions/AskForApproval"
+    },
+    "approvalsReviewer": {
+      "description": "Reviewer currently used for approval requests on this thread.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/ApprovalsReviewer"
+        }
+      ]
     },
     "cwd": {
       "type": "string"
@@ -55,6 +64,14 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "ApprovalsReviewer": {
+      "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request.",
+      "type": "string",
+      "enum": [
+        "user",
+        "guardian_subagent"
+      ]
+    },
     "AskForApproval": {
       "oneOf": [
         {
@@ -69,10 +86,10 @@
         {
           "type": "object",
           "required": [
-            "reject"
+            "granular"
           ],
           "properties": {
-            "reject": {
+            "granular": {
               "type": "object",
               "required": [
                 "mcp_elicitations",
@@ -92,12 +109,16 @@
                 },
                 "sandbox_approval": {
                   "type": "boolean"
+                },
+                "skill_approval": {
+                  "default": false,
+                  "type": "boolean"
                 }
               }
             }
           },
           "additionalProperties": false,
-          "title": "RejectAskForApproval"
+          "title": "GranularAskForApproval"
         }
       ]
     },
@@ -256,6 +277,7 @@
       "enum": [
         "pendingInit",
         "running",
+        "interrupted",
         "completed",
         "errored",
         "shutdown",
@@ -524,6 +546,54 @@
         "completed",
         "failed"
       ]
+    },
+    "MemoryCitation": {
+      "type": "object",
+      "required": [
+        "entries",
+        "threadIds"
+      ],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/MemoryCitationEntry"
+          }
+        },
+        "threadIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "MemoryCitationEntry": {
+      "type": "object",
+      "required": [
+        "lineEnd",
+        "lineStart",
+        "note",
+        "path"
+      ],
+      "properties": {
+        "lineEnd": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "lineStart": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "note": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      }
     },
     "MessagePhase": {
       "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
@@ -818,6 +888,19 @@
         {
           "type": "object",
           "required": [
+            "custom"
+          ],
+          "properties": {
+            "custom": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "title": "CustomSessionSource"
+        },
+        {
+          "type": "object",
+          "required": [
             "subAgent"
           ],
           "properties": {
@@ -1080,6 +1163,17 @@
           "properties": {
             "id": {
               "type": "string"
+            },
+            "memoryCitation": {
+              "default": null,
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MemoryCitation"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "phase": {
               "default": null,
@@ -1405,11 +1499,29 @@
               "description": "Unique identifier for this collab tool call.",
               "type": "string"
             },
+            "model": {
+              "description": "Model requested for the spawned agent, when applicable.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "prompt": {
               "description": "Prompt text sent as part of the collab tool call, when available.",
               "type": [
                 "string",
                 "null"
+              ]
+            },
+            "reasoningEffort": {
+              "description": "Reasoning effort requested for the spawned agent, when applicable.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ReasoningEffort"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "receiverThreadIds": {

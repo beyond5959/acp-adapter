@@ -122,6 +122,14 @@
     "AppToolsConfig": {
       "type": "object"
     },
+    "ApprovalsReviewer": {
+      "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request.",
+      "type": "string",
+      "enum": [
+        "user",
+        "guardian_subagent"
+      ]
+    },
     "AppsConfig": {
       "type": "object",
       "properties": {
@@ -169,10 +177,10 @@
         {
           "type": "object",
           "required": [
-            "reject"
+            "granular"
           ],
           "properties": {
-            "reject": {
+            "granular": {
               "type": "object",
               "required": [
                 "mcp_elicitations",
@@ -192,12 +200,16 @@
                 },
                 "sandbox_approval": {
                   "type": "boolean"
+                },
+                "skill_approval": {
+                  "default": false,
+                  "type": "boolean"
                 }
               }
             }
           },
           "additionalProperties": false,
-          "title": "RejectAskForApproval"
+          "title": "GranularAskForApproval"
         }
       ]
     },
@@ -218,6 +230,17 @@
           "anyOf": [
             {
               "$ref": "#/definitions/AskForApproval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "approvals_reviewer": {
+          "description": "[UNSTABLE] Optional default for where approval requests are routed for review.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
             },
             {
               "type": "null"
@@ -594,6 +617,17 @@
           "anyOf": [
             {
               "$ref": "#/definitions/AskForApproval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "approvals_reviewer": {
+          "description": "[UNSTABLE] Optional profile-level override for where approval requests are routed for review. If omitted, the enclosing config default is used.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
             },
             {
               "type": "null"

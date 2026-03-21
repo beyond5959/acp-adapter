@@ -1,21 +1,19 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "PluginListParams",
+  "title": "FsReadDirectoryParams",
+  "description": "List direct child names for a directory.",
   "type": "object",
+  "required": [
+    "path"
+  ],
   "properties": {
-    "cwds": {
-      "description": "Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces and the official curated marketplace are considered.",
-      "type": [
-        "array",
-        "null"
-      ],
-      "items": {
-        "$ref": "#/definitions/AbsolutePathBuf"
-      }
-    },
-    "forceRemoteSync": {
-      "description": "When true, reconcile the official curated marketplace against the remote plugin state before listing marketplaces.",
-      "type": "boolean"
+    "path": {
+      "description": "Absolute directory path to read.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ]
     }
   },
   "definitions": {

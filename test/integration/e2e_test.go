@@ -1996,6 +1996,89 @@ func TestE2EAcceptanceD1ToD5ApprovalsBridge(t *testing.T) {
 	h.assertStdoutPureJSONRPC()
 }
 
+func TestE2ECommandExecutionItemsMappedToToolCallUpdates(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "command execution mapping",
+	})
+
+	gotPromptResp := false
+	var started sessionUpdateParams
+	var completed sessionUpdateParams
+	sawCommandStatus := false
+	for !gotPromptResp || completed.ToolCallID == "" {
+		msg := h.nextMessage(responseTimeout)
+		switch msg.Method {
+		case "session/update":
+			update := decodeSessionUpdate(t, msg)
+			if update.SessionID != newResult.SessionID {
+				continue
+			}
+			if update.Type == "status" && update.ItemType == "commandExecution" {
+				sawCommandStatus = true
+			}
+			if update.Type != "tool_call_update" {
+				continue
+			}
+			if update.Approval != "command" {
+				t.Fatalf("command execution tool call must be classified as command, got %q", update.Approval)
+			}
+			if update.ToolCallID == "" {
+				t.Fatalf("command execution tool call update missing toolCallId")
+			}
+			if update.Update == nil || update.Update.SessionUpdate != "tool_call_update" {
+				t.Fatalf("command execution tool call must populate standard update.sessionUpdate envelope")
+			}
+			switch update.Status {
+			case "in_progress":
+				started = update
+			case "completed":
+				completed = update
+			}
+		default:
+			if messageID(msg) != "3" {
+				continue
+			}
+			var result struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, msg, &result)
+			if result.StopReason != "end_turn" {
+				t.Fatalf("command execution prompt expected stopReason=end_turn, got %q", result.StopReason)
+			}
+			gotPromptResp = true
+		}
+	}
+
+	if started.ToolCallID == "" {
+		t.Fatalf("expected in_progress tool_call_update for commandExecution item")
+	}
+	if completed.ToolCallID == "" {
+		t.Fatalf("expected terminal tool_call_update for commandExecution item")
+	}
+	if started.ToolCallID != completed.ToolCallID {
+		t.Fatalf("tool call id mismatch: started=%q completed=%q", started.ToolCallID, completed.ToolCallID)
+	}
+	if !strings.Contains(started.Message, "pwd") {
+		t.Fatalf("expected tool_call_update title/message to include command, got %q", started.Message)
+	}
+	if sawCommandStatus {
+		t.Fatalf("commandExecution items should map to tool_call_update instead of generic status updates")
+	}
+}
+
 func TestE2EAcceptanceE1ReviewWorkflow(t *testing.T) {
 	h := startAdapter(t)
 
@@ -3497,6 +3580,142 @@ func TestE2ERealCodexAppServer_BasicPromptAndCancel(t *testing.T) {
 	)
 }
 
+func TestE2ERealCodexCommandExecutionMappedToToolCalls(t *testing.T) {
+	requireRealCodex(t)
+
+	traceFile := filepath.Join(t.TempDir(), "real-command-trace.jsonl")
+	h := startAdapterReal(t, []string{"--trace-json", "--trace-json-file", traceFile})
+	sessionID := realCodexInitializeAndSession(t, h, nil)
+
+	h.sendRequest("real-command-prompt", "session/prompt", map[string]any{
+		"sessionId": sessionID,
+		"prompt":    "这是什么项目？",
+	})
+
+	sawCommandStarted := false
+	sawCommandTerminal := false
+	sawCommandStatusFallback := false
+	gotPromptResp := false
+	cancelSent := false
+	gotCancelResp := false
+	deadline := time.Now().Add(90 * time.Second)
+
+	for time.Now().Before(deadline) && !(gotPromptResp && (!cancelSent || gotCancelResp) && sawCommandTerminal) {
+		msg := h.nextMessage(time.Until(deadline))
+		switch msg.Method {
+		case "session/update":
+			update := decodeSessionUpdate(t, msg)
+			if update.SessionID != sessionID {
+				continue
+			}
+			if update.Type == "status" && update.ItemType == "commandExecution" {
+				sawCommandStatusFallback = true
+			}
+			if update.Type != "tool_call_update" || update.Approval != "command" {
+				continue
+			}
+			if update.ToolCallID == "" {
+				t.Fatalf("real command tool_call_update missing toolCallId")
+			}
+			switch update.Status {
+			case "in_progress":
+				sawCommandStarted = true
+			case "completed", "failed":
+				sawCommandTerminal = true
+				if !cancelSent {
+					h.sendRequest("real-command-cancel", "session/cancel", map[string]any{"sessionId": sessionID})
+					cancelSent = true
+				}
+			}
+		case "session/request_permission":
+			h.sendResultResponse(messageID(msg), map[string]any{"outcome": "declined"})
+		default:
+			switch messageID(msg) {
+			case "real-command-cancel":
+				var result struct {
+					Cancelled bool `json:"cancelled"`
+				}
+				unmarshalResult(t, msg, &result)
+				gotCancelResp = true
+			case "real-command-prompt":
+				var result struct {
+					StopReason string `json:"stopReason"`
+				}
+				unmarshalResult(t, msg, &result)
+				if result.StopReason != "end_turn" && result.StopReason != "cancelled" {
+					t.Fatalf("real command prompt expected stopReason end_turn/cancelled, got %q", result.StopReason)
+				}
+				gotPromptResp = true
+			}
+		}
+	}
+
+	if !sawCommandStarted || !sawCommandTerminal {
+		t.Fatalf(
+			"expected real codex prompt to emit command tool_call_update lifecycle, started=%v terminal=%v",
+			sawCommandStarted,
+			sawCommandTerminal,
+		)
+	}
+	if sawCommandStatusFallback {
+		t.Fatalf("real commandExecution items should not fall back to generic status updates once mapped to tool_call_update")
+	}
+
+	traceEntries := readTraceEntries(t, traceFile)
+	commandItemIDs := make(map[string]struct{})
+	toolCallIDs := make(map[string]struct{})
+	sawAggregatedOutput := false
+	for _, entry := range traceEntries {
+		method, _ := entry.Payload["method"].(string)
+		switch entry.Stream {
+		case "appserver":
+			if method != "item/completed" {
+				continue
+			}
+			params, _ := entry.Payload["params"].(map[string]any)
+			item, _ := params["item"].(map[string]any)
+			if itemType, _ := item["type"].(string); itemType != "commandExecution" {
+				continue
+			}
+			if itemID, _ := item["id"].(string); itemID != "" {
+				commandItemIDs[itemID] = struct{}{}
+			}
+			if _, ok := item["aggregatedOutput"]; ok {
+				sawAggregatedOutput = true
+			}
+		case "acp":
+			if method != "session/update" {
+				continue
+			}
+			params, _ := entry.Payload["params"].(map[string]any)
+			if updateType, _ := params["type"].(string); updateType != "tool_call_update" {
+				continue
+			}
+			if approval, _ := params["approval"].(string); approval != "command" {
+				continue
+			}
+			if toolCallID, _ := params["toolCallId"].(string); toolCallID != "" {
+				toolCallIDs[toolCallID] = struct{}{}
+			}
+		}
+	}
+
+	if !sawAggregatedOutput {
+		t.Fatalf("real trace should include commandExecution aggregatedOutput in app-server item/completed payloads")
+	}
+
+	matched := false
+	for itemID := range commandItemIDs {
+		if _, ok := toolCallIDs[itemID]; ok {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		t.Fatalf("expected at least one commandExecution item id from app-server trace to be mapped to ACP toolCallId")
+	}
+}
+
 func TestE2ERealCodexAppServer_AuthMissingReturnsClearError(t *testing.T) {
 	requireRealCodex(t)
 
@@ -3999,38 +4218,12 @@ func parseFirstMCPServerFromOutput(output string) (string, string, bool) {
 func assertTraceContainsAppServerMethods(t *testing.T, traceFile string, methods ...string) {
 	t.Helper()
 
-	data, err := os.ReadFile(traceFile)
-	if err != nil {
-		t.Fatalf("read trace file: %v", err)
-	}
-	text := strings.TrimSpace(string(data))
-	if text == "" {
-		t.Fatalf("trace file is empty")
-	}
-
-	type traceEntry struct {
-		Stream  string          `json:"stream"`
-		Payload json.RawMessage `json:"payload"`
-	}
-
 	seen := make(map[string]bool, len(methods))
-	lines := strings.Split(text, "\n")
-	for _, line := range lines {
-		if strings.TrimSpace(line) == "" {
+	for _, entry := range readTraceEntries(t, traceFile) {
+		if entry.Stream != "appserver" {
 			continue
 		}
-		var entry traceEntry
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
-			continue
-		}
-		if entry.Stream != "appserver" || len(entry.Payload) == 0 {
-			continue
-		}
-		var payload map[string]any
-		if err := json.Unmarshal(entry.Payload, &payload); err != nil {
-			continue
-		}
-		method, _ := payload["method"].(string)
+		method, _ := entry.Payload["method"].(string)
 		if strings.TrimSpace(method) == "" {
 			continue
 		}
@@ -4042,6 +4235,38 @@ func assertTraceContainsAppServerMethods(t *testing.T, traceFile string, methods
 			t.Fatalf("trace should include appserver method %q, seen=%v", method, seen)
 		}
 	}
+}
+
+type traceLogEntry struct {
+	Stream  string         `json:"stream"`
+	Payload map[string]any `json:"payload"`
+}
+
+func readTraceEntries(t *testing.T, traceFile string) []traceLogEntry {
+	t.Helper()
+
+	data, err := os.ReadFile(traceFile)
+	if err != nil {
+		t.Fatalf("read trace file: %v", err)
+	}
+	text := strings.TrimSpace(string(data))
+	if text == "" {
+		t.Fatalf("trace file is empty")
+	}
+
+	lines := strings.Split(text, "\n")
+	entries := make([]traceLogEntry, 0, len(lines))
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var entry traceLogEntry
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	return entries
 }
 
 func TestE2ETraceJSONFileRedaction(t *testing.T) {

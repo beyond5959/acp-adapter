@@ -402,39 +402,15 @@
         "method": {
           "type": "string",
           "enum": [
-            "skills/remote/list"
+            "plugin/read"
           ],
-          "title": "Skills/remote/listRequestMethod"
+          "title": "Plugin/readRequestMethod"
         },
         "params": {
-          "$ref": "#/definitions/SkillsRemoteReadParams"
+          "$ref": "#/definitions/PluginReadParams"
         }
       },
-      "title": "Skills/remote/listRequest"
-    },
-    {
-      "type": "object",
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "type": "string",
-          "enum": [
-            "skills/remote/export"
-          ],
-          "title": "Skills/remote/exportRequestMethod"
-        },
-        "params": {
-          "$ref": "#/definitions/SkillsRemoteWriteParams"
-        }
-      },
-      "title": "Skills/remote/exportRequest"
+      "title": "Plugin/readRequest"
     },
     {
       "type": "object",
@@ -459,6 +435,174 @@
         }
       },
       "title": "App/listRequest"
+    },
+    {
+      "type": "object",
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "fs/readFile"
+          ],
+          "title": "Fs/readFileRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/FsReadFileParams"
+        }
+      },
+      "title": "Fs/readFileRequest"
+    },
+    {
+      "type": "object",
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "fs/writeFile"
+          ],
+          "title": "Fs/writeFileRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/FsWriteFileParams"
+        }
+      },
+      "title": "Fs/writeFileRequest"
+    },
+    {
+      "type": "object",
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "fs/createDirectory"
+          ],
+          "title": "Fs/createDirectoryRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/FsCreateDirectoryParams"
+        }
+      },
+      "title": "Fs/createDirectoryRequest"
+    },
+    {
+      "type": "object",
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "fs/getMetadata"
+          ],
+          "title": "Fs/getMetadataRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/FsGetMetadataParams"
+        }
+      },
+      "title": "Fs/getMetadataRequest"
+    },
+    {
+      "type": "object",
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "fs/readDirectory"
+          ],
+          "title": "Fs/readDirectoryRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/FsReadDirectoryParams"
+        }
+      },
+      "title": "Fs/readDirectoryRequest"
+    },
+    {
+      "type": "object",
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "fs/remove"
+          ],
+          "title": "Fs/removeRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/FsRemoveParams"
+        }
+      },
+      "title": "Fs/removeRequest"
+    },
+    {
+      "type": "object",
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "fs/copy"
+          ],
+          "title": "Fs/copyRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/FsCopyParams"
+        }
+      },
+      "title": "Fs/copyRequest"
     },
     {
       "type": "object",
@@ -1186,6 +1330,14 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "ApprovalsReviewer": {
+      "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request.",
+      "type": "string",
+      "enum": [
+        "user",
+        "guardian_subagent"
+      ]
+    },
     "AppsListParams": {
       "description": "EXPERIMENTAL - list available apps/connectors.",
       "type": "object",
@@ -1233,10 +1385,10 @@
         {
           "type": "object",
           "required": [
-            "reject"
+            "granular"
           ],
           "properties": {
-            "reject": {
+            "granular": {
               "type": "object",
               "required": [
                 "mcp_elicitations",
@@ -1256,12 +1408,16 @@
                 },
                 "sandbox_approval": {
                   "type": "boolean"
+                },
+                "skill_approval": {
+                  "default": false,
+                  "type": "boolean"
                 }
               }
             }
           },
           "additionalProperties": false,
-          "title": "RejectAskForApproval"
+          "title": "GranularAskForApproval"
         }
       ]
     },
@@ -1702,6 +1858,9 @@
         "name"
       ],
       "properties": {
+        "deferLoading": {
+          "type": "boolean"
+        },
         "description": {
           "type": "string"
         },
@@ -1832,6 +1991,164 @@
         }
       }
     },
+    "FsCopyParams": {
+      "description": "Copy a file or directory tree on the host filesystem.",
+      "type": "object",
+      "required": [
+        "destinationPath",
+        "sourcePath"
+      ],
+      "properties": {
+        "destinationPath": {
+          "description": "Absolute destination path.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ]
+        },
+        "recursive": {
+          "description": "Required for directory copies; ignored for file copies.",
+          "type": "boolean"
+        },
+        "sourcePath": {
+          "description": "Absolute source path.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ]
+        }
+      }
+    },
+    "FsCreateDirectoryParams": {
+      "description": "Create a directory on the host filesystem.",
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "description": "Absolute directory path to create.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ]
+        },
+        "recursive": {
+          "description": "Whether parent directories should also be created. Defaults to `true`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "FsGetMetadataParams": {
+      "description": "Request metadata for an absolute path.",
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "description": "Absolute path to inspect.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ]
+        }
+      }
+    },
+    "FsReadDirectoryParams": {
+      "description": "List direct child names for a directory.",
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "description": "Absolute directory path to read.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ]
+        }
+      }
+    },
+    "FsReadFileParams": {
+      "description": "Read a file from the host filesystem.",
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "description": "Absolute path to read.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ]
+        }
+      }
+    },
+    "FsRemoveParams": {
+      "description": "Remove a file or directory tree from the host filesystem.",
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "force": {
+          "description": "Whether missing paths should be ignored. Defaults to `true`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "Absolute path to remove.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ]
+        },
+        "recursive": {
+          "description": "Whether directory removal should recurse. Defaults to `true`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "FsWriteFileParams": {
+      "description": "Write a file on the host filesystem.",
+      "type": "object",
+      "required": [
+        "dataBase64",
+        "path"
+      ],
+      "properties": {
+        "dataBase64": {
+          "description": "File contents encoded as base64.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Absolute path to write.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ]
+        }
+      }
+    },
     "FunctionCallOutputBody": {
       "anyOf": [
         {
@@ -1899,24 +2216,6 @@
           "title": "InputImageFunctionCallOutputContentItem"
         }
       ]
-    },
-    "FunctionCallOutputPayload": {
-      "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`body` serializes directly as the wire value for `function_call_output.output`. `success` remains internal metadata for downstream handling.",
-      "type": "object",
-      "required": [
-        "body"
-      ],
-      "properties": {
-        "body": {
-          "$ref": "#/definitions/FunctionCallOutputBody"
-        },
-        "success": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      }
     },
     "FuzzyFileSearchParams": {
       "type": "object",
@@ -2134,15 +2433,6 @@
         }
       }
     },
-    "HazelnutScope": {
-      "type": "string",
-      "enum": [
-        "example",
-        "workspace-shared",
-        "all-shared",
-        "personal"
-      ]
-    },
     "ImageDetail": {
       "type": "string",
       "enum": [
@@ -2162,7 +2452,7 @@
           "type": "boolean"
         },
         "optOutNotificationMethods": {
-          "description": "Exact notification method names that should be suppressed for this connection (for example `codex/event/session_configured`).",
+          "description": "Exact notification method names that should be suppressed for this connection (for example `thread/started`).",
           "type": [
             "array",
             "null"
@@ -2424,6 +2714,17 @@
             }
           ]
         },
+        "approvalsReviewer": {
+          "description": "Override where approval requests are routed for review on this turn and subsequent turns.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "threadId": {
           "type": "string"
         },
@@ -2572,6 +2873,10 @@
         "pluginName"
       ],
       "properties": {
+        "forceRemoteSync": {
+          "description": "When true, apply the remote plugin change before the local install flow.",
+          "type": "boolean"
+        },
         "marketplacePath": {
           "$ref": "#/definitions/AbsolutePathBuf"
         },
@@ -2592,6 +2897,25 @@
           "items": {
             "$ref": "#/definitions/AbsolutePathBuf"
           }
+        },
+        "forceRemoteSync": {
+          "description": "When true, reconcile the official curated marketplace against the remote plugin state before listing marketplaces.",
+          "type": "boolean"
+        }
+      }
+    },
+    "PluginReadParams": {
+      "type": "object",
+      "required": [
+        "marketplacePath",
+        "pluginName"
+      ],
+      "properties": {
+        "marketplacePath": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "pluginName": {
+          "type": "string"
         }
       }
     },
@@ -2601,19 +2925,14 @@
         "pluginId"
       ],
       "properties": {
+        "forceRemoteSync": {
+          "description": "When true, apply the remote plugin change before the local uninstall flow.",
+          "type": "boolean"
+        },
         "pluginId": {
           "type": "string"
         }
       }
-    },
-    "ProductSurface": {
-      "type": "string",
-      "enum": [
-        "chatgpt",
-        "codex",
-        "api",
-        "atlas"
-      ]
     },
     "ReadOnlyAccess": {
       "oneOf": [
@@ -2828,7 +3147,6 @@
         {
           "type": "object",
           "required": [
-            "id",
             "summary",
             "type"
           ],
@@ -2848,10 +3166,6 @@
                 "string",
                 "null"
               ]
-            },
-            "id": {
-              "writeOnly": true,
-              "type": "string"
             },
             "summary": {
               "type": "array",
@@ -2933,6 +3247,12 @@
             "name": {
               "type": "string"
             },
+            "namespace": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "type": {
               "type": "string",
               "enum": [
@@ -2946,6 +3266,47 @@
         {
           "type": "object",
           "required": [
+            "arguments",
+            "execution",
+            "type"
+          ],
+          "properties": {
+            "arguments": true,
+            "call_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "execution": {
+              "type": "string"
+            },
+            "id": {
+              "writeOnly": true,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "tool_search_call"
+              ],
+              "title": "ToolSearchCallResponseItemType"
+            }
+          },
+          "title": "ToolSearchCallResponseItem"
+        },
+        {
+          "type": "object",
+          "required": [
             "call_id",
             "output",
             "type"
@@ -2955,7 +3316,7 @@
               "type": "string"
             },
             "output": {
-              "$ref": "#/definitions/FunctionCallOutputPayload"
+              "$ref": "#/definitions/FunctionCallOutputBody"
             },
             "type": {
               "type": "string",
@@ -3019,8 +3380,14 @@
             "call_id": {
               "type": "string"
             },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "output": {
-              "$ref": "#/definitions/FunctionCallOutputPayload"
+              "$ref": "#/definitions/FunctionCallOutputBody"
             },
             "type": {
               "type": "string",
@@ -3031,6 +3398,41 @@
             }
           },
           "title": "CustomToolCallOutputResponseItem"
+        },
+        {
+          "type": "object",
+          "required": [
+            "execution",
+            "status",
+            "tools",
+            "type"
+          ],
+          "properties": {
+            "call_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "execution": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "tools": {
+              "type": "array",
+              "items": true
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "tool_search_output"
+              ],
+              "title": "ToolSearchOutputResponseItemType"
+            }
+          },
+          "title": "ToolSearchOutputResponseItem"
         },
         {
           "type": "object",
@@ -3611,42 +4013,6 @@
         }
       }
     },
-    "SkillsRemoteReadParams": {
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "default": false,
-          "type": "boolean"
-        },
-        "hazelnutScope": {
-          "default": "example",
-          "allOf": [
-            {
-              "$ref": "#/definitions/HazelnutScope"
-            }
-          ]
-        },
-        "productSurface": {
-          "default": "codex",
-          "allOf": [
-            {
-              "$ref": "#/definitions/ProductSurface"
-            }
-          ]
-        }
-      }
-    },
-    "SkillsRemoteWriteParams": {
-      "type": "object",
-      "required": [
-        "hazelnutId"
-      ],
-      "properties": {
-        "hazelnutId": {
-          "type": "string"
-        }
-      }
-    },
     "TextElement": {
       "type": "object",
       "required": [
@@ -3735,6 +4101,17 @@
             }
           ]
         },
+        "approvalsReviewer": {
+          "description": "Override where approval requests are routed for review on this thread and subsequent turns.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "baseInstructions": {
           "type": [
             "string",
@@ -3760,6 +4137,9 @@
             "null"
           ]
         },
+        "ephemeral": {
+          "type": "boolean"
+        },
         "model": {
           "description": "Configuration overrides for the forked thread, if any.",
           "type": [
@@ -3772,9 +4152,6 @@
             "string",
             "null"
           ]
-        },
-        "threadId": {
-          "type": "string"
         },
         "serviceTier": {
           "anyOf": [
@@ -3792,6 +4169,9 @@
               "type": "null"
             }
           ]
+        },
+        "threadId": {
+          "type": "string"
         },
         "sandbox": {
           "anyOf": [
@@ -3987,6 +4367,17 @@
             }
           ]
         },
+        "approvalsReviewer": {
+          "description": "Override where approval requests are routed for review on this thread and subsequent turns.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "baseInstructions": {
           "type": [
             "string",
@@ -4012,6 +4403,18 @@
             "null"
           ]
         },
+        "serviceName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ephemeral": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "serviceTier": {
           "anyOf": [
             {
@@ -4029,26 +4432,10 @@
             }
           ]
         },
-        "ephemeral": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
         "sandbox": {
           "anyOf": [
             {
               "$ref": "#/definitions/SandboxMode"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "personality": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Personality"
             },
             {
               "type": "null"
@@ -4067,10 +4454,14 @@
             "null"
           ]
         },
-        "serviceName": {
-          "type": [
-            "string",
-            "null"
+        "personality": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Personality"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       }
@@ -4082,6 +4473,7 @@
         "vscode",
         "exec",
         "appServer",
+        "custom",
         "subAgent",
         "subAgentReview",
         "subAgentCompact",
@@ -4101,6 +4493,12 @@
       "properties": {
         "data": {
           "type": "string"
+        },
+        "itemId": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "numChannels": {
           "type": "integer",
@@ -4161,6 +4559,17 @@
             }
           ]
         },
+        "approvalsReviewer": {
+          "description": "Override where approval requests are routed for review on this thread and subsequent turns.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "baseInstructions": {
           "type": [
             "string",
@@ -4186,17 +4595,10 @@
             "null"
           ]
         },
-        "serviceTier": {
+        "sandbox": {
           "anyOf": [
             {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ServiceTier"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/definitions/SandboxMode"
             },
             {
               "type": "null"
@@ -4219,10 +4621,17 @@
         "threadId": {
           "type": "string"
         },
-        "sandbox": {
+        "serviceTier": {
           "anyOf": [
             {
-              "$ref": "#/definitions/SandboxMode"
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ServiceTier"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             {
               "type": "null"

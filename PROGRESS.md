@@ -6,7 +6,7 @@
 ## 项目概览
 - 项目：acp-adapter（基于 Codex App Server 的 ACP 适配器，同时支持 Claude Code CLI 子进程适配）
 - 当前阶段：Claude Adapter CLI 重构完成（C-R5 内部迭代）
-- 最近更新：2026-03-15
+- 最近更新：2026-03-21
 
 ## 关键链接/文档
 - docs/SPEC.md：技术方案（权威）
@@ -55,13 +55,21 @@
     - `internal/config.Parse()` 的默认 `CODEX_APP_SERVER_ARGS`
     - `pkg/codexacp.DefaultRuntimeConfig()` 的库模式默认值
   - `cmd/acp --help` 的默认参数说明同步更新。
-- 真实验证：
-  - 本机 `codex-cli 0.114.0` 下，默认配置时 trace 仅见空的 `reasoning` item started/completed。
-  - 加 `model_reasoning_summary="detailed"` 后，真实 app-server 会发送 `item/reasoning/summaryTextDelta`，并被桥接成 ACP `agent_thought_chunk`。
 - 测试与回归：
   - 新增 `internal/config/config_test.go::TestDefaultCodexAppServerArgs`
   - 新增 `pkg/codexacp/defaults_test.go::TestDefaultRuntimeConfigEnablesDetailedReasoningSummary`
   - 回归通过：`go test ./...`
+
+## 2026-03-21 增量修复（Codex runtime `commandExecution` -> ACP `tool_call_update`）
+- 修复点：
+  - `internal/codex/client` 现在会保留 `item/started` / `item/completed` 中 `commandExecution` item 的结构化字段：`command`、`commandActions`、`cwd`、`status`、`exitCode`、`aggregatedOutput`。
+  - `internal/acp/server` 新增 runtime command tool-call 桥接：把 `commandExecution` item 的 started/completed/failed 生命周期映射成 ACP `session/update(type="tool_call_update")`。
+  - ACP `toolCallId` 直接复用 app-server `commandExecution` item id，`title/message` 使用真实命令字符串；当已经发出结构化 command tool call update 时，不再退回普通 `status item_started/item_completed`。
+  - 对 approval 驱动的 command tool call 增加去重，避免与后续 runtime `commandExecution` item 重复发送相同状态。
+- 测试与回归：
+  - 新增 `test/integration/e2e_test.go::TestE2ECommandExecutionItemsMappedToToolCallUpdates`，覆盖 fake app-server 的 commandExecution item -> ACP tool_call_update 映射。
+  - 新增 `test/integration/e2e_test.go::TestE2ERealCodexCommandExecutionMappedToToolCalls`，覆盖真实 codex trace 中 `commandExecution` / `aggregatedOutput` 与 ACP `tool_call_update` 的 id 对齐。
+  - 全量通过：`go test ./...`
 
 ## Library Embedding Program（R0-R6）
 - Current：R5 server 集成（In Progress）

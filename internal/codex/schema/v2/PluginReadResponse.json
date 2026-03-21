@@ -1,22 +1,13 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "PluginListResponse",
+  "title": "PluginReadResponse",
   "type": "object",
   "required": [
-    "marketplaces"
+    "plugin"
   ],
   "properties": {
-    "marketplaces": {
-      "type": "array",
-      "items": {
-        "$ref": "#/definitions/PluginMarketplaceEntry"
-      }
-    },
-    "remoteSyncError": {
-      "type": [
-        "string",
-        "null"
-      ]
+    "plugin": {
+      "$ref": "#/definitions/PluginDetail"
     }
   },
   "definitions": {
@@ -24,14 +15,31 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
-    "MarketplaceInterface": {
+    "AppSummary": {
+      "description": "EXPERIMENTAL - app metadata summary for plugin responses.",
       "type": "object",
+      "required": [
+        "id",
+        "name"
+      ],
       "properties": {
-        "displayName": {
+        "description": {
           "type": [
             "string",
             "null"
           ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "installUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
         }
       }
     },
@@ -41,6 +49,52 @@
         "ON_INSTALL",
         "ON_USE"
       ]
+    },
+    "PluginDetail": {
+      "type": "object",
+      "required": [
+        "apps",
+        "marketplaceName",
+        "marketplacePath",
+        "mcpServers",
+        "skills",
+        "summary"
+      ],
+      "properties": {
+        "apps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AppSummary"
+          }
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "marketplaceName": {
+          "type": "string"
+        },
+        "marketplacePath": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "mcpServers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SkillSummary"
+          }
+        },
+        "summary": {
+          "$ref": "#/definitions/PluginSummary"
+        }
+      }
     },
     "PluginInstallPolicy": {
       "type": "string",
@@ -155,38 +209,6 @@
         }
       }
     },
-    "PluginMarketplaceEntry": {
-      "type": "object",
-      "required": [
-        "name",
-        "path",
-        "plugins"
-      ],
-      "properties": {
-        "interface": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/MarketplaceInterface"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "name": {
-          "type": "string"
-        },
-        "path": {
-          "$ref": "#/definitions/AbsolutePathBuf"
-        },
-        "plugins": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/PluginSummary"
-          }
-        }
-      }
-    },
     "PluginSource": {
       "oneOf": [
         {
@@ -253,6 +275,82 @@
         },
         "source": {
           "$ref": "#/definitions/PluginSource"
+        }
+      }
+    },
+    "SkillInterface": {
+      "type": "object",
+      "properties": {
+        "brandColor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "defaultPrompt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "displayName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "iconLarge": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "iconSmall": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "shortDescription": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "SkillSummary": {
+      "type": "object",
+      "required": [
+        "description",
+        "name",
+        "path"
+      ],
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "interface": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SkillInterface"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "shortDescription": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     }

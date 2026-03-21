@@ -121,7 +121,10 @@
         "accessibility",
         "automations",
         "calendar",
-        "preferences"
+        "contacts",
+        "launchServices",
+        "preferences",
+        "reminders"
       ],
       "properties": {
         "accessibility": {
@@ -133,8 +136,17 @@
         "calendar": {
           "type": "boolean"
         },
+        "contacts": {
+          "$ref": "#/definitions/MacOsContactsPermission"
+        },
+        "launchServices": {
+          "type": "boolean"
+        },
         "preferences": {
           "$ref": "#/definitions/MacOsPreferencesPermission"
+        },
+        "reminders": {
+          "type": "boolean"
         }
       }
     },
@@ -409,6 +421,14 @@
           "additionalProperties": false,
           "title": "BundleIdsMacOsAutomationPermission"
         }
+      ]
+    },
+    "MacOsContactsPermission": {
+      "type": "string",
+      "enum": [
+        "none",
+        "read_only",
+        "read_write"
       ]
     },
     "MacOsPreferencesPermission": {

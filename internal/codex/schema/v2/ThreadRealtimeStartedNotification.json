@@ -4,7 +4,8 @@
   "description": "EXPERIMENTAL - emitted when thread realtime startup is accepted.",
   "type": "object",
   "required": [
-    "threadId"
+    "threadId",
+    "version"
   ],
   "properties": {
     "sessionId": {
@@ -15,6 +16,18 @@
     },
     "threadId": {
       "type": "string"
+    },
+    "version": {
+      "$ref": "#/definitions/RealtimeConversationVersion"
+    }
+  },
+  "definitions": {
+    "RealtimeConversationVersion": {
+      "type": "string",
+      "enum": [
+        "v1",
+        "v2"
+      ]
     }
   }
 }

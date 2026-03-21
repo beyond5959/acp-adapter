@@ -1,21 +1,32 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "PluginInstallParams",
+  "title": "FsCopyParams",
+  "description": "Copy a file or directory tree on the host filesystem.",
   "type": "object",
   "required": [
-    "marketplacePath",
-    "pluginName"
+    "destinationPath",
+    "sourcePath"
   ],
   "properties": {
-    "forceRemoteSync": {
-      "description": "When true, apply the remote plugin change before the local install flow.",
+    "destinationPath": {
+      "description": "Absolute destination path.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ]
+    },
+    "recursive": {
+      "description": "Required for directory copies; ignored for file copies.",
       "type": "boolean"
     },
-    "marketplacePath": {
-      "$ref": "#/definitions/AbsolutePathBuf"
-    },
-    "pluginName": {
-      "type": "string"
+    "sourcePath": {
+      "description": "Absolute source path.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ]
     }
   },
   "definitions": {

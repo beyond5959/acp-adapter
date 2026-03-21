@@ -262,7 +262,10 @@
         "accessibility",
         "automations",
         "calendar",
-        "preferences"
+        "contacts",
+        "launchServices",
+        "preferences",
+        "reminders"
       ],
       "properties": {
         "accessibility": {
@@ -274,8 +277,17 @@
         "calendar": {
           "type": "boolean"
         },
+        "contacts": {
+          "$ref": "#/definitions/MacOsContactsPermission"
+        },
+        "launchServices": {
+          "type": "boolean"
+        },
         "preferences": {
           "$ref": "#/definitions/MacOsPreferencesPermission"
+        },
+        "reminders": {
+          "type": "boolean"
         }
       }
     },
@@ -879,6 +891,14 @@
           "additionalProperties": false,
           "title": "BundleIdsMacOsAutomationPermission"
         }
+      ]
+    },
+    "MacOsContactsPermission": {
+      "type": "string",
+      "enum": [
+        "none",
+        "read_only",
+        "read_write"
       ]
     },
     "MacOsPreferencesPermission": {
@@ -1664,7 +1684,7 @@
           "type": "string"
         },
         "permissions": {
-          "$ref": "#/definitions/AdditionalPermissionProfile"
+          "$ref": "#/definitions/RequestPermissionProfile"
         },
         "reason": {
           "type": [
@@ -1690,6 +1710,32 @@
           "format": "int64"
         }
       ]
+    },
+    "RequestPermissionProfile": {
+      "type": "object",
+      "properties": {
+        "fileSystem": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdditionalFileSystemPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "network": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdditionalNetworkPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "ThreadId": {
       "type": "string"

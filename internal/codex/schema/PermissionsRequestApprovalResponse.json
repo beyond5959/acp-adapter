@@ -57,43 +57,6 @@
         }
       }
     },
-    "GrantedMacOsPermissions": {
-      "type": "object",
-      "properties": {
-        "accessibility": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "automations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/MacOsAutomationPermission"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "calendar": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "preferences": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/MacOsPreferencesPermission"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      }
-    },
     "GrantedPermissionProfile": {
       "type": "object",
       "properties": {
@@ -101,16 +64,6 @@
           "anyOf": [
             {
               "$ref": "#/definitions/AdditionalFileSystemPermissions"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "macos": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/GrantedMacOsPermissions"
             },
             {
               "type": "null"
@@ -128,41 +81,6 @@
           ]
         }
       }
-    },
-    "MacOsAutomationPermission": {
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "none",
-            "all"
-          ]
-        },
-        {
-          "type": "object",
-          "required": [
-            "bundle_ids"
-          ],
-          "properties": {
-            "bundle_ids": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          },
-          "additionalProperties": false,
-          "title": "BundleIdsMacOsAutomationPermission"
-        }
-      ]
-    },
-    "MacOsPreferencesPermission": {
-      "type": "string",
-      "enum": [
-        "none",
-        "read_only",
-        "read_write"
-      ]
     },
     "PermissionGrantScope": {
       "type": "string",

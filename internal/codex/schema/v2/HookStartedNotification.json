@@ -25,6 +25,7 @@
       "type": "string",
       "enum": [
         "sessionStart",
+        "userPromptSubmit",
         "stop"
       ]
     },

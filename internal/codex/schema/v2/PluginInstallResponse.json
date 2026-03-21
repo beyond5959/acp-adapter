@@ -3,7 +3,8 @@
   "title": "PluginInstallResponse",
   "type": "object",
   "required": [
-    "appsNeedingAuth"
+    "appsNeedingAuth",
+    "authPolicy"
   ],
   "properties": {
     "appsNeedingAuth": {
@@ -11,11 +12,14 @@
       "items": {
         "$ref": "#/definitions/AppSummary"
       }
+    },
+    "authPolicy": {
+      "$ref": "#/definitions/PluginAuthPolicy"
     }
   },
   "definitions": {
     "AppSummary": {
-      "description": "EXPERIMENTAL - app metadata summary for plugin-install responses.",
+      "description": "EXPERIMENTAL - app metadata summary for plugin responses.",
       "type": "object",
       "required": [
         "id",
@@ -41,6 +45,13 @@
           "type": "string"
         }
       }
+    },
+    "PluginAuthPolicy": {
+      "type": "string",
+      "enum": [
+        "ON_INSTALL",
+        "ON_USE"
+      ]
     }
   }
 }
