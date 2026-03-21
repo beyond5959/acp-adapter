@@ -850,6 +850,20 @@ func (c *Client) handleNotification(msg RPCMessage) {
 			ItemType: "reasoning_raw",
 			Delta:    note.Delta,
 		}, false)
+	case notificationItemCommandExecutionOutputDelta:
+		var note CommandExecutionOutputDeltaNotification
+		if err := json.Unmarshal(msg.Params, &note); err != nil {
+			c.logger.Warn("ignore malformed item/commandExecution/outputDelta", slog.String("error", err.Error()))
+			return
+		}
+		c.pushTurnEvent(note.TurnID, TurnEvent{
+			Type:     TurnEventTypeCommandExecutionDelta,
+			ThreadID: note.ThreadID,
+			TurnID:   note.TurnID,
+			ItemID:   note.ItemID,
+			ItemType: "commandExecution",
+			Delta:    note.Delta,
+		}, false)
 	case notificationItemCompleted:
 		var note ItemCompletedNotification
 		if err := json.Unmarshal(msg.Params, &note); err != nil {
@@ -944,7 +958,7 @@ func itemText(item *ThreadItemRef) string {
 		return ""
 	}
 	if strings.EqualFold(strings.TrimSpace(item.Type), "commandExecution") && item.AggregatedOutput != nil {
-		return strings.TrimSpace(*item.AggregatedOutput)
+		return *item.AggregatedOutput
 	}
 	return strings.TrimSpace(item.Text)
 }
@@ -965,7 +979,7 @@ func commandExecutionFromItem(item *ThreadItemRef) *CommandExecution {
 		Status:         strings.TrimSpace(item.Status),
 	}
 	if item.AggregatedOutput != nil {
-		cmd.AggregatedOutput = strings.TrimSpace(*item.AggregatedOutput)
+		cmd.AggregatedOutput = *item.AggregatedOutput
 	}
 	if item.DurationMs != nil {
 		durationMs := *item.DurationMs

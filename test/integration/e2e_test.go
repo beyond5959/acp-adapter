@@ -2043,8 +2043,14 @@ func TestE2ECommandExecutionItemsMappedToToolCallUpdates(t *testing.T) {
 			}
 			switch update.Status {
 			case "in_progress":
+				if update.Update.Content == nil || !strings.Contains(update.Update.Content.Text, "pwd") {
+					t.Fatalf("in_progress command tool_call_update should expose command content, got %+v", update.Update.Content)
+				}
 				started = update
 			case "completed":
+				if update.Update.Content == nil || !strings.Contains(update.Update.Content.Text, "/Users/niuniu/Code/acp-adapter") {
+					t.Fatalf("completed command tool_call_update should expose aggregated output content, got %+v", update.Update.Content)
+				}
 				completed = update
 			}
 		default:
@@ -2076,6 +2082,78 @@ func TestE2ECommandExecutionItemsMappedToToolCallUpdates(t *testing.T) {
 	}
 	if sawCommandStatus {
 		t.Fatalf("commandExecution items should map to tool_call_update instead of generic status updates")
+	}
+}
+
+func TestE2ECommandExecutionOutputDeltaMappedToToolCallContent(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "command execution streaming mapping",
+	})
+
+	gotPromptResp := false
+	sawLine1 := false
+	sawLine2 := false
+	sawCompletedOutput := false
+	var toolCallID string
+	for !gotPromptResp || !sawCompletedOutput {
+		msg := h.nextMessage(responseTimeout)
+		switch msg.Method {
+		case "session/update":
+			update := decodeSessionUpdate(t, msg)
+			if update.SessionID != newResult.SessionID || update.Type != "tool_call_update" || update.Approval != "command" {
+				continue
+			}
+			if update.ToolCallID == "" {
+				t.Fatalf("streaming command tool_call_update missing toolCallId")
+			}
+			if toolCallID == "" {
+				toolCallID = update.ToolCallID
+			} else if toolCallID != update.ToolCallID {
+				t.Fatalf("streaming command tool_call_update changed toolCallId: got=%q want=%q", update.ToolCallID, toolCallID)
+			}
+			if update.Update == nil || update.Update.Content == nil {
+				continue
+			}
+			text := update.Update.Content.Text
+			if update.Status == "in_progress" && strings.Contains(text, "line1\n") {
+				sawLine1 = true
+			}
+			if update.Status == "in_progress" && strings.Contains(text, "line2\n") {
+				sawLine2 = true
+			}
+			if update.Status == "completed" && strings.Contains(text, "line1\nline2\n") {
+				sawCompletedOutput = true
+			}
+		default:
+			if messageID(msg) != "3" {
+				continue
+			}
+			var result struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, msg, &result)
+			if result.StopReason != "end_turn" {
+				t.Fatalf("command execution streaming prompt expected stopReason=end_turn, got %q", result.StopReason)
+			}
+			gotPromptResp = true
+		}
+	}
+
+	if !sawLine1 || !sawLine2 {
+		t.Fatalf("expected streamed command output deltas in tool_call_update content, sawLine1=%v sawLine2=%v", sawLine1, sawLine2)
 	}
 }
 
@@ -3595,6 +3673,7 @@ func TestE2ERealCodexCommandExecutionMappedToToolCalls(t *testing.T) {
 	sawCommandStarted := false
 	sawCommandTerminal := false
 	sawCommandStatusFallback := false
+	sawCommandContent := false
 	gotPromptResp := false
 	cancelSent := false
 	gotCancelResp := false
@@ -3616,6 +3695,9 @@ func TestE2ERealCodexCommandExecutionMappedToToolCalls(t *testing.T) {
 			}
 			if update.ToolCallID == "" {
 				t.Fatalf("real command tool_call_update missing toolCallId")
+			}
+			if update.Update != nil && update.Update.Content != nil && strings.TrimSpace(update.Update.Content.Text) != "" {
+				sawCommandContent = true
 			}
 			switch update.Status {
 			case "in_progress":
@@ -3656,6 +3738,9 @@ func TestE2ERealCodexCommandExecutionMappedToToolCalls(t *testing.T) {
 			sawCommandStarted,
 			sawCommandTerminal,
 		)
+	}
+	if !sawCommandContent {
+		t.Fatalf("expected real codex command tool_call_update to include standard update.content text")
 	}
 	if sawCommandStatusFallback {
 		t.Fatalf("real commandExecution items should not fall back to generic status updates once mapped to tool_call_update")

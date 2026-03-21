@@ -1132,13 +1132,18 @@
     - started -> `status="in_progress"`
     - completed/failed/declined -> `status="completed|failed"`
     - `title/message` 使用真实命令字符串
+    - `update.content.text` 填充运行时内容：
+      - started 时放命令字符串
+      - `item/commandExecution/outputDelta` 时放逐块输出文本
+      - completed/failed 时优先放 `aggregatedOutput`
+  - 对 command output 采用“保真透传”而不是 `TrimSpace` 归一化，确保尾部换行、空白 chunk、逐块输出在 ACP `tool_call_update.content` 中不会丢失。
   - 当结构化 command tool call 已经发出时，抑制同一 item 的 generic `status item_started/item_completed` fallback；同时对 permission 路径与 runtime item 路径做同 id 去重。
 - 备选方案：
   - 方案A：继续只发普通 `status` 更新，让 ACP client 自己从 `itemType=commandExecution` 猜测工具调用。
   - 方案B：直接把 runtime `commandExecution` 生命周期桥接成 ACP 标准 `tool_call_update`。（采用）
 - 取舍（Pros/Cons）：
-  - Pros：真实 codex 链路下，ACP client 终于能以标准 tool-call 语义收到命令调用；`toolCallId` 能与 app-server trace 一一对齐，便于调试与回归。
-  - Cons：当前只桥接 tool-call 生命周期；`item/commandExecution/outputDelta` 的逐块 stdout/stderr 仍未单独映射，详见 KI-0044。
+  - Pros：真实 codex 链路下，ACP client 终于能以标准 tool-call 语义收到命令调用；`toolCallId` 能与 app-server trace 一一对齐，且 `tool_call_update.content` 可直接承载命令、流式输出与最终聚合输出文本。
+  - Cons：当前 app-server `item/commandExecution/outputDelta` 事件本身不区分 stdout/stderr 通道，adapter 只能把它们作为单一文本流桥接，详见 KI-0044。
 - 影响范围（文件/模块）：
   - `internal/codex/types.go`
   - `internal/codex/client.go`
@@ -1147,5 +1152,6 @@
   - `test/integration/e2e_test.go`
 - 验证方式（测试/验收项）：
   - `TestE2ECommandExecutionItemsMappedToToolCallUpdates`
+  - `TestE2ECommandExecutionOutputDeltaMappedToToolCallContent`
   - `TestE2ERealCodexCommandExecutionMappedToToolCalls`
   - `go test ./...`

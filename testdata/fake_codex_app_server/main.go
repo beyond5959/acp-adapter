@@ -649,6 +649,10 @@ func (s *fakeServer) runTurn(
 		s.runApprovalTurn(threadID, turnID, lowerInput, control)
 		return
 	}
+	if strings.Contains(lowerInput, "command execution streaming mapping") {
+		s.runCommandExecutionStreamingTurn(threadID, turnID, control)
+		return
+	}
 	if strings.Contains(lowerInput, "command execution mapping") {
 		s.runCommandExecutionTurn(threadID, turnID, control)
 		return
@@ -911,6 +915,54 @@ func (s *fakeServer) runCommandExecutionTurn(threadID, turnID string, control *t
 	s.writeTurnCompleted(threadID, turnID, "end_turn")
 }
 
+func (s *fakeServer) runCommandExecutionStreamingTurn(threadID, turnID string, control *turnControl) {
+	defer s.removeTurn(turnID)
+
+	commandItemID := fmt.Sprintf("command-stream-%s", turnID)
+	messageItemID := fmt.Sprintf("item-%s", turnID)
+	command := `/bin/zsh -lc "printf '\''line1\nline2\n'\''"`
+	actions := []codex.CommandAction{{
+		Type:    "read",
+		Command: `printf 'line1\nline2\n'`,
+		Name:    "stdout",
+	}}
+
+	s.writeTurnStarted(threadID, turnID)
+	select {
+	case <-control.cancel:
+		s.writeTurnCompleted(threadID, turnID, "cancelled")
+		return
+	default:
+	}
+
+	s.writeCommandExecutionStarted(
+		threadID,
+		turnID,
+		commandItemID,
+		command,
+		"/Users/niuniu/Code/acp-adapter",
+		actions,
+	)
+	s.writeCommandExecutionOutputDelta(threadID, turnID, commandItemID, "line1\n")
+	s.writeCommandExecutionOutputDelta(threadID, turnID, commandItemID, "line2\n")
+	s.writeCommandExecutionCompleted(
+		threadID,
+		turnID,
+		commandItemID,
+		command,
+		"/Users/niuniu/Code/acp-adapter",
+		actions,
+		"line1\nline2\n",
+		0,
+		"completed",
+	)
+
+	s.writeItemStarted(threadID, turnID, messageItemID, "agent_message")
+	s.writeAgentMessageDelta(threadID, turnID, messageItemID, "done")
+	s.writeItemCompleted(threadID, turnID, messageItemID, "agent_message")
+	s.writeTurnCompleted(threadID, turnID, "end_turn")
+}
+
 func (s *fakeServer) runReviewTurn(
 	threadID string,
 	turnID string,
@@ -1150,6 +1202,15 @@ func (s *fakeServer) writeCommandExecutionCompleted(
 			ExitCode:         &exitCode,
 			Status:           status,
 		},
+	})
+}
+
+func (s *fakeServer) writeCommandExecutionOutputDelta(threadID, turnID, itemID, delta string) {
+	s.writeNotification("item/commandExecution/outputDelta", codex.CommandExecutionOutputDeltaNotification{
+		ThreadID: threadID,
+		TurnID:   turnID,
+		ItemID:   itemID,
+		Delta:    delta,
 	})
 }
 
