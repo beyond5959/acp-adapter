@@ -294,17 +294,23 @@ type TurnRef struct {
 
 // ThreadItemRef is a minimal item object shape used by item started/completed notifications.
 type ThreadItemRef struct {
-	ID               string          `json:"id,omitempty"`
-	Type             string          `json:"type,omitempty"`
-	Text             string          `json:"text,omitempty"`
-	Command          string          `json:"command,omitempty"`
-	CommandActions   []CommandAction `json:"commandActions,omitempty"`
-	CWD              string          `json:"cwd,omitempty"`
-	AggregatedOutput *string         `json:"aggregatedOutput,omitempty"`
-	DurationMs       *int64          `json:"durationMs,omitempty"`
-	ExitCode         *int            `json:"exitCode,omitempty"`
-	ProcessID        string          `json:"processId,omitempty"`
-	Status           string          `json:"status,omitempty"`
+	ID               string                             `json:"id,omitempty"`
+	Type             string                             `json:"type,omitempty"`
+	Text             string                             `json:"text,omitempty"`
+	Tool             string                             `json:"tool,omitempty"`
+	Server           string                             `json:"server,omitempty"`
+	Changes          []FileUpdateChange                 `json:"changes,omitempty"`
+	Command          string                             `json:"command,omitempty"`
+	CommandActions   []CommandAction                    `json:"commandActions,omitempty"`
+	ContentItems     []DynamicToolCallOutputContentItem `json:"contentItems,omitempty"`
+	Result           *MCPToolCallResult                 `json:"result,omitempty"`
+	Success          *bool                              `json:"success,omitempty"`
+	CWD              string                             `json:"cwd,omitempty"`
+	AggregatedOutput *string                            `json:"aggregatedOutput,omitempty"`
+	DurationMs       *int64                             `json:"durationMs,omitempty"`
+	ExitCode         *int                               `json:"exitCode,omitempty"`
+	ProcessID        string                             `json:"processId,omitempty"`
+	Status           string                             `json:"status,omitempty"`
 }
 
 // CommandAction is app-server's best-effort structured interpretation of one shell command segment.
@@ -314,6 +320,13 @@ type CommandAction struct {
 	Name    string  `json:"name,omitempty"`
 	Path    *string `json:"path,omitempty"`
 	Query   *string `json:"query,omitempty"`
+}
+
+// FileUpdateChange is one file diff inside a fileChange item.
+type FileUpdateChange struct {
+	Diff string `json:"diff,omitempty"`
+	Kind string `json:"kind,omitempty"`
+	Path string `json:"path,omitempty"`
 }
 
 // CommandExecution describes one runtime command tool call emitted by app-server items.
@@ -382,6 +395,13 @@ type TurnPlanUpdatedNotification struct {
 	TurnID      string         `json:"turnId"`
 	Explanation string         `json:"explanation,omitempty"`
 	Plan        []TurnPlanStep `json:"plan"`
+}
+
+// TurnDiffUpdatedNotification carries the latest aggregated turn diff.
+type TurnDiffUpdatedNotification struct {
+	ThreadID string `json:"threadId"`
+	TurnID   string `json:"turnId"`
+	Diff     string `json:"diff"`
 }
 
 // TurnPlanStep is one app-server plan step entry.
@@ -543,6 +563,26 @@ type DynamicToolCallOutputContentItem struct {
 	ImageURL string `json:"imageUrl,omitempty"`
 }
 
+// ToolOutputContentItem is one normalized downstream tool output entry.
+type ToolOutputContentItem struct {
+	Type     string
+	Text     string
+	Data     string
+	MimeType string
+	URI      string
+}
+
+// ToolExecution describes one runtime tool call emitted by app-server items.
+type ToolExecution struct {
+	ID           string
+	Kind         string
+	Tool         string
+	Server       string
+	Status       string
+	Success      *bool
+	ContentItems []ToolOutputContentItem
+}
+
 // MCPServer describes one MCP server capability snapshot.
 type MCPServer struct {
 	Name          string   `json:"name"`
@@ -564,7 +604,9 @@ type MCPToolCallParams struct {
 
 // MCPToolCallResult returns MCP tool output payload.
 type MCPToolCallResult struct {
-	Output string `json:"output,omitempty"`
+	Output            string            `json:"output,omitempty"`
+	Content           []json.RawMessage `json:"content,omitempty"`
+	StructuredContent any               `json:"structuredContent,omitempty"`
 }
 
 // MCPOAuthLoginParams starts one MCP OAuth flow for one server.
@@ -611,6 +653,8 @@ const (
 	TurnEventTypeReasoningDelta TurnEventType = "reasoning_delta"
 	// TurnEventTypeCommandExecutionDelta indicates downstream streamed command output text.
 	TurnEventTypeCommandExecutionDelta TurnEventType = "command_execution_delta"
+	// TurnEventTypeDiffUpdated indicates downstream streamed aggregated turn diff.
+	TurnEventTypeDiffUpdated TurnEventType = "diff_updated"
 )
 
 // TurnEvent is emitted to ACP session/prompt handler.
@@ -622,6 +666,8 @@ type TurnEvent struct {
 	ItemType   string
 	ItemText   string
 	Command    *CommandExecution
+	Tool       *ToolExecution
+	Diff       string
 	Delta      string
 	StopReason string
 	Message    string
@@ -663,6 +709,7 @@ const (
 	notificationItemReasoningSummaryPartAdded   = "item/reasoning/summaryPartAdded"
 	notificationItemReasoningTextDelta          = "item/reasoning/textDelta"
 	notificationItemCommandExecutionOutputDelta = "item/commandExecution/outputDelta"
+	notificationTurnDiffUpdated                 = "turn/diff/updated"
 	notificationTurnCompleted                   = "turn/completed"
 	notificationReviewModeEntered               = "review/mode_entered"
 	notificationReviewModeExited                = "review/mode_exited"

@@ -214,6 +214,56 @@ func TestBuildSessionUpdatePayloadAvailableCommands(t *testing.T) {
 	}
 }
 
+func TestBuildSessionUpdatePayloadToolCallContent(t *testing.T) {
+	t.Parallel()
+
+	payload := buildSessionUpdatePayload(SessionUpdateParams{
+		SessionID:  "session-1",
+		TurnID:     "turn-1",
+		Type:       "tool_call_update",
+		Status:     "completed",
+		ToolCallID: "tool-1",
+		ToolCallContent: []ToolCallContentItem{
+			{
+				Type: "content",
+				Content: &PromptContentBlock{
+					Type:     "image",
+					Data:     "ZmFrZQ==",
+					MimeType: "image/png",
+				},
+			},
+			{
+				Type:    "diff",
+				Path:    "/workspace/docs/README.md",
+				OldText: "old line\n",
+				NewText: "new line\n",
+			},
+		},
+	})
+
+	update, ok := payload["update"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload missing update envelope: %+v", payload)
+	}
+	if got, _ := update["sessionUpdate"].(string); got != "tool_call_update" {
+		t.Fatalf("update.sessionUpdate=%q, want tool_call_update", got)
+	}
+	content, ok := update["content"].([]ToolCallContentItem)
+	if !ok {
+		t.Fatalf("update.content has unexpected type %T", update["content"])
+	}
+	if len(content) != 2 || content[0].Content == nil || content[0].Content.Type != "image" || content[1].Type != "diff" {
+		t.Fatalf("update.content mismatch: %+v", content)
+	}
+	topLevel, ok := payload["toolCallContent"].([]ToolCallContentItem)
+	if !ok {
+		t.Fatalf("payload.toolCallContent has unexpected type %T", payload["toolCallContent"])
+	}
+	if len(topLevel) != 2 || topLevel[0].Content == nil || topLevel[0].Content.MimeType != "image/png" || topLevel[1].Path != "/workspace/docs/README.md" {
+		t.Fatalf("payload.toolCallContent mismatch: %+v", topLevel)
+	}
+}
+
 type stdioMockAppClient struct{}
 
 func (m *stdioMockAppClient) ThreadStart(ctx context.Context, cwd string, options codex.RunOptions) (string, error) {

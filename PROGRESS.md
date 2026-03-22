@@ -6,7 +6,7 @@
 ## 项目概览
 - 项目：acp-adapter（基于 Codex App Server 的 ACP 适配器，同时支持 Claude Code CLI 子进程适配）
 - 当前阶段：Claude Adapter CLI 重构完成（C-R5 内部迭代）
-- 最近更新：2026-03-21
+- 最近更新：2026-03-22
 
 ## 关键链接/文档
 - docs/SPEC.md：技术方案（权威）
@@ -75,6 +75,38 @@
   - 新增 `test/integration/e2e_test.go::TestE2ECommandExecutionItemsMappedToToolCallUpdates`，覆盖 fake app-server 的 commandExecution item -> ACP tool_call_update 映射。
   - 新增 `test/integration/e2e_test.go::TestE2ECommandExecutionOutputDeltaMappedToToolCallContent`，覆盖 fake app-server 的 `item/commandExecution/outputDelta` -> ACP `tool_call_update.content` 流式桥接。
   - 新增 `test/integration/e2e_test.go::TestE2ERealCodexCommandExecutionMappedToToolCalls`，覆盖真实 codex trace 中 `commandExecution` / `aggregatedOutput` 与 ACP `tool_call_update` 的 id 对齐。
+  - 全量通过：`go test ./...`
+
+## 2026-03-22 增量修复（Codex/MCP 工具图片输出 -> ACP image block）
+- 修复点：
+  - `internal/acp/server` 现在会为 `session/update(type="tool_call_update")` 构造标准 ACP `update.content[]`，每项使用 `{"type":"content","content":<ContentBlock>}` 形态，而不再把 tool output 限死为单个纯文本对象。
+  - runtime `dynamicToolCall` / `mcpToolCall` item 新增结构化解析：
+    - `dynamicToolCall.contentItems[].type=inputText` -> ACP text block
+    - `dynamicToolCall.contentItems[].type=inputImage,imageUrl=data:...` -> ACP image block
+    - `mcpToolCall.result.content[]` 中的 MCP `text` / `image` content item -> 直接桥接为 ACP text / image block
+  - `/mcp call` 直连路径也同步升级：
+    - text 结果继续作为普通 message chunk 可见
+    - image 结果会进入 terminal `tool_call_update.content[]`，供 ACP client 直接渲染图片
+  - 对只返回普通 URL 的图片结果，当前会保守降级为文本提示 `image available at ...`，避免伪造不完整的 ACP image block。
+- 测试与回归：
+  - 新增 `internal/acp/server_stdio_test.go::TestBuildSessionUpdatePayloadToolCallContent`，覆盖标准 `tool_call_update.content[]` payload 序列化。
+  - 新增 `test/integration/e2e_test.go::TestE2EToolImageItemsMappedToACPImageBlock`，覆盖 fake app-server `dynamicToolCall` item -> ACP image block。
+  - 扩展 `test/integration/e2e_test.go::TestE2EAcceptanceG1ToG6SlashCommandsAndMCP`，覆盖 `/mcp call ... render-image` -> completed `tool_call_update` image content。
+  - 全量通过：`go test ./...`
+
+## 2026-03-22 增量修复（Codex `turn/diff/updated` -> ACP tool-call diffs）
+- 修复点：
+  - `internal/codex/client` 新增 `turn/diff/updated` 事件接收与内部 `TurnEventTypeDiffUpdated` 分发，保留 app-server 的聚合 unified diff 字符串。
+  - `internal/acp/server` 新增 turn diff 桥接：
+    - 为每个 turn 维护稳定的 `toolCallId`（`turn-diff-<turnId>`）
+    - 收到 `turn/diff/updated` 时，优先把 unified diff 解析成 ACP `tool_call_update.content[type="diff"]`
+    - `path` 基于 ACP session `cwd` 解析为绝对路径，并通过客户端 `fs/read_text_file` 读取旧文本后回放 patch，生成 `oldText/newText`
+    - turn 正常结束时补发 `completed`，异常结束时补发 `failed`，保证 tool-call 生命周期闭环
+  - 当 diff 无法结构化重建时，adapter 保守降级为 fenced `diff` 文本块，而不是伪造不完整的 ACP diff item。
+  - 修复 `fs/read_text_file` 读取结果时错误 `TrimSpace` 的问题，避免尾部换行丢失导致 patch 回放失败。
+- 测试与回归：
+  - 扩展 `internal/acp/server_stdio_test.go::TestBuildSessionUpdatePayloadToolCallContent`，覆盖 ACP `tool_call_update.content[]` 中 `diff` item 的序列化。
+  - 新增 `test/integration/e2e_test.go::TestE2ETurnDiffUpdatedMappedToToolCallDiffs`，覆盖 fake app-server `turn/diff/updated` -> ACP `tool_call_update.content[type=diff]`，并验证 `fs/read_text_file` 请求路径、`oldText/newText` 与稳定 `toolCallId`。
   - 全量通过：`go test ./...`
 
 ## Library Embedding Program（R0-R6）

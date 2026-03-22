@@ -48,6 +48,7 @@
 - KI-0042：`available_commands_update` 目前仍是 adapter 级命令目录
 - KI-0043：默认开启 detailed reasoning summary 会增加输出与 token 消耗
 - KI-0044：runtime `commandExecution` 仍无法区分 stdout/stderr 通道
+- KI-0045：工具图片若只有 URL、没有 inline data，无法桥接为完整 ACP image block
 
 ---
 
@@ -606,3 +607,38 @@
   - 若必须区分 stdout/stderr，只能依赖未来 app-server 增补字段，或让命令本身在输出里带自定义前缀。
 - 后续计划：
   - 持续跟踪 app-server schema；如果后续 `commandExecution/outputDelta` 增加通道元数据，再把它映射到 ACP 更细粒度的输出语义。
+
+## KI-0045：工具图片若只有 URL、没有 inline data，无法桥接为完整 ACP image block
+- 现象：
+  - 适配器现在已经支持把两类工具图片结果桥接为 ACP image block：
+    - `dynamicToolCall.contentItems[].imageUrl=data:...`
+    - `mcpToolCall.result.content[].type=image,data,mimeType`
+  - 但如果下游只返回普通 URL（例如 `https://.../image.png` 或本地文件 URL），没有 inline base64/data-uri，adapter 无法安全构造完整 ACP `image` content block。
+- 影响：
+  - 支持 inline data 的客户端现在可以直接渲染图片。
+  - URL-only 图片结果当前会降级为文本提示 `image available at ...`，ACP client 需要自行点击/二次拉取，不能保证内联显示。
+- 复现：
+  - 让 dynamic tool 只返回 `imageUrl=https://example.com/demo.png`，或让 MCP tool 只返回图片链接、不返回 `{type:"image", data, mimeType}`。
+- Workaround：
+  - 对 dynamic tool：优先返回 `data:` URI。
+  - 对 MCP tool：优先返回标准 MCP image content item（`{type:"image", data, mimeType}`）。
+  - 若只能返回 URL，则让 ACP client 把该 URL 作为二次读取/预览入口处理。
+- 后续计划：
+  - 若 ACP / downstream 后续明确支持“URL-only image content”的标准形态，再升级桥接逻辑；在此之前保持 fail-closed，不伪造不完整 image block。
+
+## KI-0046：`turn/diff/updated` 的 ACP 结构化 diff 重建依赖 `fs/read_text_file` 与旧文件一致性
+- 现象：
+  - 适配器现在会尝试把 Codex App Server 的 `turn/diff/updated` 桥接成 ACP `tool_call_update.content[type="diff"]`。
+  - 但 app-server 提供的是 unified diff 字符串，不直接包含 ACP diff 所需的 `oldText/newText`；adapter 需要先通过客户端 `fs/read_text_file` 读取旧文件，再在本地回放 patch 才能构造标准 diff item。
+- 影响：
+  - 若客户端没有声明 `fs/read_text_file` 能力，或旧文件内容与 unified diff 的上下文不一致（例如外部已修改文件），adapter 无法可靠生成结构化 `diff` item。
+  - 这类场景下当前会降级为 fenced diff 文本，ACP client 仍能看到变更文本，但不能用标准 diff UI 渲染。
+- 复现：
+  - 用不支持 `fs.read_text_file` 的 ACP client 触发包含文件变更的 Codex turn。
+  - 或让客户端工作区文件内容与 `turn/diff/updated` 所针对的旧版本不一致，再触发 diff 回放。
+- Workaround：
+  - 让 ACP client 实现并声明 `fs/read_text_file`。
+  - 保持 session `cwd` 与实际工作区一致，并尽量避免 turn 期间由外部并发改写同一文件。
+  - 若只需要展示变更文本，可直接消费 adapter 降级后的 fenced diff 文本。
+- 后续计划：
+  - 持续跟踪 app-server 是否会补充结构化 file-change payload；若后续直接提供 `path/oldText/newText` 或更稳定的 file change item，可去掉当前“读取旧文件 + 回放 unified diff”的重建步骤。
