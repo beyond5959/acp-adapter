@@ -76,7 +76,8 @@ type planEntry struct {
 type sessionUpdatePayload struct {
 	SessionUpdate     string                    `json:"sessionUpdate"`
 	Entries           []planEntry               `json:"entries,omitempty"`
-	Content           *sessionUpdateContent     `json:"content,omitempty"`
+	Content           *sessionUpdateContent     `json:"-"`
+	ToolContents      []sessionToolCallContent  `json:"-"`
 	ConfigOptions     []sessionConfigOption     `json:"configOptions,omitempty"`
 	AvailableCommands []sessionAvailableCommand `json:"availableCommands,omitempty"`
 	Status            string                    `json:"status,omitempty"`
@@ -85,8 +86,71 @@ type sessionUpdatePayload struct {
 }
 
 type sessionUpdateContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	Data     string `json:"data,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
+	URI      string `json:"uri,omitempty"`
+}
+
+type sessionToolCallContent struct {
+	Type    string                `json:"type"`
+	Content *sessionUpdateContent `json:"content,omitempty"`
+	Path    string                `json:"path,omitempty"`
+	OldText string                `json:"oldText,omitempty"`
+	NewText string                `json:"newText,omitempty"`
+}
+
+func (p *sessionUpdatePayload) UnmarshalJSON(data []byte) error {
+	type rawPayload struct {
+		SessionUpdate     string                    `json:"sessionUpdate"`
+		Entries           []planEntry               `json:"entries,omitempty"`
+		Content           json.RawMessage           `json:"content,omitempty"`
+		ConfigOptions     []sessionConfigOption     `json:"configOptions,omitempty"`
+		AvailableCommands []sessionAvailableCommand `json:"availableCommands,omitempty"`
+		Status            string                    `json:"status,omitempty"`
+		Title             string                    `json:"title,omitempty"`
+		ToolCallID        string                    `json:"toolCallId,omitempty"`
+	}
+
+	var raw rawPayload
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	p.SessionUpdate = raw.SessionUpdate
+	p.Entries = raw.Entries
+	p.ConfigOptions = raw.ConfigOptions
+	p.AvailableCommands = raw.AvailableCommands
+	p.Status = raw.Status
+	p.Title = raw.Title
+	p.ToolCallID = raw.ToolCallID
+
+	if len(raw.Content) == 0 {
+		return nil
+	}
+
+	if raw.SessionUpdate == "tool_call_update" {
+		var toolContents []sessionToolCallContent
+		if err := json.Unmarshal(raw.Content, &toolContents); err == nil {
+			p.ToolContents = toolContents
+			for _, item := range toolContents {
+				if item.Content != nil && item.Content.Type == "text" {
+					contentCopy := *item.Content
+					p.Content = &contentCopy
+					break
+				}
+			}
+			return nil
+		}
+	}
+
+	var content sessionUpdateContent
+	if err := json.Unmarshal(raw.Content, &content); err != nil {
+		return err
+	}
+	p.Content = &content
+	return nil
 }
 
 type sessionAvailableCommand struct {
@@ -2048,7 +2112,7 @@ func TestE2ECommandExecutionItemsMappedToToolCallUpdates(t *testing.T) {
 				}
 				started = update
 			case "completed":
-				if update.Update.Content == nil || !strings.Contains(update.Update.Content.Text, "/Users/niuniu/Code/acp-adapter") {
+				if update.Update.Content == nil || !strings.Contains(update.Update.Content.Text, repoRoot(t)) {
 					t.Fatalf("completed command tool_call_update should expose aggregated output content, got %+v", update.Update.Content)
 				}
 				completed = update
@@ -2154,6 +2218,203 @@ func TestE2ECommandExecutionOutputDeltaMappedToToolCallContent(t *testing.T) {
 
 	if !sawLine1 || !sawLine2 {
 		t.Fatalf("expected streamed command output deltas in tool_call_update content, sawLine1=%v sawLine2=%v", sawLine1, sawLine2)
+	}
+}
+
+func TestE2EToolImageItemsMappedToACPImageBlock(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "tool image mapping",
+	})
+
+	gotPromptResp := false
+	sawToolStarted := false
+	sawToolText := false
+	sawToolImage := false
+	sawGenericStatus := false
+	for !gotPromptResp || !sawToolImage {
+		msg := h.nextMessage(responseTimeout)
+		switch msg.Method {
+		case "session/update":
+			update := decodeSessionUpdate(t, msg)
+			if update.SessionID != newResult.SessionID {
+				continue
+			}
+			if update.Type == "status" && update.ItemType == "dynamicToolCall" {
+				sawGenericStatus = true
+			}
+			if update.Type != "tool_call_update" {
+				continue
+			}
+			if update.Status == "in_progress" && strings.Contains(update.Message, "render_image") {
+				sawToolStarted = true
+			}
+			if update.Update == nil {
+				continue
+			}
+			for _, item := range update.Update.ToolContents {
+				if item.Content == nil {
+					continue
+				}
+				if item.Content.Type == "text" && strings.Contains(item.Content.Text, "tool image ready") {
+					sawToolText = true
+				}
+				if item.Content.Type == "image" && item.Content.MimeType == "image/png" && strings.TrimSpace(item.Content.Data) != "" {
+					sawToolImage = true
+				}
+			}
+		default:
+			if messageID(msg) != "3" {
+				continue
+			}
+			var result struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, msg, &result)
+			if result.StopReason != "end_turn" {
+				t.Fatalf("tool image prompt expected stopReason=end_turn, got %q", result.StopReason)
+			}
+			gotPromptResp = true
+		}
+	}
+
+	if !sawToolStarted {
+		t.Fatalf("tool image flow expected in_progress tool_call_update")
+	}
+	if !sawToolText {
+		t.Fatalf("tool image flow expected text tool content")
+	}
+	if !sawToolImage {
+		t.Fatalf("tool image flow expected ACP image block in tool_call_update content")
+	}
+	if sawGenericStatus {
+		t.Fatalf("dynamic tool items should map to tool_call_update instead of generic status updates")
+	}
+}
+
+func TestE2ETurnDiffUpdatedMappedToToolCallDiffs(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{
+		"capabilities": map[string]any{
+			"fs": map[string]any{
+				"read_text_file": true,
+			},
+		},
+	})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{
+		"cwd": "/workspace",
+	})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "turn diff mapping",
+	})
+
+	gotPromptResp := false
+	sawFSRead := false
+	sawInProgress := false
+	sawCompleted := false
+	var toolCallID string
+	for !gotPromptResp || !sawCompleted {
+		msg := h.nextMessage(responseTimeout)
+		switch msg.Method {
+		case "fs/read_text_file":
+			req := decodeFSReadTextFileParams(t, msg)
+			if got, want := filepath.Clean(req.Path), "/workspace/docs/README.md"; got != want {
+				t.Fatalf("turn diff fs/read_text_file path=%q, want %q", got, want)
+			}
+			sawFSRead = true
+			h.sendResultResponse(messageID(msg), map[string]any{
+				"text": "old line\n",
+			})
+		case "session/update":
+			update := decodeSessionUpdate(t, msg)
+			if update.SessionID != newResult.SessionID || update.Type != "tool_call_update" || update.ItemType != "turn_diff" {
+				continue
+			}
+			if update.ToolCallID == "" {
+				t.Fatalf("turn diff tool_call_update missing toolCallId")
+			}
+			if toolCallID == "" {
+				toolCallID = update.ToolCallID
+			} else if toolCallID != update.ToolCallID {
+				t.Fatalf("turn diff toolCallId changed: got=%q want=%q", update.ToolCallID, toolCallID)
+			}
+			if update.Approval != "file" {
+				t.Fatalf("turn diff tool call should be classified as file, got %q", update.Approval)
+			}
+			if update.Update == nil {
+				t.Fatalf("turn diff tool call missing standard update envelope")
+			}
+			foundDiff := false
+			for _, item := range update.Update.ToolContents {
+				if item.Type != "diff" {
+					continue
+				}
+				foundDiff = true
+				if item.Path != "/workspace/docs/README.md" {
+					t.Fatalf("turn diff path=%q, want /workspace/docs/README.md", item.Path)
+				}
+				if item.OldText != "old line\n" {
+					t.Fatalf("turn diff oldText mismatch: %q", item.OldText)
+				}
+				if item.NewText != "new line\n" {
+					t.Fatalf("turn diff newText mismatch: %q", item.NewText)
+				}
+			}
+			if !foundDiff {
+				t.Fatalf(
+					"turn diff tool call expected at least one diff content item, got tool contents=%+v delta=%q",
+					update.Update.ToolContents,
+					update.Delta,
+				)
+			}
+			switch update.Status {
+			case "in_progress":
+				sawInProgress = true
+			case "completed":
+				sawCompleted = true
+			}
+		default:
+			if messageID(msg) != "3" {
+				continue
+			}
+			var result struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, msg, &result)
+			if result.StopReason != "end_turn" {
+				t.Fatalf("turn diff prompt expected stopReason=end_turn, got %q", result.StopReason)
+			}
+			gotPromptResp = true
+		}
+	}
+
+	if !sawFSRead {
+		t.Fatalf("turn diff mapping expected fs/read_text_file call")
+	}
+	if !sawInProgress || !sawCompleted {
+		t.Fatalf("turn diff mapping expected in_progress and completed tool_call_update")
 	}
 }
 
@@ -3160,6 +3421,54 @@ func TestE2EAcceptanceMCPListCallAndOAuth(t *testing.T) {
 
 	h.sendRequest("5", "session/prompt", map[string]any{
 		"sessionId": newResult.SessionID,
+		"prompt":    `/mcp call demo-mcp render-image {"topic":"adapter"}`,
+	})
+	gotImageCallResp := false
+	sawImageToolCompleted := false
+	sawImageToolOutput := false
+	for !gotImageCallResp || !sawImageToolOutput {
+		msg := h.nextMessage(responseTimeout)
+		switch msg.Method {
+		case "session/request_permission":
+			req := decodeSessionRequestPermission(t, msg)
+			if req.Approval != "mcp" {
+				t.Fatalf("/mcp call image expected mcp approval, got %q", req.Approval)
+			}
+			h.sendResultResponse(messageID(msg), map[string]any{"outcome": "approved"})
+		case "session/update":
+			update := decodeSessionUpdate(t, msg)
+			if update.Type != "tool_call_update" || update.Status != "completed" || update.Update == nil {
+				continue
+			}
+			sawImageToolCompleted = true
+			for _, item := range update.Update.ToolContents {
+				if item.Content == nil {
+					continue
+				}
+				if item.Content.Type == "image" && item.Content.MimeType == "image/png" && strings.TrimSpace(item.Content.Data) != "" {
+					sawImageToolOutput = true
+				}
+			}
+		default:
+			if messageID(msg) != "5" {
+				continue
+			}
+			var result struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, msg, &result)
+			if result.StopReason != "end_turn" {
+				t.Fatalf("/mcp call image expected stopReason=end_turn, got %q", result.StopReason)
+			}
+			gotImageCallResp = true
+		}
+	}
+	if !sawImageToolCompleted || !sawImageToolOutput {
+		t.Fatalf("/mcp call image expected completed tool update with ACP image block")
+	}
+
+	h.sendRequest("6", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
 		"prompt":    "/mcp oauth demo-mcp",
 	})
 	gotOAuthResp := false
@@ -3173,7 +3482,7 @@ func TestE2EAcceptanceMCPListCallAndOAuth(t *testing.T) {
 			}
 			continue
 		}
-		if messageID(msg) != "5" {
+		if messageID(msg) != "6" {
 			continue
 		}
 		var result struct {

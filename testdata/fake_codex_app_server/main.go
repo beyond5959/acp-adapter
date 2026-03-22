@@ -13,6 +13,8 @@ import (
 	"github.com/beyond5959/acp-adapter/internal/codex"
 )
 
+const fakePNGBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aap8AAAAASUVORK5CYII="
+
 type turnControl struct {
 	cancel chan struct{}
 	once   sync.Once
@@ -323,7 +325,7 @@ func (s *fakeServer) handle(msg codex.RPCMessage) {
 	case "mcpServer/list":
 		s.writeResult(msg.ID, codex.MCPServerListResult{
 			Servers: []codex.MCPServer{
-				{Name: "demo-mcp", OAuthRequired: true, Tools: []string{"dangerous-write", "read-info"}},
+				{Name: "demo-mcp", OAuthRequired: true, Tools: []string{"dangerous-write", "read-info", "render-image"}},
 				{Name: "metrics-mcp", OAuthRequired: false, Tools: []string{"query"}},
 			},
 		})
@@ -335,6 +337,15 @@ func (s *fakeServer) handle(msg codex.RPCMessage) {
 		}
 		if strings.TrimSpace(params.Server) == "" || strings.TrimSpace(params.Tool) == "" {
 			s.writeError(msg.ID, -32602, "server and tool are required")
+			return
+		}
+		if strings.Contains(strings.ToLower(params.Tool), "image") {
+			s.writeResult(msg.ID, codex.MCPToolCallResult{
+				Content: []json.RawMessage{
+					json.RawMessage(`{"type":"text","text":"mcp image result"}`),
+					json.RawMessage(`{"type":"image","mimeType":"image/png","data":"` + fakePNGBase64 + `"}`),
+				},
+			})
 			return
 		}
 		s.writeResult(msg.ID, codex.MCPToolCallResult{
@@ -657,6 +668,14 @@ func (s *fakeServer) runTurn(
 		s.runCommandExecutionTurn(threadID, turnID, control)
 		return
 	}
+	if strings.Contains(lowerInput, "turn diff mapping") {
+		s.runTurnDiffTurn(threadID, turnID, control)
+		return
+	}
+	if strings.Contains(lowerInput, "tool image mapping") {
+		s.runToolImageTurn(threadID, turnID, control)
+		return
+	}
 
 	itemID := fmt.Sprintf("item-%s", turnID)
 	s.writeTurnStarted(threadID, turnID)
@@ -870,6 +889,7 @@ func (s *fakeServer) runCommandExecutionTurn(threadID, turnID string, control *t
 
 	commandItemID := fmt.Sprintf("command-%s", turnID)
 	messageItemID := fmt.Sprintf("item-%s", turnID)
+	cwd := fakeWorkspaceCWD()
 
 	s.writeTurnStarted(threadID, turnID)
 	select {
@@ -885,20 +905,20 @@ func (s *fakeServer) runCommandExecutionTurn(threadID, turnID string, control *t
 		turnID,
 		commandItemID,
 		command,
-		"/Users/niuniu/Code/acp-adapter",
+		cwd,
 		[]codex.CommandAction{{
 			Type:    "read",
 			Command: "pwd",
 			Name:    "cwd",
 		}},
 	)
-	output := "/Users/niuniu/Code/acp-adapter\n"
+	output := cwd + "\n"
 	s.writeCommandExecutionCompleted(
 		threadID,
 		turnID,
 		commandItemID,
 		command,
-		"/Users/niuniu/Code/acp-adapter",
+		cwd,
 		[]codex.CommandAction{{
 			Type:    "read",
 			Command: "pwd",
@@ -920,6 +940,7 @@ func (s *fakeServer) runCommandExecutionStreamingTurn(threadID, turnID string, c
 
 	commandItemID := fmt.Sprintf("command-stream-%s", turnID)
 	messageItemID := fmt.Sprintf("item-%s", turnID)
+	cwd := fakeWorkspaceCWD()
 	command := `/bin/zsh -lc "printf '\''line1\nline2\n'\''"`
 	actions := []codex.CommandAction{{
 		Type:    "read",
@@ -940,7 +961,7 @@ func (s *fakeServer) runCommandExecutionStreamingTurn(threadID, turnID string, c
 		turnID,
 		commandItemID,
 		command,
-		"/Users/niuniu/Code/acp-adapter",
+		cwd,
 		actions,
 	)
 	s.writeCommandExecutionOutputDelta(threadID, turnID, commandItemID, "line1\n")
@@ -950,7 +971,7 @@ func (s *fakeServer) runCommandExecutionStreamingTurn(threadID, turnID string, c
 		turnID,
 		commandItemID,
 		command,
-		"/Users/niuniu/Code/acp-adapter",
+		cwd,
 		actions,
 		"line1\nline2\n",
 		0,
@@ -960,6 +981,98 @@ func (s *fakeServer) runCommandExecutionStreamingTurn(threadID, turnID string, c
 	s.writeItemStarted(threadID, turnID, messageItemID, "agent_message")
 	s.writeAgentMessageDelta(threadID, turnID, messageItemID, "done")
 	s.writeItemCompleted(threadID, turnID, messageItemID, "agent_message")
+	s.writeTurnCompleted(threadID, turnID, "end_turn")
+}
+
+func fakeWorkspaceCWD() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return cwd
+}
+
+func (s *fakeServer) runToolImageTurn(threadID, turnID string, control *turnControl) {
+	defer s.removeTurn(turnID)
+
+	toolItemID := fmt.Sprintf("tool-image-%s", turnID)
+	messageItemID := fmt.Sprintf("item-%s", turnID)
+	success := true
+
+	s.writeTurnStarted(threadID, turnID)
+	select {
+	case <-control.cancel:
+		s.writeTurnCompleted(threadID, turnID, "cancelled")
+		return
+	default:
+	}
+
+	s.writeNotification("item/started", codex.ItemStartedNotification{
+		ThreadID: threadID,
+		TurnID:   turnID,
+		ItemID:   toolItemID,
+		ItemType: "dynamicToolCall",
+		Item: &codex.ThreadItemRef{
+			ID:     toolItemID,
+			Type:   "dynamicToolCall",
+			Tool:   "render_image",
+			Status: "inProgress",
+		},
+	})
+	s.writeNotification("item/completed", codex.ItemCompletedNotification{
+		ThreadID: threadID,
+		TurnID:   turnID,
+		ItemID:   toolItemID,
+		ItemType: "dynamicToolCall",
+		Item: &codex.ThreadItemRef{
+			ID:      toolItemID,
+			Type:    "dynamicToolCall",
+			Tool:    "render_image",
+			Status:  "completed",
+			Success: &success,
+			ContentItems: []codex.DynamicToolCallOutputContentItem{
+				{
+					Type: "inputText",
+					Text: "tool image ready",
+				},
+				{
+					Type:     "inputImage",
+					ImageURL: "data:image/png;base64," + fakePNGBase64,
+				},
+			},
+		},
+	})
+
+	s.writeItemStarted(threadID, turnID, messageItemID, "agent_message")
+	s.writeAgentMessageDelta(threadID, turnID, messageItemID, "done")
+	s.writeItemCompleted(threadID, turnID, messageItemID, "agent_message")
+	s.writeTurnCompleted(threadID, turnID, "end_turn")
+}
+
+func (s *fakeServer) runTurnDiffTurn(threadID, turnID string, control *turnControl) {
+	defer s.removeTurn(turnID)
+
+	itemID := fmt.Sprintf("item-%s", turnID)
+	s.writeTurnStarted(threadID, turnID)
+	select {
+	case <-control.cancel:
+		s.writeTurnCompleted(threadID, turnID, "cancelled")
+		return
+	default:
+	}
+
+	s.writeTurnDiffUpdated(threadID, turnID, strings.Join([]string{
+		"diff --git a/docs/README.md b/docs/README.md",
+		"--- a/docs/README.md",
+		"+++ b/docs/README.md",
+		"@@ -1 +1 @@",
+		"-old line",
+		"+new line",
+		"",
+	}, "\n"))
+	s.writeItemStarted(threadID, turnID, itemID, "agent_message")
+	s.writeAgentMessageDelta(threadID, turnID, itemID, "done")
+	s.writeItemCompleted(threadID, turnID, itemID, "agent_message")
 	s.writeTurnCompleted(threadID, turnID, "end_turn")
 }
 
@@ -1211,6 +1324,14 @@ func (s *fakeServer) writeCommandExecutionOutputDelta(threadID, turnID, itemID, 
 		TurnID:   turnID,
 		ItemID:   itemID,
 		Delta:    delta,
+	})
+}
+
+func (s *fakeServer) writeTurnDiffUpdated(threadID, turnID, diff string) {
+	s.writeNotification("turn/diff/updated", codex.TurnDiffUpdatedNotification{
+		ThreadID: threadID,
+		TurnID:   turnID,
+		Diff:     diff,
 	})
 }
 

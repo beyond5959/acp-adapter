@@ -52,8 +52,9 @@ const (
 )
 
 var (
-	todoChecklistPattern = regexp.MustCompile(`(?m)^\s*(?:[-*]|\d+\.)\s+\[([ xX])\]\s+(.+?)\s*$`)
-	allowedImageMimeType = map[string]struct{}{
+	todoChecklistPattern   = regexp.MustCompile(`(?m)^\s*(?:[-*]|\d+\.)\s+\[([ xX])\]\s+(.+?)\s*$`)
+	unifiedDiffHunkPattern = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
+	allowedImageMimeType   = map[string]struct{}{
 		"image/png":  {},
 		"image/jpeg": {},
 		"image/webp": {},
@@ -115,9 +116,35 @@ type turnLifecycle struct {
 	messageBuffer         strings.Builder
 	toolCallStatus        map[string]string
 	commandToolCalls      map[string]*codex.CommandExecution
+	diffToolCallID        string
+	diffToolCallContent   []ToolCallContentItem
 	hasAuthoritativePlan  bool
 	fallbackPlanItemOrder []string
 	fallbackPlanItemText  map[string]string
+}
+
+type unifiedDiffFilePatch struct {
+	Path         string
+	OldPath      string
+	NewPath      string
+	Raw          string
+	IsNewFile    bool
+	IsDeleteFile bool
+	Hunks        []unifiedDiffHunk
+}
+
+type unifiedDiffHunk struct {
+	OldStart int
+	OldCount int
+	NewStart int
+	NewCount int
+	Lines    []unifiedDiffHunkLine
+}
+
+type unifiedDiffHunkLine struct {
+	Op        byte
+	Text      string
+	NoNewline bool
 }
 
 type runtimeOptions struct {
@@ -229,6 +256,9 @@ type Server struct {
 	sessionConfigOptionsMu sync.Mutex
 	sessionConfigOptions   map[string][]SessionConfig
 
+	sessionCWDMu sync.Mutex
+	sessionCWD   map[string]string
+
 	capabilitiesMu sync.RWMutex
 	capabilities   adapterCapabilities
 
@@ -269,6 +299,7 @@ func NewServer(
 		nextClientID:         0,
 		sessionConfigs:       make(map[string]runtimeOptions),
 		sessionConfigOptions: make(map[string][]SessionConfig),
+		sessionCWD:           make(map[string]string),
 		sessionTodos:         make(map[string][]TodoItem),
 		authMode:             strings.TrimSpace(options.InitialAuthMode),
 		lastAuthMode:         strings.TrimSpace(options.InitialAuthMode),
@@ -573,6 +604,7 @@ func (s *Server) handleSessionLoad(ctx context.Context, id json.RawMessage, para
 	s.setSessionConfig(params.SessionID, loadedOptions)
 	configOptions := s.buildSessionConfigOptions(ctx, loadedOptions)
 	s.setSessionConfigOptions(params.SessionID, configOptions)
+	s.setSessionCWD(params.SessionID, params.CWD)
 
 	s.sessionTodosMu.Lock()
 	s.sessionTodos[params.SessionID] = nil
@@ -648,6 +680,7 @@ func (s *Server) handleSessionNew(ctx context.Context, id json.RawMessage, param
 	s.setSessionConfig(sessionID, options)
 	configOptions := s.buildSessionConfigOptions(ctx, options)
 	s.setSessionConfigOptions(sessionID, configOptions)
+	s.setSessionCWD(sessionID, params.CWD)
 	s.sessionTodosMu.Lock()
 	s.sessionTodos[sessionID] = nil
 	s.sessionTodosMu.Unlock()
@@ -952,6 +985,11 @@ func (s *Server) handleSessionPrompt(ctx context.Context, id json.RawMessage, pa
 					s.writePromptResult(id, stopReason)
 					return
 				}
+				continue
+			}
+			if event.Type == codex.TurnEventTypeDiffUpdated {
+				retrySafe = false
+				s.emitUpdates(s.handleDiffEvent(turnCtx, lifecycle, event))
 				continue
 			}
 			if event.Type != codex.TurnEventTypeStarted {
@@ -1454,6 +1492,7 @@ func (s *Server) handleApprovalEvent(
 			decision,
 			toolStatus,
 			toolMessage,
+			nil,
 		),
 	)
 
@@ -1472,6 +1511,18 @@ func (s *Server) handleApprovalEvent(
 	}
 
 	return updates, false, ""
+}
+
+func (s *Server) handleDiffEvent(
+	ctx context.Context,
+	lifecycle *turnLifecycle,
+	event codex.TurnEvent,
+) []SessionUpdateParams {
+	content := s.resolveTurnDiffToolCallContent(ctx, lifecycle.sessionID, event.Diff)
+	if len(content) == 0 {
+		return nil
+	}
+	return []SessionUpdateParams{lifecycle.diffInProgressUpdate(content)}
 }
 
 func (s *Server) writePromptResult(id json.RawMessage, stopReason string) {
@@ -1543,6 +1594,12 @@ func buildSessionUpdatePayload(update SessionUpdateParams) map[string]any {
 	if update.PermissionDecision != "" {
 		payload["permissionDecision"] = update.PermissionDecision
 	}
+	if update.Content != nil {
+		payload["content"] = clonePromptContentBlock(update.Content)
+	}
+	if len(update.ToolCallContent) > 0 {
+		payload["toolCallContent"] = cloneToolCallContentOrEmpty(update.ToolCallContent)
+	}
 	if len(update.Todo) > 0 {
 		payload["todo"] = update.Todo
 	}
@@ -1570,12 +1627,16 @@ func mapACPUpdateForClient(update SessionUpdateParams) map[string]any {
 		if strings.EqualFold(strings.TrimSpace(update.Role), "user") {
 			sessionUpdate = "user_message_chunk"
 		}
+		content := update.Content
+		if content == nil {
+			content = textPromptContentBlock(update.Delta)
+		}
+		if content == nil {
+			return nil
+		}
 		return map[string]any{
 			"sessionUpdate": sessionUpdate,
-			"content": map[string]any{
-				"type": "text",
-				"text": update.Delta,
-			},
+			"content":       clonePromptContentBlock(content),
 		}
 	case "tool_call_update":
 		mapped := map[string]any{
@@ -1590,11 +1651,12 @@ func mapACPUpdateForClient(update SessionUpdateParams) map[string]any {
 		if update.Message != "" {
 			mapped["title"] = update.Message
 		}
-		if content := update.Delta; content != "" {
-			mapped["content"] = map[string]any{
-				"type": "text",
-				"text": content,
-			}
+		content := cloneToolCallContentOrEmpty(update.ToolCallContent)
+		if len(content) == 0 {
+			content = textToolCallContent(update.Delta)
+		}
+		if len(content) > 0 {
+			mapped["content"] = content
 		}
 		return mapped
 	case "config_options_update":
@@ -2291,18 +2353,341 @@ func (s *Server) readTextFile(ctx context.Context, sessionID string, path string
 	}
 
 	for _, key := range []string{"text", "content"} {
-		if text := strings.TrimSpace(valueAsString(raw[key])); text != "" {
+		text := valueAsString(raw[key])
+		if strings.TrimSpace(text) != "" {
 			return text, nil
 		}
 	}
 	if nested, ok := raw["result"].(map[string]any); ok {
 		for _, key := range []string{"text", "content"} {
-			if text := strings.TrimSpace(valueAsString(nested[key])); text != "" {
+			text := valueAsString(nested[key])
+			if strings.TrimSpace(text) != "" {
 				return text, nil
 			}
 		}
 	}
 	return "", fmt.Errorf("empty fs/read_text_file result")
+}
+
+func (s *Server) resolveTurnDiffToolCallContent(
+	ctx context.Context,
+	sessionID string,
+	unifiedDiff string,
+) []ToolCallContentItem {
+	unifiedDiff = strings.TrimSpace(unifiedDiff)
+	if unifiedDiff == "" {
+		return nil
+	}
+
+	patches, err := parseUnifiedDiffFiles(unifiedDiff)
+	if err != nil || len(patches) == 0 {
+		return textToolCallContent(fencedUnifiedDiff(unifiedDiff))
+	}
+
+	cwd := s.getSessionCWD(sessionID)
+	content := make([]ToolCallContentItem, 0, len(patches))
+	warnings := make([]string, 0)
+	for _, patch := range patches {
+		diffItem, diffErr := s.toolCallDiffFromUnifiedPatch(ctx, sessionID, cwd, patch)
+		if diffErr != nil {
+			displayPath := strings.TrimSpace(patch.Path)
+			if displayPath == "" {
+				displayPath = "unknown file"
+			}
+			warnings = append(warnings, fmt.Sprintf("failed to reconstruct diff for %s: %v", displayPath, diffErr))
+			continue
+		}
+		content = append(content, diffItem)
+	}
+
+	if len(content) == 0 {
+		return textToolCallContent(fencedUnifiedDiff(unifiedDiff))
+	}
+	if len(warnings) > 0 {
+		content = append(content, ToolCallContentItem{
+			Type:    "content",
+			Content: textPromptContentBlock(strings.Join(warnings, "\n")),
+		})
+	}
+	return content
+}
+
+func (s *Server) toolCallDiffFromUnifiedPatch(
+	ctx context.Context,
+	sessionID string,
+	cwd string,
+	patch unifiedDiffFilePatch,
+) (ToolCallContentItem, error) {
+	resolvedPath := resolveDiffPath(cwd, patch.Path)
+	if resolvedPath == "" {
+		return ToolCallContentItem{}, fmt.Errorf("diff patch missing path")
+	}
+
+	oldText := ""
+	if !patch.IsNewFile {
+		if !s.canReadTextFile() {
+			return ToolCallContentItem{}, fmt.Errorf("client has no fs/read_text_file capability")
+		}
+		readText, err := s.readTextFile(ctx, sessionID, resolvedPath)
+		if err != nil {
+			return ToolCallContentItem{}, err
+		}
+		oldText = readText
+	}
+
+	newText, err := applyUnifiedDiffPatch(oldText, patch)
+	if err != nil {
+		return ToolCallContentItem{}, err
+	}
+
+	return ToolCallContentItem{
+		Type:    "diff",
+		Path:    resolvedPath,
+		OldText: oldText,
+		NewText: newText,
+	}, nil
+}
+
+func resolveDiffPath(cwd string, path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return filepath.Clean(path)
+	}
+	return filepath.Clean(filepath.Join(cwd, path))
+}
+
+func parseUnifiedDiffFiles(unifiedDiff string) ([]unifiedDiffFilePatch, error) {
+	lines := splitPreservingNewlines(unifiedDiff)
+	if len(lines) == 0 {
+		return nil, fmt.Errorf("empty diff")
+	}
+
+	var patches []unifiedDiffFilePatch
+	for i := 0; i < len(lines); {
+		if !strings.HasPrefix(lines[i], "diff --git ") {
+			i++
+			continue
+		}
+		start := i
+		i++
+		for i < len(lines) && !strings.HasPrefix(lines[i], "diff --git ") {
+			i++
+		}
+		patch, err := parseUnifiedDiffFile(lines[start:i])
+		if err != nil {
+			return nil, err
+		}
+		patches = append(patches, patch)
+	}
+
+	if len(patches) > 0 {
+		return patches, nil
+	}
+
+	patch, err := parseUnifiedDiffFile(lines)
+	if err != nil {
+		return nil, err
+	}
+	return []unifiedDiffFilePatch{patch}, nil
+}
+
+func parseUnifiedDiffFile(lines []string) (unifiedDiffFilePatch, error) {
+	patch := unifiedDiffFilePatch{
+		Raw: strings.Join(lines, ""),
+	}
+	var previousLine *unifiedDiffHunkLine
+	for i := 0; i < len(lines); i++ {
+		line := trimOneTrailingNewline(lines[i])
+		switch {
+		case strings.HasPrefix(line, "--- "):
+			patch.OldPath = normalizeUnifiedDiffPath(strings.TrimSpace(strings.TrimPrefix(line, "--- ")))
+		case strings.HasPrefix(line, "+++ "):
+			patch.NewPath = normalizeUnifiedDiffPath(strings.TrimSpace(strings.TrimPrefix(line, "+++ ")))
+		case strings.HasPrefix(line, "@@ "):
+			hunk, next, err := parseUnifiedDiffHunk(lines, i)
+			if err != nil {
+				return unifiedDiffFilePatch{}, err
+			}
+			patch.Hunks = append(patch.Hunks, hunk)
+			if len(patch.Hunks[len(patch.Hunks)-1].Lines) > 0 {
+				previousLine = &patch.Hunks[len(patch.Hunks)-1].Lines[len(patch.Hunks[len(patch.Hunks)-1].Lines)-1]
+			}
+			i = next - 1
+		case strings.HasPrefix(line, `\ No newline at end of file`):
+			if previousLine != nil {
+				previousLine.NoNewline = true
+			}
+		}
+	}
+
+	if patch.NewPath != "" {
+		patch.Path = patch.NewPath
+	} else {
+		patch.Path = patch.OldPath
+	}
+	patch.IsNewFile = patch.OldPath == ""
+	patch.IsDeleteFile = patch.NewPath == ""
+	if len(patch.Hunks) == 0 {
+		return unifiedDiffFilePatch{}, fmt.Errorf("diff patch contains no hunks")
+	}
+	return patch, nil
+}
+
+func parseUnifiedDiffHunk(lines []string, start int) (unifiedDiffHunk, int, error) {
+	header := trimOneTrailingNewline(lines[start])
+	matches := unifiedDiffHunkPattern.FindStringSubmatch(header)
+	if len(matches) != 5 {
+		return unifiedDiffHunk{}, 0, fmt.Errorf("invalid hunk header: %s", header)
+	}
+
+	hunk := unifiedDiffHunk{
+		OldStart: mustAtoi(matches[1]),
+		OldCount: defaultUnifiedDiffCount(matches[2]),
+		NewStart: mustAtoi(matches[3]),
+		NewCount: defaultUnifiedDiffCount(matches[4]),
+	}
+	if hunk.OldStart < 0 {
+		hunk.OldStart = 0
+	}
+	if hunk.NewStart < 0 {
+		hunk.NewStart = 0
+	}
+
+	i := start + 1
+	for i < len(lines) {
+		line := trimOneTrailingNewline(lines[i])
+		if strings.HasPrefix(line, "diff --git ") || strings.HasPrefix(line, "@@ ") {
+			break
+		}
+		if strings.HasPrefix(line, `\ No newline at end of file`) {
+			if len(hunk.Lines) > 0 {
+				hunk.Lines[len(hunk.Lines)-1].NoNewline = true
+			}
+			i++
+			continue
+		}
+		if line == "" {
+			return unifiedDiffHunk{}, 0, fmt.Errorf("malformed empty diff line")
+		}
+		op := line[0]
+		if op != ' ' && op != '+' && op != '-' {
+			i++
+			continue
+		}
+		hunk.Lines = append(hunk.Lines, unifiedDiffHunkLine{
+			Op:   op,
+			Text: line[1:],
+		})
+		i++
+	}
+	return hunk, i, nil
+}
+
+func applyUnifiedDiffPatch(oldText string, patch unifiedDiffFilePatch) (string, error) {
+	oldLines := splitTextLines(oldText)
+	out := make([]string, 0, len(oldLines))
+	oldIndex := 0
+
+	for _, hunk := range patch.Hunks {
+		target := hunk.OldStart - 1
+		if target < 0 {
+			target = 0
+		}
+		if target > len(oldLines) {
+			return "", fmt.Errorf("hunk start %d beyond file length %d", target, len(oldLines))
+		}
+		if target < oldIndex {
+			return "", fmt.Errorf("overlapping diff hunk")
+		}
+
+		out = append(out, oldLines[oldIndex:target]...)
+		oldIndex = target
+
+		for _, line := range hunk.Lines {
+			switch line.Op {
+			case ' ':
+				if oldIndex >= len(oldLines) || oldLines[oldIndex] != renderedUnifiedDiffLine(line) {
+					return "", fmt.Errorf("diff context mismatch at %s", patch.Path)
+				}
+				out = append(out, oldLines[oldIndex])
+				oldIndex++
+			case '-':
+				if oldIndex >= len(oldLines) || oldLines[oldIndex] != renderedUnifiedDiffLine(line) {
+					return "", fmt.Errorf("diff delete mismatch at %s", patch.Path)
+				}
+				oldIndex++
+			case '+':
+				out = append(out, renderedUnifiedDiffLine(line))
+			}
+		}
+	}
+
+	out = append(out, oldLines[oldIndex:]...)
+	return strings.Join(out, ""), nil
+}
+
+func renderedUnifiedDiffLine(line unifiedDiffHunkLine) string {
+	if line.NoNewline {
+		return line.Text
+	}
+	return line.Text + "\n"
+}
+
+func splitPreservingNewlines(text string) []string {
+	if text == "" {
+		return nil
+	}
+	lines := strings.SplitAfter(text, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
+}
+
+func splitTextLines(text string) []string {
+	return splitPreservingNewlines(text)
+}
+
+func trimOneTrailingNewline(line string) string {
+	return strings.TrimSuffix(line, "\n")
+}
+
+func normalizeUnifiedDiffPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "/dev/null" {
+		return ""
+	}
+	if strings.HasPrefix(path, "a/") || strings.HasPrefix(path, "b/") {
+		return path[2:]
+	}
+	return path
+}
+
+func defaultUnifiedDiffCount(raw string) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 1
+	}
+	return mustAtoi(raw)
+}
+
+func mustAtoi(raw string) int {
+	value, _ := strconv.Atoi(strings.TrimSpace(raw))
+	return value
+}
+
+func fencedUnifiedDiff(unifiedDiff string) string {
+	if strings.TrimSpace(unifiedDiff) == "" {
+		return ""
+	}
+	return "```diff\n" + strings.TrimRight(unifiedDiff, "\n") + "\n```"
 }
 
 func valueAsString(value any) string {
@@ -2423,6 +2808,64 @@ func clonePlanEntriesOrEmpty(entries []PlanEntry) []PlanEntry {
 		return []PlanEntry{}
 	}
 	return clonePlanEntries(entries)
+}
+
+func clonePromptContentBlock(block *PromptContentBlock) *PromptContentBlock {
+	if block == nil {
+		return nil
+	}
+	cloned := *block
+	if block.Range != nil {
+		rng := *block.Range
+		cloned.Range = &rng
+	}
+	if block.Resource != nil {
+		resource := *block.Resource
+		if block.Resource.Range != nil {
+			rng := *block.Resource.Range
+			resource.Range = &rng
+		}
+		cloned.Resource = &resource
+	}
+	return &cloned
+}
+
+func cloneToolCallContentOrEmpty(content []ToolCallContentItem) []ToolCallContentItem {
+	if len(content) == 0 {
+		return []ToolCallContentItem{}
+	}
+	cloned := make([]ToolCallContentItem, 0, len(content))
+	for _, item := range content {
+		cloned = append(cloned, ToolCallContentItem{
+			Type:    item.Type,
+			Content: clonePromptContentBlock(item.Content),
+			Path:    item.Path,
+			OldText: item.OldText,
+			NewText: item.NewText,
+		})
+	}
+	return cloned
+}
+
+func textPromptContentBlock(text string) *PromptContentBlock {
+	if text == "" {
+		return nil
+	}
+	return &PromptContentBlock{
+		Type: "text",
+		Text: text,
+	}
+}
+
+func textToolCallContent(text string) []ToolCallContentItem {
+	block := textPromptContentBlock(text)
+	if block == nil {
+		return nil
+	}
+	return []ToolCallContentItem{{
+		Type:    "content",
+		Content: block,
+	}}
 }
 
 func cloneAvailableCommands(commands []AvailableCommand) []AvailableCommand {
@@ -2753,6 +3196,18 @@ func (s *Server) getSessionConfigOptions(sessionID string) []SessionConfig {
 	s.sessionConfigOptionsMu.Lock()
 	defer s.sessionConfigOptionsMu.Unlock()
 	return cloneSessionConfigs(s.sessionConfigOptions[sessionID])
+}
+
+func (s *Server) setSessionCWD(sessionID string, cwd string) {
+	s.sessionCWDMu.Lock()
+	s.sessionCWD[sessionID] = strings.TrimSpace(cwd)
+	s.sessionCWDMu.Unlock()
+}
+
+func (s *Server) getSessionCWD(sessionID string) string {
+	s.sessionCWDMu.Lock()
+	defer s.sessionCWDMu.Unlock()
+	return s.sessionCWD[sessionID]
 }
 
 func cloneSessionConfigs(options []SessionConfig) []SessionConfig {
@@ -3434,18 +3889,32 @@ func (s *Server) handleMCPCallSlash(
 			if callErr != nil {
 				toolMessage = fmt.Sprintf("mcp call failed: %v", callErr)
 			} else {
+				content := toolCallContentFromBlocks(mcpResultContentBlocks(result))
 				toolStatus = "completed"
 				toolMessage = "mcp call completed"
 				lifecycle.phase = turnPhaseStreaming
+				if text := mcpResultMessageText(result); text != "" {
+					s.emitUpdates([]SessionUpdateParams{
+						{
+							SessionID: sessionID,
+							TurnID:    lifecycle.turnID,
+							Type:      "message",
+							Phase:     string(lifecycle.phase),
+							Delta:     text,
+							Content:   textPromptContentBlock(text),
+						},
+					})
+				}
 				s.emitUpdates([]SessionUpdateParams{
-					{
-						SessionID: sessionID,
-						TurnID:    lifecycle.turnID,
-						Type:      "message",
-						Phase:     string(lifecycle.phase),
-						Delta:     strings.TrimSpace(result.Output),
-					},
+					lifecycle.toolCallOutcomeUpdate(
+						event,
+						decision,
+						toolStatus,
+						toolMessage,
+						content,
+					),
 				})
+				return "end_turn", nil
 			}
 		}
 
@@ -3455,6 +3924,7 @@ func (s *Server) handleMCPCallSlash(
 				decision,
 				toolStatus,
 				toolMessage,
+				nil,
 			),
 		})
 		return "end_turn", nil
@@ -3500,6 +3970,8 @@ func (t *turnLifecycle) resetForRetry() {
 	t.messageBuffer.Reset()
 	t.toolCallStatus = nil
 	t.commandToolCalls = nil
+	t.diffToolCallID = ""
+	t.diffToolCallContent = nil
 }
 
 func (t *turnLifecycle) startedUpdate() []SessionUpdateParams {
@@ -3549,6 +4021,7 @@ func (t *turnLifecycle) toolCallOutcomeUpdate(
 	outcome permissionOutcome,
 	status string,
 	message string,
+	content []ToolCallContentItem,
 ) SessionUpdateParams {
 	t.rememberToolCallStatus(event.Approval.ToolCallID, status)
 	return SessionUpdateParams{
@@ -3561,7 +4034,55 @@ func (t *turnLifecycle) toolCallOutcomeUpdate(
 		Approval:           string(event.Approval.Kind),
 		PermissionDecision: string(outcome),
 		Message:            message,
+		Delta:              textFromToolCallContent(content),
+		ToolCallContent:    cloneToolCallContentOrEmpty(content),
 	}
+}
+
+func (t *turnLifecycle) diffToolCallIdentifier() string {
+	if t.diffToolCallID == "" {
+		t.diffToolCallID = "turn-diff-" + strings.TrimSpace(t.turnID)
+	}
+	return t.diffToolCallID
+}
+
+func (t *turnLifecycle) diffInProgressUpdate(content []ToolCallContentItem) SessionUpdateParams {
+	t.phase = turnPhaseStreaming
+	t.rememberToolCallStatus(t.diffToolCallIdentifier(), "in_progress")
+	t.diffToolCallContent = cloneToolCallContentOrEmpty(content)
+	return SessionUpdateParams{
+		SessionID:       t.sessionID,
+		TurnID:          t.turnID,
+		Type:            "tool_call_update",
+		Phase:           string(t.phase),
+		ItemType:        "turn_diff",
+		Status:          "in_progress",
+		ToolCallID:      t.diffToolCallIdentifier(),
+		Approval:        string(codex.ApprovalKindFile),
+		Delta:           textFromToolCallContent(content),
+		Message:         "turn diff",
+		ToolCallContent: cloneToolCallContentOrEmpty(content),
+	}
+}
+
+func (t *turnLifecycle) diffTerminalUpdate(status string, message string) (SessionUpdateParams, bool) {
+	if len(t.diffToolCallContent) == 0 {
+		return SessionUpdateParams{}, false
+	}
+	t.rememberToolCallStatus(t.diffToolCallIdentifier(), status)
+	return SessionUpdateParams{
+		SessionID:       t.sessionID,
+		TurnID:          t.turnID,
+		Type:            "tool_call_update",
+		Phase:           string(t.phase),
+		ItemType:        "turn_diff",
+		Status:          status,
+		ToolCallID:      t.diffToolCallIdentifier(),
+		Approval:        string(codex.ApprovalKindFile),
+		Delta:           textFromToolCallContent(t.diffToolCallContent),
+		Message:         message,
+		ToolCallContent: cloneToolCallContentOrEmpty(t.diffToolCallContent),
+	}, true
 }
 
 func (t *turnLifecycle) apply(event codex.TurnEvent) ([]SessionUpdateParams, bool, string) {
@@ -3646,7 +4167,7 @@ func (t *turnLifecycle) apply(event codex.TurnEvent) ([]SessionUpdateParams, boo
 		return nil, false, ""
 	case codex.TurnEventTypeItemStarted:
 		t.phase = turnPhaseStreaming
-		if update, ok := t.commandExecutionToolCallUpdate(event); ok {
+		if update, ok := t.runtimeToolCallUpdate(event); ok {
 			return []SessionUpdateParams{update}, false, ""
 		}
 		if isPlanItemType(event.ItemType) {
@@ -3689,7 +4210,7 @@ func (t *turnLifecycle) apply(event codex.TurnEvent) ([]SessionUpdateParams, boo
 		}, false, ""
 	case codex.TurnEventTypeItemCompleted:
 		t.phase = turnPhaseStreaming
-		if update, ok := t.commandExecutionToolCallUpdate(event); ok {
+		if update, ok := t.runtimeToolCallUpdate(event); ok {
 			return []SessionUpdateParams{update}, false, ""
 		}
 		statusUpdate := SessionUpdateParams{
@@ -3760,15 +4281,24 @@ func (t *turnLifecycle) apply(event codex.TurnEvent) ([]SessionUpdateParams, boo
 		default:
 			t.phase = turnPhaseCompleted
 		}
-		return []SessionUpdateParams{
-			{
-				SessionID: t.sessionID,
-				TurnID:    t.turnID,
-				Type:      "status",
-				Phase:     string(t.phase),
-				Status:    "turn_completed",
-			},
-		}, true, stopReason
+		updates := make([]SessionUpdateParams, 0, 2)
+		diffStatus := "completed"
+		diffMessage := "turn diff"
+		if stopReason != "end_turn" {
+			diffStatus = "failed"
+			diffMessage = "turn diff incomplete"
+		}
+		if diffUpdate, ok := t.diffTerminalUpdate(diffStatus, diffMessage); ok {
+			updates = append(updates, diffUpdate)
+		}
+		updates = append(updates, SessionUpdateParams{
+			SessionID: t.sessionID,
+			TurnID:    t.turnID,
+			Type:      "status",
+			Phase:     string(t.phase),
+			Status:    "turn_completed",
+		})
+		return updates, true, stopReason
 	case codex.TurnEventTypeError:
 		t.phase = turnPhaseError
 		return []SessionUpdateParams{
@@ -3784,6 +4314,16 @@ func (t *turnLifecycle) apply(event codex.TurnEvent) ([]SessionUpdateParams, boo
 	default:
 		return nil, false, ""
 	}
+}
+
+func (t *turnLifecycle) runtimeToolCallUpdate(event codex.TurnEvent) (SessionUpdateParams, bool) {
+	if update, ok := t.commandExecutionToolCallUpdate(event); ok {
+		return update, true
+	}
+	if update, ok := t.toolExecutionToolCallUpdate(event); ok {
+		return update, true
+	}
+	return SessionUpdateParams{}, false
 }
 
 func (t *turnLifecycle) commandExecutionToolCallUpdate(event codex.TurnEvent) (SessionUpdateParams, bool) {
@@ -3817,6 +4357,40 @@ func (t *turnLifecycle) commandExecutionToolCallUpdate(event codex.TurnEvent) (S
 		Approval:   string(codex.ApprovalKindCommand),
 		Delta:      commandExecutionContent(event.Command, status),
 		Message:    commandExecutionTitle(event.Command, status),
+	}, true
+}
+
+func (t *turnLifecycle) toolExecutionToolCallUpdate(event codex.TurnEvent) (SessionUpdateParams, bool) {
+	if event.Tool == nil {
+		return SessionUpdateParams{}, false
+	}
+
+	toolCallID := strings.TrimSpace(event.ItemID)
+	if toolCallID == "" {
+		toolCallID = strings.TrimSpace(event.Tool.ID)
+	}
+	if toolCallID == "" {
+		return SessionUpdateParams{}, false
+	}
+
+	status := toolExecutionACPStatus(event)
+	if status == "" || !t.shouldEmitRuntimeToolCallStatus(toolCallID, status) {
+		return SessionUpdateParams{}, false
+	}
+
+	blocks := toolExecutionContentBlocks(event.Tool)
+	return SessionUpdateParams{
+		SessionID:       t.sessionID,
+		TurnID:          t.turnID,
+		Type:            "tool_call_update",
+		Phase:           string(t.phase),
+		ItemID:          event.ItemID,
+		ItemType:        event.ItemType,
+		Status:          status,
+		ToolCallID:      toolCallID,
+		Delta:           textFromContentBlocks(blocks),
+		Message:         toolExecutionTitle(event.Tool, status),
+		ToolCallContent: toolCallContentFromBlocks(blocks),
 	}, true
 }
 
@@ -3952,6 +4526,54 @@ func commandExecutionACPStatus(event codex.TurnEvent) string {
 	}
 }
 
+func toolExecutionACPStatus(event codex.TurnEvent) string {
+	if event.Tool != nil {
+		switch strings.ToLower(strings.TrimSpace(event.Tool.Status)) {
+		case "inprogress":
+			return "in_progress"
+		case "completed":
+			if event.Tool.Success != nil && !*event.Tool.Success {
+				return "failed"
+			}
+			return "completed"
+		case "failed", "declined":
+			return "failed"
+		}
+	}
+
+	switch event.Type {
+	case codex.TurnEventTypeItemStarted:
+		return "in_progress"
+	case codex.TurnEventTypeItemCompleted:
+		if event.Tool != nil && event.Tool.Success != nil && !*event.Tool.Success {
+			return "failed"
+		}
+		return "completed"
+	default:
+		return ""
+	}
+}
+
+func toolExecutionTitle(tool *codex.ToolExecution, status string) string {
+	if tool == nil {
+		return "tool"
+	}
+	title := strings.TrimSpace(tool.Tool)
+	if title == "" {
+		title = strings.TrimSpace(tool.Kind)
+	}
+	if title == "" {
+		title = "tool"
+	}
+	if server := strings.TrimSpace(tool.Server); server != "" {
+		title = server + "/" + title
+	}
+	if status == "failed" {
+		return title + " (failed)"
+	}
+	return title
+}
+
 func commandExecutionTitle(command *codex.CommandExecution, status string) string {
 	if command == nil {
 		return "command"
@@ -3988,6 +4610,196 @@ func commandExecutionContent(command *codex.CommandExecution, status string) str
 	}
 
 	return toolCallContentText(commandExecutionTitle(command, status))
+}
+
+func toolExecutionContentBlocks(tool *codex.ToolExecution) []PromptContentBlock {
+	if tool == nil || len(tool.ContentItems) == 0 {
+		return nil
+	}
+
+	blocks := make([]PromptContentBlock, 0, len(tool.ContentItems))
+	for _, item := range tool.ContentItems {
+		block, ok := promptContentBlockFromToolOutput(item)
+		if !ok {
+			continue
+		}
+		blocks = append(blocks, block)
+	}
+	if len(blocks) == 0 {
+		return nil
+	}
+	return blocks
+}
+
+func promptContentBlockFromToolOutput(item codex.ToolOutputContentItem) (PromptContentBlock, bool) {
+	switch strings.ToLower(strings.TrimSpace(item.Type)) {
+	case "text":
+		text := toolCallContentText(strings.TrimSpace(item.Text))
+		if text == "" {
+			return PromptContentBlock{}, false
+		}
+		return PromptContentBlock{
+			Type: "text",
+			Text: text,
+		}, true
+	case "image":
+		return imagePromptContentBlock(item.Data, item.MimeType, item.URI)
+	case "image_url":
+		return imagePromptContentBlock("", "", item.URI)
+	default:
+		return PromptContentBlock{}, false
+	}
+}
+
+func imagePromptContentBlock(data string, mimeType string, uri string) (PromptContentBlock, bool) {
+	data = sanitizeBase64(data)
+	mimeType = normalizeImageMimeType(mimeType)
+	uri = strings.TrimSpace(uri)
+
+	if data != "" && mimeType != "" && isAllowedImageMimeType(mimeType) {
+		return PromptContentBlock{
+			Type:     "image",
+			Data:     data,
+			MimeType: mimeType,
+			URI:      nonDataURI(uri),
+		}, true
+	}
+
+	if uri != "" {
+		if strings.HasPrefix(strings.ToLower(uri), "data:") {
+			mimeType, data, err := splitDataImageURI(uri)
+			if err == nil && isAllowedImageMimeType(mimeType) {
+				return PromptContentBlock{
+					Type:     "image",
+					Data:     sanitizeBase64(data),
+					MimeType: mimeType,
+				}, true
+			}
+		}
+		text := toolCallContentText("image available at " + uri)
+		if text != "" {
+			return PromptContentBlock{
+				Type: "text",
+				Text: text,
+			}, true
+		}
+	}
+
+	return PromptContentBlock{}, false
+}
+
+func mcpResultContentBlocks(result codex.MCPToolCallResult) []PromptContentBlock {
+	if len(result.Content) == 0 {
+		if text := toolCallContentText(strings.TrimSpace(result.Output)); text != "" {
+			return []PromptContentBlock{{
+				Type: "text",
+				Text: text,
+			}}
+		}
+		return nil
+	}
+
+	blocks := make([]PromptContentBlock, 0, len(result.Content))
+	for _, raw := range result.Content {
+		block, ok := promptContentBlockFromMCPRaw(raw)
+		if !ok {
+			continue
+		}
+		blocks = append(blocks, block)
+	}
+	if len(blocks) == 0 {
+		return nil
+	}
+	return blocks
+}
+
+func promptContentBlockFromMCPRaw(raw json.RawMessage) (PromptContentBlock, bool) {
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return PromptContentBlock{}, false
+	}
+
+	switch strings.ToLower(strings.TrimSpace(valueAsString(payload["type"]))) {
+	case "text":
+		text := toolCallContentText(strings.TrimSpace(valueAsString(payload["text"])))
+		if text == "" {
+			return PromptContentBlock{}, false
+		}
+		return PromptContentBlock{
+			Type: "text",
+			Text: text,
+		}, true
+	case "image":
+		return imagePromptContentBlock(
+			valueAsString(payload["data"]),
+			valueAsString(payload["mimeType"]),
+			valueAsString(payload["uri"]),
+		)
+	default:
+		return PromptContentBlock{}, false
+	}
+}
+
+func mcpResultMessageText(result codex.MCPToolCallResult) string {
+	return textFromContentBlocks(mcpResultContentBlocks(result))
+}
+
+func nonDataURI(uri string) string {
+	trimmed := strings.TrimSpace(uri)
+	if strings.HasPrefix(strings.ToLower(trimmed), "data:") {
+		return ""
+	}
+	return trimmed
+}
+
+func toolCallContentFromBlocks(blocks []PromptContentBlock) []ToolCallContentItem {
+	if len(blocks) == 0 {
+		return nil
+	}
+	content := make([]ToolCallContentItem, 0, len(blocks))
+	for _, block := range blocks {
+		blockCopy := block
+		content = append(content, ToolCallContentItem{
+			Type:    "content",
+			Content: &blockCopy,
+		})
+	}
+	return content
+}
+
+func textFromToolCallContent(content []ToolCallContentItem) string {
+	if len(content) == 0 {
+		return ""
+	}
+
+	blocks := make([]PromptContentBlock, 0, len(content))
+	for _, item := range content {
+		if item.Content == nil {
+			continue
+		}
+		blocks = append(blocks, *item.Content)
+	}
+	return textFromContentBlocks(blocks)
+}
+
+func textFromContentBlocks(blocks []PromptContentBlock) string {
+	if len(blocks) == 0 {
+		return ""
+	}
+
+	parts := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		if strings.EqualFold(strings.TrimSpace(block.Type), "text") {
+			text := strings.TrimSpace(block.Text)
+			if text != "" {
+				parts = append(parts, text)
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 func toolCallContentText(text string) string {

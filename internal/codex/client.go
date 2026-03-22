@@ -791,6 +791,7 @@ func (c *Client) handleNotification(msg RPCMessage) {
 			ItemType: itemType,
 			ItemText: itemText(note.Item),
 			Command:  commandExecutionFromItem(note.Item),
+			Tool:     toolExecutionFromItem(note.Item),
 		}, false)
 	case notificationItemPlanDelta:
 		var note PlanDeltaNotification
@@ -864,6 +865,19 @@ func (c *Client) handleNotification(msg RPCMessage) {
 			ItemType: "commandExecution",
 			Delta:    note.Delta,
 		}, false)
+	case notificationTurnDiffUpdated:
+		var note TurnDiffUpdatedNotification
+		if err := json.Unmarshal(msg.Params, &note); err != nil {
+			c.logger.Warn("ignore malformed turn/diff/updated", slog.String("error", err.Error()))
+			return
+		}
+		c.pushTurnEvent(note.TurnID, TurnEvent{
+			Type:     TurnEventTypeDiffUpdated,
+			ThreadID: note.ThreadID,
+			TurnID:   note.TurnID,
+			ItemType: "turn_diff",
+			Diff:     note.Diff,
+		}, false)
 	case notificationItemCompleted:
 		var note ItemCompletedNotification
 		if err := json.Unmarshal(msg.Params, &note); err != nil {
@@ -888,6 +902,7 @@ func (c *Client) handleNotification(msg RPCMessage) {
 			ItemType: itemType,
 			ItemText: itemText(note.Item),
 			Command:  commandExecutionFromItem(note.Item),
+			Tool:     toolExecutionFromItem(note.Item),
 		}, false)
 	case notificationTurnCompleted:
 		var note TurnCompletedNotification
@@ -990,6 +1005,135 @@ func commandExecutionFromItem(item *ThreadItemRef) *CommandExecution {
 		cmd.ExitCode = &exitCode
 	}
 	return cmd
+}
+
+func toolExecutionFromItem(item *ThreadItemRef) *ToolExecution {
+	if item == nil {
+		return nil
+	}
+
+	switch strings.ToLower(strings.TrimSpace(item.Type)) {
+	case "dynamictoolcall":
+		return &ToolExecution{
+			ID:           strings.TrimSpace(item.ID),
+			Kind:         "dynamicToolCall",
+			Tool:         strings.TrimSpace(item.Tool),
+			Status:       strings.TrimSpace(item.Status),
+			Success:      cloneOptionalBool(item.Success),
+			ContentItems: dynamicToolOutputContentItems(item.ContentItems),
+		}
+	case "mcptoolcall":
+		return &ToolExecution{
+			ID:           strings.TrimSpace(item.ID),
+			Kind:         "mcpToolCall",
+			Tool:         strings.TrimSpace(item.Tool),
+			Server:       strings.TrimSpace(item.Server),
+			Status:       strings.TrimSpace(item.Status),
+			ContentItems: mcpToolResultContentItems(item.Result),
+		}
+	default:
+		return nil
+	}
+}
+
+func dynamicToolOutputContentItems(items []DynamicToolCallOutputContentItem) []ToolOutputContentItem {
+	if len(items) == 0 {
+		return nil
+	}
+
+	out := make([]ToolOutputContentItem, 0, len(items))
+	for _, item := range items {
+		switch strings.ToLower(strings.TrimSpace(item.Type)) {
+		case "inputtext":
+			text := strings.TrimSpace(item.Text)
+			if text == "" {
+				continue
+			}
+			out = append(out, ToolOutputContentItem{
+				Type: "text",
+				Text: text,
+			})
+		case "inputimage":
+			uri := strings.TrimSpace(item.ImageURL)
+			if uri == "" {
+				continue
+			}
+			out = append(out, ToolOutputContentItem{
+				Type: "image_url",
+				URI:  uri,
+			})
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func mcpToolResultContentItems(result *MCPToolCallResult) []ToolOutputContentItem {
+	if result == nil || len(result.Content) == 0 {
+		return nil
+	}
+
+	out := make([]ToolOutputContentItem, 0, len(result.Content))
+	for _, raw := range result.Content {
+		item, ok := normalizeMCPToolResultContentItem(raw)
+		if !ok {
+			continue
+		}
+		out = append(out, item)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func normalizeMCPToolResultContentItem(raw json.RawMessage) (ToolOutputContentItem, bool) {
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return ToolOutputContentItem{}, false
+	}
+
+	switch strings.ToLower(strings.TrimSpace(stringValue(payload["type"]))) {
+	case "text":
+		text := strings.TrimSpace(stringValue(payload["text"]))
+		if text == "" {
+			return ToolOutputContentItem{}, false
+		}
+		return ToolOutputContentItem{
+			Type: "text",
+			Text: text,
+		}, true
+	case "image":
+		data := strings.TrimSpace(stringValue(payload["data"]))
+		mimeType := strings.TrimSpace(stringValue(payload["mimeType"]))
+		uri := strings.TrimSpace(stringValue(payload["uri"]))
+		if data == "" && uri == "" {
+			return ToolOutputContentItem{}, false
+		}
+		return ToolOutputContentItem{
+			Type:     "image",
+			Data:     data,
+			MimeType: mimeType,
+			URI:      uri,
+		}, true
+	default:
+		return ToolOutputContentItem{}, false
+	}
+}
+
+func stringValue(value any) string {
+	text, _ := value.(string)
+	return text
+}
+
+func cloneOptionalBool(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func effectiveTurnID(turnID string, turn *TurnRef) string {

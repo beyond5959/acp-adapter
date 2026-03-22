@@ -50,6 +50,7 @@
 - ADR-0044：ACP slash command 目录发布策略（`available_commands_update`）
 - ADR-0045：默认开启 Codex reasoning summary（app-server `-c model_reasoning_summary="detailed"`）
 - ADR-0046：Codex runtime `commandExecution` 映射为 ACP `tool_call_update`
+- ADR-0047：工具图片输出桥接为 ACP `image` content block
 
 ---
 
@@ -1154,4 +1155,79 @@
   - `TestE2ECommandExecutionItemsMappedToToolCallUpdates`
   - `TestE2ECommandExecutionOutputDeltaMappedToToolCallContent`
   - `TestE2ERealCodexCommandExecutionMappedToToolCalls`
+  - `go test ./...`
+
+### ADR-0047：工具图片输出桥接为 ACP `image` content block
+- 日期：2026-03-22
+- 状态：Accepted
+- 背景：
+  - ACP 标准允许 `agent_message_chunk` / `tool_call_update` 携带结构化 content，其中图片应以 `image` content block 返回，ACP client 才能直接渲染图片。
+  - 旧实现里 `session/update(type="tool_call_update")` 的标准 envelope 只有单个文本对象；即使下游 tool item 已携带图片（例如 `dynamicToolCall.contentItems[].imageUrl` 或 `mcpToolCall.result.content[].type=image`），adapter 也会把结果压扁成纯文本或直接丢失。
+- 决策：
+  - 将 ACP `tool_call_update` 的标准映射升级为协议标准 `content[]` 形态，每项使用 `{"type":"content","content":<ContentBlock>}`。
+  - `internal/codex/client` 新增对两类下游 tool item 的结构化解析：
+    - `dynamicToolCall.contentItems`：`inputText` -> text，`inputImage` -> image URL/data URI
+    - `mcpToolCall.result.content`：透传 MCP `text` / `image` content item
+  - `internal/acp/server` 统一把上述 tool output 归一为 ACP content block：
+    - 文本 -> text block
+    - `data:` URI 或显式 `{type:"image", data, mimeType}` -> image block
+    - 普通远程/本地 URL 且没有 inline data 时，降级为文本提示 `image available at ...`
+  - `/mcp call` 直连路径与 turn item 路径保持一致：text 结果继续发 message chunk，image 结果则进入 `tool_call_update.content[]`。
+- 备选方案：
+  - 方案A：继续把所有 tool output 强制降为文本，图片只保留 URL/提示文本。
+  - 方案B：在 adapter 内补齐 tool output -> ACP content block 的结构化桥接。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：ACP client 现在可以直接渲染 tool 返回的图片；`dynamicToolCall` / `mcpToolCall` 与 `/mcp call` 直连路径的展示语义统一；同时保留文本 fallback，不会因为 URL-only 图片导致协议无效。
+  - Cons：若下游只返回普通 URL 而不提供 inline image data，adapter 仍无法凭空构造完整 ACP image block，只能降级成文本提示，详见 KI-0045。
+- 影响范围（文件/模块）：
+  - `internal/acp/types.go`
+  - `internal/acp/server.go`
+  - `internal/acp/server_stdio_test.go`
+  - `internal/codex/types.go`
+  - `internal/codex/client.go`
+  - `testdata/fake_codex_app_server/main.go`
+  - `test/integration/e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `TestBuildSessionUpdatePayloadToolCallContent`
+  - `TestE2EToolImageItemsMappedToACPImageBlock`
+  - `TestE2EAcceptanceG1ToG6SlashCommandsAndMCP`
+  - `go test ./...`
+
+### ADR-0048：Codex `turn/diff/updated` 以 ACP `tool_call_update.content[type=diff]` 桥接
+- 日期：2026-03-22
+- 状态：Accepted
+- 背景：
+  - Codex App Server 会在 turn 期间发出 `turn/diff/updated`，其中只有“当前 turn 聚合 unified diff 字符串”，并不会直接给出 ACP diff 所需的 `oldText/newText`。
+  - ACP 标准里可视化文件变更的推荐形态是 `tool_call_update.content[]` 中的 `{"type":"diff","path","oldText","newText"}`；如果继续把 turn diff 作为纯文本 message/status 透传，上游 ACP client 无法以标准 diff UI 渲染。
+- 决策：
+  - 在 `internal/codex/client` 中显式接收 `turn/diff/updated`，并把 unified diff 作为独立 `TurnEventTypeDiffUpdated` 送到 ACP bridge。
+  - 在 `internal/acp/server` 中把 turn diff 视作一个虚拟 file tool call：
+    - `toolCallId` 固定为 `turn-diff-<turnId>`，保证同一 turn 多次 diff update 可被客户端归并
+    - `approval` 归类为 `file`
+    - 收到 diff update 时发送 `status="in_progress"`，turn 结束时补发 `completed/failed`
+  - 结构化 diff 采用“基于 unified diff 回放”的保守重建方案：
+    - 解析 unified diff 中的 file patch / hunk
+    - 使用 ACP session `cwd` 将相对路径解析为绝对路径
+    - 若客户端声明 `fs/read_text_file` 能力，则先读取旧文件文本
+    - 在 adapter 内回放 patch，构造 ACP `diff` item 所需的 `oldText/newText`
+  - 当任一文件无法可靠重建时，不伪造半残缺的 `diff` item；改为降级输出 fenced diff 文本，并附带 warning 文本（若存在部分成功/部分失败）。
+  - `fs/read_text_file` 的返回值保真透传，不再 `TrimSpace` 后返回，避免末尾换行丢失破坏 patch 回放。
+- 备选方案：
+  - 方案A：把 `turn/diff/updated` 继续作为普通文本 message/status 输出。
+  - 方案B：直接把 unified diff 字符串塞进 ACP `diff.newText` 或其他非标准字段。
+  - 方案C：只有在能可靠重建 `oldText/newText` 时才发标准 ACP `diff` item，否则降级为文本。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：ACP client 现在可以把 Codex turn diff 当作标准 tool-call diff 渲染；`toolCallId` 稳定，连续 diff update 能自然归并；对无法重建的场景保持 fail-closed，不会制造错误的文件内容。
+  - Cons：结构化桥接依赖客户端实现 `fs/read_text_file` 且当前工作区内容与 diff 旧态一致；若文件已被外部修改、或下游 diff 形态超出当前 unified diff parser 支持范围，就会降级为文本，详见 KI-0046。
+- 影响范围（文件/模块）：
+  - `internal/codex/types.go`
+  - `internal/codex/client.go`
+  - `internal/acp/types.go`
+  - `internal/acp/server.go`
+  - `internal/acp/server_stdio_test.go`
+  - `testdata/fake_codex_app_server/main.go`
+  - `test/integration/e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `TestBuildSessionUpdatePayloadToolCallContent`
+  - `TestE2ETurnDiffUpdatedMappedToToolCallDiffs`
   - `go test ./...`
