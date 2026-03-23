@@ -1982,6 +1982,17 @@ func (s *Server) prepareTurnInput(
 				return nil, nil, "", err
 			}
 			input = append(input, imageInput)
+		case "resource_link":
+			// Handle image resource links first; other resource_link kinds keep
+			// their current behavior until non-image resource support is wired.
+			if !isImageResourceLink(block) {
+				continue
+			}
+			imageInput, err := buildImageInput(block)
+			if err != nil {
+				return nil, nil, "", err
+			}
+			input = append(input, imageInput)
 		case "resource", "mention":
 			resource := resourceFromBlock(block)
 			resourceInput, resourceWarnings := s.resourceToInputs(ctx, sessionID, resource)
@@ -2252,10 +2263,23 @@ func buildImageInput(block PromptContentBlock) (codex.UserInput, error) {
 			URL:  uri,
 		}, nil
 	}
+	if path := pathFromURI(uri); path != "" {
+		return codex.UserInput{
+			Type: "localImage",
+			Path: path,
+		}, nil
+	}
 	return codex.UserInput{
 		Type: "localImage",
 		Path: uri,
 	}, nil
+}
+
+func isImageResourceLink(block PromptContentBlock) bool {
+	if strings.ToLower(strings.TrimSpace(block.Type)) != "resource_link" {
+		return false
+	}
+	return strings.HasPrefix(normalizeImageMimeType(block.MimeType), "image/")
 }
 
 func normalizeImageMimeType(mime string) string {
