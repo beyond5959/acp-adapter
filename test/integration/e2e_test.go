@@ -1606,6 +1606,66 @@ func TestE2EAcceptanceC2ImageContentBlock(t *testing.T) {
 	}
 }
 
+func TestE2EAcceptanceC2ImageResourceLinkLocalFile(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	imagePath := filepath.Join(t.TempDir(), "ngent-image-991527206.png")
+	imageURI := "file://" + filepath.ToSlash(imagePath)
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"content": []map[string]any{
+			{
+				"type": "text",
+				"text": "describe the image briefly",
+			},
+			{
+				"type":     "resource_link",
+				"name":     filepath.Base(imagePath),
+				"mimeType": "image/png",
+				"uri":      imageURI,
+			},
+		},
+	})
+
+	gotPromptResp := false
+	sawImageMessage := false
+	for !gotPromptResp {
+		msg := h.nextMessage(responseTimeout)
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.Type == "message" && strings.Contains(update.Delta, "image context received") {
+				sawImageMessage = true
+			}
+			continue
+		}
+		if messageID(msg) != "3" {
+			continue
+		}
+		var result struct {
+			StopReason string `json:"stopReason"`
+		}
+		unmarshalResult(t, msg, &result)
+		if result.StopReason != "end_turn" {
+			t.Fatalf("image resource_link prompt expected stopReason=end_turn, got %q", result.StopReason)
+		}
+		gotPromptResp = true
+	}
+
+	if !sawImageMessage {
+		t.Fatalf("image resource_link prompt expected image-aware streaming output")
+	}
+}
+
 func TestE2EEdgeC2InvalidImageBase64Rejected(t *testing.T) {
 	h := startAdapter(t)
 
