@@ -6,7 +6,16 @@
 ## 项目概览
 - 项目：acp-adapter（基于 Codex App Server 的 ACP 适配器，同时支持 Claude Code CLI 子进程适配）
 - 当前阶段：Claude Adapter CLI 重构完成（C-R5 内部迭代）
-- 最近更新：2026-03-22
+- 最近更新：2026-03-26
+
+## 2026-03-26 增量修复（Codex `fileChange.kind` schema 兼容）
+- 修复点：
+  - `internal/codex/types.go` 中 `FileUpdateChange.Kind` 改为按 schema 解析 `PatchChangeKind`，兼容当前 app-server 的对象形态 `{"type":"add|delete|update"}`。
+  - 同时保留对历史字符串形态（如 `"update"`）的兼容，避免 mixed-version trace 或旧录制样例回归失败。
+  - 修复后，包含 `fileChange` item 的 `item/started` / `item/completed` 不再因为反序列化失败被整条忽略。
+- 测试与回归：
+  - 新增 `internal/codex/client_notification_test.go::TestHandleNotification_FileChangePatchKindCompatibility`，覆盖 started/completed 两条通知以及 object/string 两种 `kind` 形态。
+  - 回归通过：`go test ./...`。
 
 ## 关键链接/文档
 - docs/SPEC.md：技术方案（权威）

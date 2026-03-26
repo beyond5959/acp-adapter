@@ -66,6 +66,8 @@
 
 ## KI-0007：Schema 漂移
 - 现象：升级 codex 版本后 app-server 协议字段变化导致运行时失败
+- 补充说明：
+  - 2026-03-26 曾出现一次典型漂移：schema 中 `FileUpdateChange.kind` 已是对象联合类型 `{"type":"add|delete|update"}`，而运行时代码仍按字符串处理，导致含 `fileChange` 的 `item/started` / `item/completed` 被整条忽略。
 - Workaround：固定 codex 版本；每次升级必须执行 `make schema` 并更新 types/校验；CI 检查 schema 变更
 
 ## KI-0005：审批等待导致 turn 卡死（permission 未响应）

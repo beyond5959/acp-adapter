@@ -1,6 +1,10 @@
 package codex
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+	"strings"
+)
 
 // RPCMessage is the app-server JSON-RPC envelope.
 type RPCMessage struct {
@@ -324,9 +328,43 @@ type CommandAction struct {
 
 // FileUpdateChange is one file diff inside a fileChange item.
 type FileUpdateChange struct {
-	Diff string `json:"diff,omitempty"`
-	Kind string `json:"kind,omitempty"`
-	Path string `json:"path,omitempty"`
+	Diff string          `json:"diff,omitempty"`
+	Kind PatchChangeKind `json:"kind,omitempty"`
+	Path string          `json:"path,omitempty"`
+}
+
+// PatchChangeKind is the schema-backed file diff kind.
+// Newer app-server versions encode it as {"type":"add|delete|update"},
+// while some older traces used a plain string.
+type PatchChangeKind struct {
+	Type string `json:"type,omitempty"`
+}
+
+// UnmarshalJSON accepts both the current object form and the legacy string form.
+func (k *PatchChangeKind) UnmarshalJSON(data []byte) error {
+	payload := bytes.TrimSpace(data)
+	if len(payload) == 0 || bytes.Equal(payload, []byte("null")) {
+		*k = PatchChangeKind{}
+		return nil
+	}
+
+	if payload[0] == '"' {
+		var legacy string
+		if err := json.Unmarshal(payload, &legacy); err != nil {
+			return err
+		}
+		k.Type = strings.TrimSpace(legacy)
+		return nil
+	}
+
+	var current struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(payload, &current); err != nil {
+		return err
+	}
+	k.Type = strings.TrimSpace(current.Type)
+	return nil
 }
 
 // CommandExecution describes one runtime command tool call emitted by app-server items.
