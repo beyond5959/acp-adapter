@@ -1113,6 +1113,10 @@ func (s *Server) listSessionsPage(
 	if err != nil {
 		return SessionListResult{}, err
 	}
+	liveSessions := []SessionInfo(nil)
+	if !cursor.Archived && strings.TrimSpace(cursor.Cursor) == "" {
+		liveSessions = s.liveSessionInfos(cwd)
+	}
 
 	if cursor.Archived {
 		nextCursor := ""
@@ -1120,12 +1124,13 @@ func (s *Server) listSessionsPage(
 			nextCursor = encodeSessionListCursor(sessionListCursor{Archived: true, Cursor: page.NextCursor})
 		}
 		return SessionListResult{
-			Sessions:   s.sessionInfosFromThreads(page.Data, true),
+			Sessions:   s.mergeSessionInfos(nil, s.sessionInfosFromThreads(page.Data, true)),
 			NextCursor: nextCursor,
 		}, nil
 	}
 
-	if len(page.Data) == 0 && page.NextCursor == "" {
+	activeSessions := s.mergeSessionInfos(liveSessions, s.sessionInfosFromThreads(page.Data, false))
+	if len(activeSessions) == 0 && page.NextCursor == "" {
 		archivedPage, archivedErr := s.fetchThreadListPage(ctx, lister, cwd, true, "", nil)
 		if archivedErr != nil {
 			return SessionListResult{}, archivedErr
@@ -1135,7 +1140,7 @@ func (s *Server) listSessionsPage(
 			nextCursor = encodeSessionListCursor(sessionListCursor{Archived: true, Cursor: archivedPage.NextCursor})
 		}
 		return SessionListResult{
-			Sessions:   s.sessionInfosFromThreads(archivedPage.Data, true),
+			Sessions:   s.mergeSessionInfos(nil, s.sessionInfosFromThreads(archivedPage.Data, true)),
 			NextCursor: nextCursor,
 		}, nil
 	}
@@ -1153,7 +1158,7 @@ func (s *Server) listSessionsPage(
 	}
 
 	return SessionListResult{
-		Sessions:   s.sessionInfosFromThreads(page.Data, false),
+		Sessions:   activeSessions,
 		NextCursor: nextCursor,
 	}, nil
 }
@@ -1216,6 +1221,125 @@ func (s *Server) sessionInfosFromThreads(threads []codex.Thread, archived bool) 
 			UpdatedAt: formatUnixTimestamp(thread.UpdatedAt),
 			Meta:      meta,
 		})
+	}
+	return out
+}
+
+func (s *Server) liveSessionInfos(cwd string) []SessionInfo {
+	cwd = strings.TrimSpace(cwd)
+	sessionIDs := s.sessions.SessionIDs()
+	if len(sessionIDs) == 0 {
+		return nil
+	}
+
+	out := make([]SessionInfo, 0, len(sessionIDs))
+	for _, sessionID := range sessionIDs {
+		sessionID = strings.TrimSpace(sessionID)
+		if sessionID == "" {
+			continue
+		}
+		sessionCWD := strings.TrimSpace(s.getSessionCWD(sessionID))
+		if sessionCWD == "" {
+			continue
+		}
+		if cwd != "" && sessionCWD != cwd {
+			continue
+		}
+		threadID, err := s.sessions.ThreadID(sessionID)
+		if err != nil {
+			continue
+		}
+		threadID = strings.TrimSpace(threadID)
+		if threadID == "" {
+			continue
+		}
+		out = append(out, SessionInfo{
+			SessionID: sessionID,
+			CWD:       sessionCWD,
+			Meta: map[string]any{
+				"threadId": threadID,
+				"archived": false,
+			},
+		})
+	}
+	return out
+}
+
+func mergeSessionInfo(current, incoming SessionInfo) SessionInfo {
+	if strings.TrimSpace(incoming.SessionID) != "" {
+		current.SessionID = strings.TrimSpace(incoming.SessionID)
+	}
+	if strings.TrimSpace(incoming.CWD) != "" {
+		current.CWD = strings.TrimSpace(incoming.CWD)
+	}
+	if strings.TrimSpace(incoming.Title) != "" {
+		current.Title = strings.TrimSpace(incoming.Title)
+	}
+	if strings.TrimSpace(incoming.UpdatedAt) != "" {
+		current.UpdatedAt = strings.TrimSpace(incoming.UpdatedAt)
+	}
+	if len(incoming.Meta) > 0 {
+		if current.Meta == nil {
+			current.Meta = map[string]any{}
+		}
+		for key, value := range incoming.Meta {
+			key = strings.TrimSpace(key)
+			if key == "" {
+				continue
+			}
+			current.Meta[key] = value
+		}
+	}
+	return current
+}
+
+func cloneSessionInfo(session SessionInfo) SessionInfo {
+	cloned := SessionInfo{
+		SessionID: strings.TrimSpace(session.SessionID),
+		CWD:       strings.TrimSpace(session.CWD),
+		Title:     strings.TrimSpace(session.Title),
+		UpdatedAt: strings.TrimSpace(session.UpdatedAt),
+	}
+	if len(session.Meta) == 0 {
+		return cloned
+	}
+	cloned.Meta = make(map[string]any, len(session.Meta))
+	for key, value := range session.Meta {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		cloned.Meta[key] = value
+	}
+	if len(cloned.Meta) == 0 {
+		cloned.Meta = nil
+	}
+	return cloned
+}
+
+func (s *Server) mergeSessionInfos(primary []SessionInfo, secondary []SessionInfo) []SessionInfo {
+	if len(primary) == 0 && len(secondary) == 0 {
+		return nil
+	}
+
+	out := make([]SessionInfo, 0, len(primary)+len(secondary))
+	indexes := make(map[string]int, len(primary)+len(secondary))
+	for _, group := range [][]SessionInfo{primary, secondary} {
+		for _, session := range group {
+			item := cloneSessionInfo(session)
+			if item.SessionID == "" {
+				continue
+			}
+			if index, ok := indexes[item.SessionID]; ok {
+				out[index] = mergeSessionInfo(out[index], item)
+				continue
+			}
+			indexes[item.SessionID] = len(out)
+			out = append(out, item)
+		}
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
