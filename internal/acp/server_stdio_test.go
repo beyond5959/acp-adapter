@@ -264,6 +264,108 @@ func TestBuildSessionUpdatePayloadToolCallContent(t *testing.T) {
 	}
 }
 
+func TestServerStdioSessionListIncludesLiveSessionBeforeThreadListHistory(t *testing.T) {
+	t.Parallel()
+
+	clientToServerReader, clientToServerWriter := io.Pipe()
+	serverToClientReader, serverToClientWriter := io.Pipe()
+	defer func() {
+		_ = clientToServerReader.Close()
+		_ = clientToServerWriter.Close()
+		_ = serverToClientReader.Close()
+		_ = serverToClientWriter.Close()
+	}()
+
+	mockApp := &stdioMockAppClient{}
+	server := NewServer(
+		NewStdioCodec(clientToServerReader, serverToClientWriter),
+		mockApp,
+		bridge.NewStore(),
+		slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		ServerOptions{
+			PatchApplyMode:   "appserver",
+			RetryTurnOnCrash: true,
+			InitialAuthMode:  "chatgpt_subscription",
+		},
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serveErrCh := make(chan error, 1)
+	go func() {
+		serveErrCh <- server.Serve(ctx)
+	}()
+
+	msgCh := make(chan RPCMessage, 64)
+	readErrCh := make(chan error, 1)
+	go scanRPCStream(serverToClientReader, msgCh, readErrCh)
+
+	writeRPCRequest(t, clientToServerWriter, "1", "initialize", map[string]any{
+		"protocolVersion": 1,
+	})
+	initResponse := mustReadRPCMessage(t, msgCh, readErrCh, 2*time.Second)
+	if initResponse.Error != nil {
+		t.Fatalf("initialize failed: %+v", initResponse.Error)
+	}
+
+	writeRPCRequest(t, clientToServerWriter, "2", "session/new", map[string]any{
+		"cwd": "/tmp/live-session",
+	})
+	newResponse := mustReadRPCMessage(t, msgCh, readErrCh, 2*time.Second)
+	if newResponse.Error != nil {
+		t.Fatalf("session/new failed: %+v", newResponse.Error)
+	}
+	var newPayload SessionNewResult
+	if err := json.Unmarshal(newResponse.Result, &newPayload); err != nil {
+		t.Fatalf("decode session/new result: %v", err)
+	}
+	if strings.TrimSpace(newPayload.SessionID) == "" {
+		t.Fatalf("session/new returned empty sessionId")
+	}
+
+	writeRPCRequest(t, clientToServerWriter, "3", "session/list", map[string]any{
+		"cwd": "/tmp/live-session",
+	})
+	var listResponse RPCMessage
+	for {
+		msg := mustReadRPCMessage(t, msgCh, readErrCh, 2*time.Second)
+		if messageIDString(msg.ID) != "3" {
+			continue
+		}
+		listResponse = msg
+		break
+	}
+	if listResponse.Error != nil {
+		t.Fatalf("session/list failed: %+v", listResponse.Error)
+	}
+	var listPayload SessionListResult
+	if err := json.Unmarshal(listResponse.Result, &listPayload); err != nil {
+		t.Fatalf("decode session/list result: %v", err)
+	}
+	if len(listPayload.Sessions) != 1 {
+		t.Fatalf("len(session/list.sessions)=%d, want 1", len(listPayload.Sessions))
+	}
+	if got := strings.TrimSpace(listPayload.Sessions[0].SessionID); got != newPayload.SessionID {
+		t.Fatalf("session/list sessionId=%q, want %q", got, newPayload.SessionID)
+	}
+	if got := strings.TrimSpace(listPayload.Sessions[0].CWD); got != "/tmp/live-session" {
+		t.Fatalf("session/list cwd=%q, want %q", got, "/tmp/live-session")
+	}
+	if got := strings.TrimSpace(fmt.Sprint(listPayload.Sessions[0].Meta["threadId"])); got != "thread-1" {
+		t.Fatalf("session/list _meta.threadId=%q, want %q", got, "thread-1")
+	}
+
+	_ = clientToServerWriter.Close()
+	select {
+	case err := <-serveErrCh:
+		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
+			t.Fatalf("server exited with error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for server shutdown")
+	}
+}
+
 type stdioMockAppClient struct{}
 
 func (m *stdioMockAppClient) ThreadStart(ctx context.Context, cwd string, options codex.RunOptions) (string, error) {
@@ -341,6 +443,10 @@ func (m *stdioMockAppClient) ModelsList(ctx context.Context) ([]codex.ModelOptio
 		{ID: "gpt-5.1-codex", Name: "GPT-5.1 Codex", IsDefault: true},
 		{ID: "gpt-5", Name: "GPT-5"},
 	}, nil
+}
+
+func (m *stdioMockAppClient) ThreadList(ctx context.Context, params codex.ThreadListParams) (codex.ThreadListResult, error) {
+	return codex.ThreadListResult{}, nil
 }
 
 func (m *stdioMockAppClient) ApprovalRespond(

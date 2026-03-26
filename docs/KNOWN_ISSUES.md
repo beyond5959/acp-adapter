@@ -231,6 +231,7 @@
 ## KI-0040：`session/load` 已实现，但历史 session 标识与回放仍有局限
 - 现象：
   - Codex adapter 已支持 ACP `session/list` 与 `session/load`，可通过 app-server `thread/list` / `thread/resume` 发现并恢复历史 thread。
+  - 当前进程里刚通过 `session/new` / `session/load` 建立的 live session，现在会立刻出现在 `session/list`；但历史 session 的 discoverability 仍主要依赖 app-server `thread/list`。
   - 但 `session/list` 返回的 `sessionId` 仍是 adapter 进程内映射；重启 adapter 后，同一历史 thread 可能分配新的 `sessionId`。
   - `thread/resume` 返回的 `thread.turns` 本身是 lossy history；app-server schema 明确说明不会完整持久化所有 agent 交互，例如部分 command/tool 细节。
 - 影响：

@@ -8,6 +8,15 @@
 - 当前阶段：Claude Adapter CLI 重构完成（C-R5 内部迭代）
 - 最近更新：2026-03-26
 
+## 2026-03-26 增量修复（Codex `session/list` 立即暴露 live session）
+- 修复点：
+  - `internal/acp/server.go` 的 `session/list` active page 现在会先并入当前进程里已知且 `cwd` 匹配的 live session，再与 app-server `thread/list` 结果做去重合并。
+  - 这样 `session/new` 刚返回后，即使 Codex app-server 的 `thread/list` 还没把新 thread 刷进历史列表，ACP client 也能立刻在 `session/list` 看到当前 session。
+  - 当稍后的 `thread/list` 返回了同一个 thread 的正式摘要时，adapter 会用其 `title/updatedAt/_meta` 补齐前面的 live placeholder，而不会改变已分配的 session id。
+- 测试与回归：
+  - 新增 `internal/acp/server_stdio_test.go::TestServerStdioSessionListIncludesLiveSessionBeforeThreadListHistory`，覆盖 `initialize -> session/new -> session/list` 时 thread history 仍为空的场景。
+  - 回归通过：`go test ./...`。
+
 ## 2026-03-26 增量修复（Codex `fileChange.kind` schema 兼容）
 - 修复点：
   - `internal/codex/types.go` 中 `FileUpdateChange.Kind` 改为按 schema 解析 `PatchChangeKind`，兼容当前 app-server 的对象形态 `{"type":"add|delete|update"}`。
