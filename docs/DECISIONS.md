@@ -51,6 +51,31 @@
 - ADR-0045：默认开启 Codex reasoning summary（app-server `-c model_reasoning_summary="detailed"`）
 - ADR-0046：Codex runtime `commandExecution` 映射为 ACP `tool_call_update`
 - ADR-0047：工具图片输出桥接为 ACP `image` content block
+- ADR-0048：Codex `PatchChangeKind` 运行时兼容策略
+
+### ADR-0048：Codex `PatchChangeKind` 运行时兼容策略
+- 日期：2026-03-26
+- 状态：Accepted
+- 背景：
+  - 当前仓库已提交的 app-server schema 中，`FileUpdateChange.kind` 的 `PatchChangeKind` 是对象联合类型（如 `{"type":"add"}`），但运行时代码仍按字符串解码。
+  - 结果是只要 `item/started` / `item/completed` 含 `fileChange` item，整个 notification 就会因 unmarshal 失败被丢弃。
+- 决策：
+  - 将运行时 `FileUpdateChange.Kind` 调整为显式 `PatchChangeKind` 类型，并实现自定义 `UnmarshalJSON`。
+  - 解析策略同时接受：
+    - 当前 schema 的对象形态：`{"type":"add|delete|update"}`
+    - 历史兼容字符串形态：`"add" | "delete" | "update"`
+- 备选方案：
+  - 方案A：把 `kind` 降级成 `any`/`json.RawMessage`，只求不报错。
+  - 方案B：按 schema 建模，同时保留 legacy 兼容。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：修复真实 Codex trace 兼容问题；和已提交 schema 对齐；仍能兼容旧样本。
+  - Cons：增加少量多形态解码逻辑；如果未来 schema 再扩展字段，仍需重新生成/审视类型。
+- 影响范围（文件/模块）：
+  - `internal/codex/types.go`
+  - `internal/codex/client_notification_test.go`
+- 验证方式（测试/验收项）：
+  - `TestHandleNotification_FileChangePatchKindCompatibility`
+  - 回归 `go test ./...`
 
 ---
 
