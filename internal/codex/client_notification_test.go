@@ -65,3 +65,71 @@ func TestHandleNotification_FileChangePatchKindCompatibility(t *testing.T) {
 		})
 	}
 }
+
+func TestHandleNotification_TurnCompletedIncludesErrorMessage(t *testing.T) {
+	t.Parallel()
+
+	client := &Client{
+		logger:      slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		approvals:   make(map[string]pendingApproval),
+		turnStreams: make(map[string]chan TurnEvent),
+		queuedTurns: make(map[string][]TurnEvent),
+	}
+
+	client.handleNotification(RPCMessage{
+		JSONRPC: "2.0",
+		Method:  notificationTurnCompleted,
+		Params: json.RawMessage(
+			`{"threadId":"thread-1","turn":{"id":"turn-1","status":"failed","error":{"message":"apply_patch verification failed","additionalDetails":"patch no longer matches current file contents","codexErrorInfo":"other"}}}`,
+		),
+	})
+
+	queued := client.queuedTurns["turn-1"]
+	if len(queued) != 1 {
+		t.Fatalf("queued events=%d, want 1", len(queued))
+	}
+	event := queued[0]
+	if event.Type != TurnEventTypeCompleted {
+		t.Fatalf("event type=%q, want %q", event.Type, TurnEventTypeCompleted)
+	}
+	if event.StopReason != "error" {
+		t.Fatalf("stop reason=%q, want %q", event.StopReason, "error")
+	}
+	if got, want := event.Message, "apply_patch verification failed: patch no longer matches current file contents [codexErrorInfo=other]"; got != want {
+		t.Fatalf("message=%q, want %q", got, want)
+	}
+}
+
+func TestHandleNotification_ErrorNotificationRetrying(t *testing.T) {
+	t.Parallel()
+
+	client := &Client{
+		logger:      slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		approvals:   make(map[string]pendingApproval),
+		turnStreams: make(map[string]chan TurnEvent),
+		queuedTurns: make(map[string][]TurnEvent),
+	}
+
+	client.handleNotification(RPCMessage{
+		JSONRPC: "2.0",
+		Method:  notificationError,
+		Params: json.RawMessage(
+			`{"threadId":"thread-1","turnId":"turn-1","willRetry":true,"error":{"message":"temporary upstream connection drop","codexErrorInfo":{"responseStreamDisconnected":{"httpStatusCode":502}}}}`,
+		),
+	})
+
+	queued := client.queuedTurns["turn-1"]
+	if len(queued) != 1 {
+		t.Fatalf("queued events=%d, want 1", len(queued))
+	}
+	event := queued[0]
+	if event.Type != TurnEventTypeBackendError {
+		t.Fatalf("event type=%q, want %q", event.Type, TurnEventTypeBackendError)
+	}
+	if !event.WillRetry {
+		t.Fatalf("willRetry=%t, want true", event.WillRetry)
+	}
+	if got, want := event.Message, "temporary upstream connection drop [codexErrorInfo=responseStreamDisconnected(httpStatusCode=502)]"; got != want {
+		t.Fatalf("message=%q, want %q", got, want)
+	}
+}

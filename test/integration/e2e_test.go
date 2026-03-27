@@ -1318,6 +1318,122 @@ func TestE2EAcceptanceB1AppServerCrashDuringTurnRetryFailureHasHint(t *testing.T
 	h.assertStdoutPureJSONRPC()
 }
 
+func TestE2ETurnCompletedFailedErrorDetailsSurfaced(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "turn completed error detail",
+	})
+
+	gotPromptResp := false
+	turnErrorMessage := ""
+	deadline := time.Now().Add(responseTimeout)
+	for !gotPromptResp {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for failed turn completion")
+		}
+		msg := h.nextMessage(time.Until(deadline))
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.Status == "turn_error" {
+				turnErrorMessage = update.Message
+			}
+			continue
+		}
+		if messageID(msg) != "3" {
+			continue
+		}
+		var result struct {
+			StopReason string `json:"stopReason"`
+		}
+		unmarshalResult(t, msg, &result)
+		if result.StopReason != "error" {
+			t.Fatalf("failed turn expected stopReason=error, got %q", result.StopReason)
+		}
+		gotPromptResp = true
+	}
+
+	if !strings.Contains(turnErrorMessage, "apply_patch verification failed") {
+		t.Fatalf("expected turn_error to include apply_patch verification failure, got %q", turnErrorMessage)
+	}
+	if !strings.Contains(turnErrorMessage, "internal/httpapi/httpapi.go") {
+		t.Fatalf("expected turn_error to include target file path, got %q", turnErrorMessage)
+	}
+
+	h.assertStdoutPureJSONRPC()
+}
+
+func TestE2EErrorNotificationRetryingSurfaced(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "error notification retry",
+	})
+
+	gotPromptResp := false
+	retryingMessage := ""
+	sawTurnError := false
+	deadline := time.Now().Add(responseTimeout)
+	for !gotPromptResp {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for retrying error notification flow")
+		}
+		msg := h.nextMessage(time.Until(deadline))
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.Status == "backend_error_retrying" {
+				retryingMessage = update.Message
+			}
+			if update.Status == "turn_error" {
+				sawTurnError = true
+			}
+			continue
+		}
+		if messageID(msg) != "3" {
+			continue
+		}
+		var result struct {
+			StopReason string `json:"stopReason"`
+		}
+		unmarshalResult(t, msg, &result)
+		if result.StopReason != "end_turn" {
+			t.Fatalf("retrying error flow expected stopReason=end_turn, got %q", result.StopReason)
+		}
+		gotPromptResp = true
+	}
+
+	if !strings.Contains(retryingMessage, "temporary upstream connection drop") {
+		t.Fatalf("expected backend_error_retrying message, got %q", retryingMessage)
+	}
+	if sawTurnError {
+		t.Fatalf("retrying error notification should not terminate the turn")
+	}
+
+	h.assertStdoutPureJSONRPC()
+}
+
 func TestE2ENotificationRoutingBySessionAndTurn(t *testing.T) {
 	h := startAdapter(t)
 

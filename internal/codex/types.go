@@ -285,6 +285,21 @@ type TurnCompletedNotification struct {
 	Turn       *TurnRef `json:"turn,omitempty"`
 }
 
+// ErrorNotification reports one downstream turn error before completion.
+type ErrorNotification struct {
+	ThreadID  string    `json:"threadId"`
+	TurnID    string    `json:"turnId"`
+	Error     TurnError `json:"error"`
+	WillRetry bool      `json:"willRetry"`
+}
+
+// TurnError carries structured downstream failure details.
+type TurnError struct {
+	AdditionalDetails string          `json:"additionalDetails,omitempty"`
+	CodexErrorInfo    json.RawMessage `json:"codexErrorInfo,omitempty"`
+	Message           string          `json:"message"`
+}
+
 // ThreadRef is a minimal thread object shape used by newer app-server payloads.
 type ThreadRef struct {
 	ID string `json:"id,omitempty"`
@@ -292,8 +307,9 @@ type ThreadRef struct {
 
 // TurnRef is a minimal turn object shape used by newer app-server payloads.
 type TurnRef struct {
-	ID     string `json:"id,omitempty"`
-	Status string `json:"status,omitempty"`
+	ID     string     `json:"id,omitempty"`
+	Status string     `json:"status,omitempty"`
+	Error  *TurnError `json:"error,omitempty"`
 }
 
 // ThreadItemRef is a minimal item object shape used by item started/completed notifications.
@@ -693,6 +709,8 @@ const (
 	TurnEventTypeCommandExecutionDelta TurnEventType = "command_execution_delta"
 	// TurnEventTypeDiffUpdated indicates downstream streamed aggregated turn diff.
 	TurnEventTypeDiffUpdated TurnEventType = "diff_updated"
+	// TurnEventTypeBackendError indicates downstream reported a turn error notification.
+	TurnEventTypeBackendError TurnEventType = "backend_error"
 )
 
 // TurnEvent is emitted to ACP session/prompt handler.
@@ -711,6 +729,7 @@ type TurnEvent struct {
 	Message    string
 	Approval   ApprovalRequest
 	Plan       []TurnPlanStep
+	WillRetry  bool
 }
 
 const (
@@ -739,6 +758,7 @@ const (
 
 	notificationTurnStarted                     = "turn/started"
 	notificationTurnUpdate                      = "turn/update"
+	notificationError                           = "error"
 	notificationItemStarted                     = "item/started"
 	notificationItemCompleted                   = "item/completed"
 	notificationItemAgentMessageDelta           = "item/agentMessage/delta"

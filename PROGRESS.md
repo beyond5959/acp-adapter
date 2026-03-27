@@ -6,7 +6,22 @@
 ## 项目概览
 - 项目：acp-adapter（基于 Codex App Server 的 ACP 适配器，同时支持 Claude Code CLI 子进程适配）
 - 当前阶段：Claude Adapter CLI 重构完成（C-R5 内部迭代）
-- 最近更新：2026-03-26
+- 最近更新：2026-03-27
+
+## 2026-03-27 增量修复（Codex turn 失败详情桥接）
+- 修复点：
+  - `internal/codex/client` 新增对下游 `error` notification 的解析，并把 `willRetry` 与结构化 `TurnError` 透传为内部 turn event。
+  - `turn/completed` 现在会读取新版 payload 中 `turn.error.message` / `additionalDetails` / `codexErrorInfo`，不再只根据 `status=failed` 丢掉失败原因。
+  - `internal/acp/server` 新增两类上游可见状态：
+    - `backend_error_retrying` / `backend_error`：用于下游显式 error notification
+    - `turn_error`：用于最终 failed turn，并携带真实失败消息
+  - 结果是像 `apply_patch verification failed: Failed to find expected lines ...` 这类真实 Codex 失败原因，会作为 ACP `session/update(status="turn_error")` 暴露给上游，而不再只留在子进程 stderr 日志中。
+- 测试与回归：
+  - 新增 `internal/codex/client_notification_test.go::TestHandleNotification_TurnCompletedIncludesErrorMessage`
+  - 新增 `internal/codex/client_notification_test.go::TestHandleNotification_ErrorNotificationRetrying`
+  - 新增 `test/integration/e2e_test.go::TestE2ETurnCompletedFailedErrorDetailsSurfaced`
+  - 新增 `test/integration/e2e_test.go::TestE2EErrorNotificationRetryingSurfaced`
+  - 回归通过：`go test ./...`
 
 ## 2026-03-26 增量修复（Codex `session/list` 立即暴露 live session）
 - 修复点：

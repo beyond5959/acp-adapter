@@ -4416,6 +4416,22 @@ func (t *turnLifecycle) apply(event codex.TurnEvent) ([]SessionUpdateParams, boo
 				Status:    "review_mode_exited",
 			},
 		}, false, ""
+	case codex.TurnEventTypeBackendError:
+		t.phase = turnPhaseStreaming
+		status := "backend_error"
+		if event.WillRetry {
+			status = "backend_error_retrying"
+		}
+		return []SessionUpdateParams{
+			{
+				SessionID: t.sessionID,
+				TurnID:    t.turnID,
+				Type:      "status",
+				Phase:     string(t.phase),
+				Status:    status,
+				Message:   event.Message,
+			},
+		}, false, ""
 	case codex.TurnEventTypeCompleted:
 		stopReason := normalizeStopReason(event.StopReason)
 		if t.cancelRequested {
@@ -4439,12 +4455,19 @@ func (t *turnLifecycle) apply(event codex.TurnEvent) ([]SessionUpdateParams, boo
 		if diffUpdate, ok := t.diffTerminalUpdate(diffStatus, diffMessage); ok {
 			updates = append(updates, diffUpdate)
 		}
+		status := "turn_completed"
+		message := ""
+		if stopReason == "error" {
+			status = "turn_error"
+			message = event.Message
+		}
 		updates = append(updates, SessionUpdateParams{
 			SessionID: t.sessionID,
 			TurnID:    t.turnID,
 			Type:      "status",
 			Phase:     string(t.phase),
-			Status:    "turn_completed",
+			Status:    status,
+			Message:   message,
 		})
 		return updates, true, stopReason
 	case codex.TurnEventTypeError:

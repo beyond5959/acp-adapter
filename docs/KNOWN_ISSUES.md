@@ -49,6 +49,8 @@
 - KI-0043：默认开启 detailed reasoning summary 会增加输出与 token 消耗
 - KI-0044：runtime `commandExecution` 仍无法区分 stdout/stderr 通道
 - KI-0045：工具图片若只有 URL、没有 inline data，无法桥接为完整 ACP image block
+- KI-0046：`turn/diff/updated` 的 ACP 结构化 diff 重建依赖 `fs/read_text_file` 与旧文件一致性
+- KI-0047：Codex ChatGPT Apps 后台拉取失败仍只表现为子进程 stderr 日志
 
 ---
 
@@ -645,3 +647,23 @@
   - 若只需要展示变更文本，可直接消费 adapter 降级后的 fenced diff 文本。
 - 后续计划：
   - 持续跟踪 app-server 是否会补充结构化 file-change payload；若后续直接提供 `path/oldText/newText` 或更稳定的 file change item，可去掉当前“读取旧文件 + 回放 unified diff”的重建步骤。
+
+## KI-0047：Codex ChatGPT Apps 后台拉取失败仍只表现为子进程 stderr 日志
+- 现象：
+  - 在真实 Codex 后端下，可能看到类似如下 stderr：
+    - `rmcp::transport::worker: worker quit with fatal: Transport channel closed`
+    - 请求目标包含 `https://chatgpt.com/backend-api/wham/apps`
+  - 这类日志通常来自 Codex 子进程的后台 ChatGPT Apps/transport 拉取，不一定绑定当前 ACP turn。
+- 影响：
+  - 当前 adapter 已经能把 turn 级失败详情（例如 `apply_patch verification failed ...`）桥接到 ACP `turn_error`。
+  - 但对这类“无明确 turn 关联”的后台 stderr 错误，adapter 仍只能原样透传到 stderr，无法稳定映射成某个 session/turn 的结构化状态。
+- 复现：
+  - 使用真实 `codex app-server`，并让下游在拉取 ChatGPT Apps 列表或相关后台资源时遇到网络中断/认证异常。
+  - stderr 中可见 `chatgpt.com/backend-api/wham/apps` 相关 transport error，而 ACP 协议流里未必出现对应 turn 失败。
+- Workaround：
+  - 若当前 prompt/turn 实际成功，可先把这类日志视为下游后台噪声。
+  - 若 prompt 随后失败，优先查看同 turn 的 `session/update(status="turn_error")` 消息；它现在会比 stderr 更接近真实失败原因。
+  - 在 subscription / ChatGPT 登录态下，优先确认本机到 `chatgpt.com` 的网络与证书链正常；必要时改用 `CODEX_API_KEY` / `OPENAI_API_KEY` 路径复现对比。
+- 后续计划：
+  - 继续跟踪 Codex app-server 是否会为这类后台 transport failure 补充稳定的 JSON-RPC notification / thread 关联字段。
+  - 若后续存在可可靠关联 turn 的协议事件，再升级 adapter 把该类错误结构化映射到 ACP 状态流。
