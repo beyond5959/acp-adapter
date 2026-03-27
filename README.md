@@ -85,7 +85,6 @@ This section is intentionally based on the current code in [`internal/acp/server
 | `session/request_permission` | Yes | Used for command/file/network/MCP approvals. |
 | `fs/read_text_file` | Partial | Used only when the client exposes it, for mentions and diff reconstruction. |
 | `fs/write_text_file` | Partial | Used only when `PATCH_APPLY_MODE=acp_fs`. |
-| `session/fork` | No | No ACP handler in the current server switch. |
 
 | `session/update.type` | Standard `update.sessionUpdate` | Support | Notes |
 |------|------|------|------|
@@ -101,8 +100,6 @@ This section is intentionally based on the current code in [`internal/acp/server
 |------|------|------|
 | `loadSession` | Yes | Advertised from `initialize`. |
 | `sessionCapabilities.list` | Yes | Advertised when the Codex backend supports session listing. |
-| `sessionCapabilities.fork` | No | Not advertised. |
-| `sessionCapabilities.resume` | No | Not advertised; historical restore is exposed as `loadSession`. |
 | `promptCapabilities.image` | Yes | Advertised. |
 | `promptCapabilities.audio` | No | Advertised as unsupported. |
 | `promptCapabilities.embeddedContext` | Yes | Advertised. |
