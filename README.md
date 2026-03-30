@@ -90,6 +90,7 @@ This section is intentionally based on the current code in [`internal/acp/server
 |------|------|------|------|
 | `message` | `agent_message_chunk` / `user_message_chunk` | Yes | Main text streaming path. |
 | `tool_call_update` | `tool_call_update` | Yes | Tool lifecycle, approvals, command output, diff, text, and image content. |
+| `usage_update` | `usage_update` | Yes | Emitted from Codex `thread/tokenUsage/updated`; currently maps `used=tokenUsage.total.totalTokens` and `size=modelContextWindow`. |
 | `config_options_update` | `config_options_update` | Yes | Emitted after `session/set_config_option`. |
 | `plan` | `plan` | Yes | Emitted from Codex plan events. |
 | `available_commands_update` | `available_commands_update` | Yes | Publishes the Codex slash-command directory. |

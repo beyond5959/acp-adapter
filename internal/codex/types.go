@@ -458,6 +458,29 @@ type TurnDiffUpdatedNotification struct {
 	Diff     string `json:"diff"`
 }
 
+// ThreadTokenUsageUpdatedNotification carries the latest thread token usage snapshot.
+type ThreadTokenUsageUpdatedNotification struct {
+	ThreadID   string           `json:"threadId"`
+	TurnID     string           `json:"turnId"`
+	TokenUsage ThreadTokenUsage `json:"tokenUsage"`
+}
+
+// ThreadTokenUsage is the schema-backed token-usage snapshot for one thread.
+type ThreadTokenUsage struct {
+	Last               TokenUsageBreakdown `json:"last"`
+	ModelContextWindow *int64              `json:"modelContextWindow"`
+	Total              TokenUsageBreakdown `json:"total"`
+}
+
+// TokenUsageBreakdown is the schema-backed token usage breakdown.
+type TokenUsageBreakdown struct {
+	CachedInputTokens     int64 `json:"cachedInputTokens"`
+	InputTokens           int64 `json:"inputTokens"`
+	OutputTokens          int64 `json:"outputTokens"`
+	ReasoningOutputTokens int64 `json:"reasoningOutputTokens"`
+	TotalTokens           int64 `json:"totalTokens"`
+}
+
 // TurnPlanStep is one app-server plan step entry.
 type TurnPlanStep struct {
 	Status string `json:"status"`
@@ -709,6 +732,8 @@ const (
 	TurnEventTypeCommandExecutionDelta TurnEventType = "command_execution_delta"
 	// TurnEventTypeDiffUpdated indicates downstream streamed aggregated turn diff.
 	TurnEventTypeDiffUpdated TurnEventType = "diff_updated"
+	// TurnEventTypeTokenUsageUpdated indicates downstream reported thread token usage.
+	TurnEventTypeTokenUsageUpdated TurnEventType = "token_usage_updated"
 	// TurnEventTypeBackendError indicates downstream reported a turn error notification.
 	TurnEventTypeBackendError TurnEventType = "backend_error"
 )
@@ -723,6 +748,7 @@ type TurnEvent struct {
 	ItemText   string
 	Command    *CommandExecution
 	Tool       *ToolExecution
+	TokenUsage *ThreadTokenUsage
 	Diff       string
 	Delta      string
 	StopReason string
@@ -758,6 +784,7 @@ const (
 
 	notificationTurnStarted                     = "turn/started"
 	notificationTurnUpdate                      = "turn/update"
+	notificationThreadTokenUsageUpdated         = "thread/tokenUsage/updated"
 	notificationError                           = "error"
 	notificationItemStarted                     = "item/started"
 	notificationItemCompleted                   = "item/completed"

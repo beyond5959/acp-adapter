@@ -6,7 +6,20 @@
 ## 项目概览
 - 项目：acp-adapter（基于 Codex App Server 的 ACP 适配器，同时支持 Claude Code CLI 子进程适配）
 - 当前阶段：Claude Adapter CLI 重构完成（C-R5 内部迭代）
-- 最近更新：2026-03-27
+- 最近更新：2026-03-30
+
+## 2026-03-30 增量修复（Codex `thread/tokenUsage/updated` -> ACP `usage_update`）
+- 修复点：
+  - `internal/codex/types.go` / `internal/codex/client.go` 新增 schema 对齐的 `ThreadTokenUsageUpdatedNotification`、`ThreadTokenUsage`、`TokenUsageBreakdown`，并接收下游 `thread/tokenUsage/updated` notification。
+  - `internal/acp/server` / `internal/acp/types` 新增 ACP `session/update(type="usage_update")` 桥接：
+    - `used` <- `tokenUsage.total.totalTokens`
+    - `size` <- `tokenUsage.modelContextWindow`
+  - `session/update` 继续遵循当前 adapter 的“双输出”策略：既保留顶层 `used/size`，也填充标准 `params.update.sessionUpdate="usage_update"` envelope，便于 ACP client 直接消费。
+- 测试与回归：
+  - 新增 `internal/codex/client_notification_test.go::TestHandleNotification_ThreadTokenUsageUpdated`
+  - 新增 `internal/acp/server_stdio_test.go::TestBuildSessionUpdatePayloadUsageUpdate`
+  - 新增 `test/integration/e2e_test.go::TestE2EACPUsageUpdateMappedFromThreadTokenUsageUpdated`
+  - 全量通过：`go test ./...`
 
 ## 2026-03-27 增量修复（Codex turn 失败详情桥接）
 - 修复点：

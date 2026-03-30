@@ -891,6 +891,18 @@ func (c *Client) handleNotification(msg RPCMessage) {
 			ItemType: "turn_diff",
 			Diff:     note.Diff,
 		}, false)
+	case notificationThreadTokenUsageUpdated:
+		var note ThreadTokenUsageUpdatedNotification
+		if err := json.Unmarshal(msg.Params, &note); err != nil {
+			c.logger.Warn("ignore malformed thread/tokenUsage/updated", slog.String("error", err.Error()))
+			return
+		}
+		c.pushTurnEvent(note.TurnID, TurnEvent{
+			Type:       TurnEventTypeTokenUsageUpdated,
+			ThreadID:   note.ThreadID,
+			TurnID:     note.TurnID,
+			TokenUsage: cloneThreadTokenUsage(&note.TokenUsage),
+		}, false)
 	case notificationItemCompleted:
 		var note ItemCompletedNotification
 		if err := json.Unmarshal(msg.Params, &note); err != nil {
@@ -1151,6 +1163,18 @@ func cloneOptionalBool(value *bool) *bool {
 		return nil
 	}
 	cloned := *value
+	return &cloned
+}
+
+func cloneThreadTokenUsage(value *ThreadTokenUsage) *ThreadTokenUsage {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	if value.ModelContextWindow != nil {
+		window := *value.ModelContextWindow
+		cloned.ModelContextWindow = &window
+	}
 	return &cloned
 }
 

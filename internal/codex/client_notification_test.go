@@ -133,3 +133,43 @@ func TestHandleNotification_ErrorNotificationRetrying(t *testing.T) {
 		t.Fatalf("message=%q, want %q", got, want)
 	}
 }
+
+func TestHandleNotification_ThreadTokenUsageUpdated(t *testing.T) {
+	t.Parallel()
+
+	client := &Client{
+		logger:      slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		approvals:   make(map[string]pendingApproval),
+		turnStreams: make(map[string]chan TurnEvent),
+		queuedTurns: make(map[string][]TurnEvent),
+	}
+
+	client.handleNotification(RPCMessage{
+		JSONRPC: "2.0",
+		Method:  notificationThreadTokenUsageUpdated,
+		Params: json.RawMessage(
+			`{"threadId":"thread-1","turnId":"turn-1","tokenUsage":{"last":{"cachedInputTokens":1000,"inputTokens":4000,"outputTokens":500,"reasoningOutputTokens":250,"totalTokens":5750},"modelContextWindow":200000,"total":{"cachedInputTokens":5000,"inputTokens":35000,"outputTokens":12000,"reasoningOutputTokens":1000,"totalTokens":53000}}}`,
+		),
+	})
+
+	queued := client.queuedTurns["turn-1"]
+	if len(queued) != 1 {
+		t.Fatalf("queued events=%d, want 1", len(queued))
+	}
+	event := queued[0]
+	if event.Type != TurnEventTypeTokenUsageUpdated {
+		t.Fatalf("event type=%q, want %q", event.Type, TurnEventTypeTokenUsageUpdated)
+	}
+	if event.TokenUsage == nil {
+		t.Fatalf("token usage event missing token usage payload")
+	}
+	if got, want := event.TokenUsage.Total.TotalTokens, int64(53000); got != want {
+		t.Fatalf("total.totalTokens=%d, want %d", got, want)
+	}
+	if event.TokenUsage.ModelContextWindow == nil || *event.TokenUsage.ModelContextWindow != 200000 {
+		t.Fatalf("modelContextWindow=%v, want 200000", event.TokenUsage.ModelContextWindow)
+	}
+	if got, want := event.TokenUsage.Last.TotalTokens, int64(5750); got != want {
+		t.Fatalf("last.totalTokens=%d, want %d", got, want)
+	}
+}

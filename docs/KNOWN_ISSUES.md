@@ -51,6 +51,7 @@
 - KI-0045：工具图片若只有 URL、没有 inline data，无法桥接为完整 ACP image block
 - KI-0046：`turn/diff/updated` 的 ACP 结构化 diff 重建依赖 `fs/read_text_file` 与旧文件一致性
 - KI-0047：Codex ChatGPT Apps 后台拉取失败仍只表现为子进程 stderr 日志
+- KI-0048：Codex `thread/tokenUsage/updated` 目前仍依赖通知先于 `turn/completed`
 
 ---
 
@@ -667,3 +668,18 @@
 - 后续计划：
   - 继续跟踪 Codex app-server 是否会为这类后台 transport failure 补充稳定的 JSON-RPC notification / thread 关联字段。
   - 若后续存在可可靠关联 turn 的协议事件，再升级 adapter 把该类错误结构化映射到 ACP 状态流。
+
+## KI-0048：Codex `thread/tokenUsage/updated` 目前仍依赖通知先于 `turn/completed`
+- 现象：
+  - adapter 已把 `thread/tokenUsage/updated` 桥接为 ACP `session/update(type="usage_update")`。
+  - 但当前 prompt turn 仍以 `turn/completed` 为终态立刻收敛；如果某个 app-server 版本把 token usage notification 放在 `turn/completed` 之后发送，这次 turn 的 ACP 流不会再补发 usage update。
+- 影响：
+  - 当前 fake server 与已知联调路径都能正常看到 usage update。
+  - 但如果下游通知时序发生变化，个别 turn 可能缺少“最后一次” token usage 刷新。
+- 复现：
+  - 使用会在 `turn/completed` 之后才发送 `thread/tokenUsage/updated` 的 codex app-server 版本执行 prompt。
+- Workaround：
+  - 当前优先消费同一 turn 中较早到达的 `usage_update`。
+  - 若 UI 需要最新 usage，可继续读取后续 turn 的下一次 `usage_update` 作为最新会话视图。
+- 后续计划：
+  - 评估为 terminal turn 增加短暂的 post-completion usage drain，或引入独立于 turn 生命周期的 thread-level notification 通道，降低对通知顺序的依赖。
