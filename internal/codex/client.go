@@ -754,6 +754,19 @@ func (c *Client) handleNotification(msg RPCMessage) {
 			TurnID:   note.TurnID,
 			Delta:    note.Delta,
 		}, false)
+	case notificationError:
+		var note ErrorNotification
+		if err := json.Unmarshal(msg.Params, &note); err != nil {
+			c.logger.Warn("ignore malformed error", slog.String("error", err.Error()))
+			return
+		}
+		c.pushTurnEvent(note.TurnID, TurnEvent{
+			Type:      TurnEventTypeBackendError,
+			ThreadID:  note.ThreadID,
+			TurnID:    note.TurnID,
+			Message:   formatTurnError(&note.Error),
+			WillRetry: note.WillRetry,
+		}, false)
 	case notificationItemAgentMessageDelta:
 		var note ItemAgentMessageDeltaNotification
 		if err := json.Unmarshal(msg.Params, &note); err != nil {
@@ -878,6 +891,18 @@ func (c *Client) handleNotification(msg RPCMessage) {
 			ItemType: "turn_diff",
 			Diff:     note.Diff,
 		}, false)
+	case notificationThreadTokenUsageUpdated:
+		var note ThreadTokenUsageUpdatedNotification
+		if err := json.Unmarshal(msg.Params, &note); err != nil {
+			c.logger.Warn("ignore malformed thread/tokenUsage/updated", slog.String("error", err.Error()))
+			return
+		}
+		c.pushTurnEvent(note.TurnID, TurnEvent{
+			Type:       TurnEventTypeTokenUsageUpdated,
+			ThreadID:   note.ThreadID,
+			TurnID:     note.TurnID,
+			TokenUsage: cloneThreadTokenUsage(&note.TokenUsage),
+		}, false)
 	case notificationItemCompleted:
 		var note ItemCompletedNotification
 		if err := json.Unmarshal(msg.Params, &note); err != nil {
@@ -915,11 +940,16 @@ func (c *Client) handleNotification(msg RPCMessage) {
 		if stopReason == "" && note.Turn != nil {
 			stopReason = stopReasonFromTurnStatus(note.Turn.Status)
 		}
+		message := ""
+		if note.Turn != nil {
+			message = formatTurnError(note.Turn.Error)
+		}
 		c.pushTurnEvent(turnID, TurnEvent{
 			Type:       TurnEventTypeCompleted,
 			ThreadID:   note.ThreadID,
 			TurnID:     turnID,
 			StopReason: stopReason,
+			Message:    message,
 		}, true)
 	case notificationReviewModeEntered:
 		var note ReviewModeNotification
@@ -1136,6 +1166,18 @@ func cloneOptionalBool(value *bool) *bool {
 	return &cloned
 }
 
+func cloneThreadTokenUsage(value *ThreadTokenUsage) *ThreadTokenUsage {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	if value.ModelContextWindow != nil {
+		window := *value.ModelContextWindow
+		cloned.ModelContextWindow = &window
+	}
+	return &cloned
+}
+
 func effectiveTurnID(turnID string, turn *TurnRef) string {
 	id := strings.TrimSpace(turnID)
 	if id != "" {
@@ -1158,6 +1200,65 @@ func stopReasonFromTurnStatus(status string) string {
 	default:
 		return ""
 	}
+}
+
+func formatTurnError(turnErr *TurnError) string {
+	if turnErr == nil {
+		return ""
+	}
+
+	message := strings.TrimSpace(turnErr.Message)
+	additional := strings.TrimSpace(turnErr.AdditionalDetails)
+	if additional != "" && !strings.EqualFold(additional, message) {
+		if message == "" {
+			message = additional
+		} else {
+			message = message + ": " + additional
+		}
+	}
+
+	codeInfo := summarizeCodexErrorInfo(turnErr.CodexErrorInfo)
+	if codeInfo == "" {
+		return message
+	}
+	if message == "" {
+		return fmt.Sprintf("codex error: %s", codeInfo)
+	}
+	return fmt.Sprintf("%s [codexErrorInfo=%s]", message, codeInfo)
+}
+
+func summarizeCodexErrorInfo(raw json.RawMessage) string {
+	payload := strings.TrimSpace(string(raw))
+	if payload == "" || payload == "null" {
+		return ""
+	}
+
+	var simple string
+	if err := json.Unmarshal(raw, &simple); err == nil {
+		return strings.TrimSpace(simple)
+	}
+
+	var info map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &info); err != nil || len(info) == 0 {
+		return payload
+	}
+
+	for kind, detailRaw := range info {
+		kind = strings.TrimSpace(kind)
+		if kind == "" {
+			continue
+		}
+
+		var detail struct {
+			HTTPStatusCode *int `json:"httpStatusCode"`
+		}
+		if err := json.Unmarshal(detailRaw, &detail); err == nil && detail.HTTPStatusCode != nil {
+			return fmt.Sprintf("%s(httpStatusCode=%d)", kind, *detail.HTTPStatusCode)
+		}
+		return kind
+	}
+
+	return payload
 }
 
 func (c *Client) pushTurnEvent(turnID string, event TurnEvent, closeAfter bool) {

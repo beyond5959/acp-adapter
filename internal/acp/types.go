@@ -310,6 +310,12 @@ type AvailableCommand struct {
 	Input       *AvailableCommandInput `json:"input,omitempty"`
 }
 
+// SessionUsageCost is the optional ACP session usage cost payload.
+type SessionUsageCost struct {
+	Amount   float64 `json:"amount"`
+	Currency string  `json:"currency"`
+}
+
 // SessionUpdateParams is emitted via session/update notification.
 type SessionUpdateParams struct {
 	SessionID          string                `json:"sessionId"`
@@ -331,4 +337,7 @@ type SessionUpdateParams struct {
 	Plan               []PlanEntry           `json:"plan,omitempty"`
 	ConfigOptions      []SessionConfig       `json:"configOptions,omitempty"`
 	AvailableCommands  []AvailableCommand    `json:"availableCommands,omitempty"`
+	Used               *int64                `json:"used,omitempty"`
+	Size               *int64                `json:"size,omitempty"`
+	Cost               *SessionUsageCost     `json:"cost,omitempty"`
 }

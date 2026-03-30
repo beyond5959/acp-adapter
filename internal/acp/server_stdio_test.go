@@ -214,6 +214,40 @@ func TestBuildSessionUpdatePayloadAvailableCommands(t *testing.T) {
 	}
 }
 
+func TestBuildSessionUpdatePayloadUsageUpdate(t *testing.T) {
+	t.Parallel()
+
+	used := int64(53000)
+	size := int64(200000)
+	payload := buildSessionUpdatePayload(SessionUpdateParams{
+		SessionID: "session-1",
+		TurnID:    "turn-1",
+		Type:      "usage_update",
+		Used:      &used,
+		Size:      &size,
+	})
+
+	update, ok := payload["update"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload missing update envelope: %+v", payload)
+	}
+	if got, _ := update["sessionUpdate"].(string); got != "usage_update" {
+		t.Fatalf("update.sessionUpdate=%q, want usage_update", got)
+	}
+	if got, _ := update["used"].(int64); got != used {
+		t.Fatalf("update.used=%v, want %d", update["used"], used)
+	}
+	if got, _ := update["size"].(int64); got != size {
+		t.Fatalf("update.size=%v, want %d", update["size"], size)
+	}
+	if got, _ := payload["used"].(int64); got != used {
+		t.Fatalf("payload.used=%v, want %d", payload["used"], used)
+	}
+	if got, _ := payload["size"].(int64); got != size {
+		t.Fatalf("payload.size=%v, want %d", payload["size"], size)
+	}
+}
+
 func TestBuildSessionUpdatePayloadToolCallContent(t *testing.T) {
 	t.Parallel()
 

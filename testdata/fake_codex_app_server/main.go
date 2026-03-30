@@ -672,8 +672,20 @@ func (s *fakeServer) runTurn(
 		s.runTurnDiffTurn(threadID, turnID, control)
 		return
 	}
+	if strings.Contains(lowerInput, "token usage mapping") {
+		s.runTokenUsageTurn(threadID, turnID, control)
+		return
+	}
 	if strings.Contains(lowerInput, "tool image mapping") {
 		s.runToolImageTurn(threadID, turnID, control)
+		return
+	}
+	if strings.Contains(lowerInput, "error notification retry") {
+		s.runErrorNotificationRetryTurn(threadID, turnID, control)
+		return
+	}
+	if strings.Contains(lowerInput, "turn completed error detail") {
+		s.runTurnCompletedErrorTurn(threadID, turnID, control)
 		return
 	}
 
@@ -984,6 +996,60 @@ func (s *fakeServer) runCommandExecutionStreamingTurn(threadID, turnID string, c
 	s.writeTurnCompleted(threadID, turnID, "end_turn")
 }
 
+func (s *fakeServer) runErrorNotificationRetryTurn(threadID, turnID string, control *turnControl) {
+	defer s.removeTurn(turnID)
+
+	itemID := fmt.Sprintf("item-%s", turnID)
+	s.writeTurnStarted(threadID, turnID)
+	s.writeItemStarted(threadID, turnID, itemID, "agent_message")
+	s.writeAgentMessageDelta(threadID, turnID, itemID, "working")
+	s.writeErrorNotification(
+		threadID,
+		turnID,
+		codex.TurnError{
+			Message:        "temporary upstream connection drop",
+			CodexErrorInfo: json.RawMessage(`{"responseStreamDisconnected":{"httpStatusCode":502}}`),
+		},
+		true,
+	)
+
+	select {
+	case <-control.cancel:
+		s.writeTurnCompleted(threadID, turnID, "cancelled")
+		return
+	case <-time.After(40 * time.Millisecond):
+	}
+
+	s.writeAgentMessageDelta(threadID, turnID, itemID, "done")
+	s.writeItemCompleted(threadID, turnID, itemID, "agent_message")
+	s.writeTurnCompleted(threadID, turnID, "end_turn")
+}
+
+func (s *fakeServer) runTurnCompletedErrorTurn(threadID, turnID string, control *turnControl) {
+	defer s.removeTurn(turnID)
+
+	itemID := fmt.Sprintf("item-%s", turnID)
+	s.writeTurnStarted(threadID, turnID)
+	s.writeItemStarted(threadID, turnID, itemID, "agent_message")
+	s.writeAgentMessageDelta(threadID, turnID, itemID, "working")
+
+	select {
+	case <-control.cancel:
+		s.writeTurnCompleted(threadID, turnID, "cancelled")
+		return
+	case <-time.After(40 * time.Millisecond):
+	}
+
+	s.writeItemCompleted(threadID, turnID, itemID, "agent_message")
+	s.writeTurnCompletedWithError(
+		threadID,
+		turnID,
+		"apply_patch verification failed: Failed to find expected lines in /Users/niuniu/git_local/ngent/internal/httpapi/httpapi.go",
+		"patch no longer matches current file contents",
+		json.RawMessage(`"other"`),
+	)
+}
+
 func fakeWorkspaceCWD() string {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -1071,6 +1137,44 @@ func (s *fakeServer) runTurnDiffTurn(threadID, turnID string, control *turnContr
 		"",
 	}, "\n"))
 	s.writeItemStarted(threadID, turnID, itemID, "agent_message")
+	s.writeAgentMessageDelta(threadID, turnID, itemID, "done")
+	s.writeItemCompleted(threadID, turnID, itemID, "agent_message")
+	s.writeTurnCompleted(threadID, turnID, "end_turn")
+}
+
+func (s *fakeServer) runTokenUsageTurn(threadID, turnID string, control *turnControl) {
+	defer s.removeTurn(turnID)
+
+	itemID := fmt.Sprintf("item-%s", turnID)
+	window := int64(200000)
+
+	s.writeTurnStarted(threadID, turnID)
+	select {
+	case <-control.cancel:
+		s.writeTurnCompleted(threadID, turnID, "cancelled")
+		return
+	default:
+	}
+
+	s.writeItemStarted(threadID, turnID, itemID, "agent_message")
+	s.writeAgentMessageDelta(threadID, turnID, itemID, "working")
+	s.writeThreadTokenUsageUpdated(threadID, turnID, codex.ThreadTokenUsage{
+		Last: codex.TokenUsageBreakdown{
+			CachedInputTokens:     1000,
+			InputTokens:           4000,
+			OutputTokens:          500,
+			ReasoningOutputTokens: 250,
+			TotalTokens:           5750,
+		},
+		ModelContextWindow: &window,
+		Total: codex.TokenUsageBreakdown{
+			CachedInputTokens:     5000,
+			InputTokens:           35000,
+			OutputTokens:          12000,
+			ReasoningOutputTokens: 1000,
+			TotalTokens:           53000,
+		},
+	})
 	s.writeAgentMessageDelta(threadID, turnID, itemID, "done")
 	s.writeItemCompleted(threadID, turnID, itemID, "agent_message")
 	s.writeTurnCompleted(threadID, turnID, "end_turn")
@@ -1357,6 +1461,41 @@ func (s *fakeServer) writeTurnCompleted(threadID, turnID, stopReason string) {
 	})
 }
 
+func (s *fakeServer) writeTurnCompletedWithError(
+	threadID string,
+	turnID string,
+	message string,
+	additionalDetails string,
+	codexErrorInfo json.RawMessage,
+) {
+	s.writeNotification("turn/completed", codex.TurnCompletedNotification{
+		ThreadID: threadID,
+		Turn: &codex.TurnRef{
+			ID:     turnID,
+			Status: "failed",
+			Error: &codex.TurnError{
+				Message:           message,
+				AdditionalDetails: additionalDetails,
+				CodexErrorInfo:    codexErrorInfo,
+			},
+		},
+	})
+}
+
+func (s *fakeServer) writeErrorNotification(
+	threadID string,
+	turnID string,
+	turnErr codex.TurnError,
+	willRetry bool,
+) {
+	s.writeNotification("error", codex.ErrorNotification{
+		ThreadID:  threadID,
+		TurnID:    turnID,
+		Error:     turnErr,
+		WillRetry: willRetry,
+	})
+}
+
 func (s *fakeServer) writeReviewModeEntered(threadID, turnID string) {
 	s.writeNotification("review/mode_entered", codex.ReviewModeNotification{
 		ThreadID: threadID,
@@ -1382,6 +1521,18 @@ func (s *fakeServer) writeTurnPlanUpdated(
 		TurnID:      turnID,
 		Explanation: explanation,
 		Plan:        plan,
+	})
+}
+
+func (s *fakeServer) writeThreadTokenUsageUpdated(
+	threadID string,
+	turnID string,
+	tokenUsage codex.ThreadTokenUsage,
+) {
+	s.writeNotification("thread/tokenUsage/updated", codex.ThreadTokenUsageUpdatedNotification{
+		ThreadID:   threadID,
+		TurnID:     turnID,
+		TokenUsage: tokenUsage,
 	})
 }
 

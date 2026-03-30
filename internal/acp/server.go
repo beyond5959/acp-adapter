@@ -1736,6 +1736,13 @@ func buildSessionUpdatePayload(update SessionUpdateParams) map[string]any {
 	if update.Type == "available_commands_update" || len(update.AvailableCommands) > 0 {
 		payload["availableCommands"] = cloneAvailableCommandsOrEmpty(update.AvailableCommands)
 	}
+	if update.Type == "usage_update" || update.Used != nil || update.Size != nil || update.Cost != nil {
+		payload["used"] = optionalInt64Value(update.Used)
+		payload["size"] = optionalInt64Value(update.Size)
+		if update.Cost != nil {
+			payload["cost"] = cloneSessionUsageCost(update.Cost)
+		}
+	}
 
 	if mapped := mapACPUpdateForClient(update); mapped != nil {
 		payload["update"] = mapped
@@ -1809,6 +1816,16 @@ func mapACPUpdateForClient(update SessionUpdateParams) map[string]any {
 			"sessionUpdate":     "available_commands_update",
 			"availableCommands": cloneAvailableCommandsOrEmpty(update.AvailableCommands),
 		}
+	case "usage_update":
+		mapped := map[string]any{
+			"sessionUpdate": "usage_update",
+			"used":          optionalInt64Value(update.Used),
+			"size":          optionalInt64Value(update.Size),
+		}
+		if update.Cost != nil {
+			mapped["cost"] = cloneSessionUsageCost(update.Cost)
+		}
+		return mapped
 	default:
 		text := strings.TrimSpace(update.Delta)
 		if text == "" {
@@ -4274,6 +4291,21 @@ func (t *turnLifecycle) apply(event codex.TurnEvent) ([]SessionUpdateParams, boo
 				Plan:      planEntriesFromTurnPlan(event.Plan),
 			},
 		}, false, ""
+	case codex.TurnEventTypeTokenUsageUpdated:
+		t.phase = turnPhaseStreaming
+		if event.TokenUsage == nil {
+			return nil, false, ""
+		}
+		return []SessionUpdateParams{
+			{
+				SessionID: t.sessionID,
+				TurnID:    t.turnID,
+				Type:      "usage_update",
+				Phase:     string(t.phase),
+				Used:      int64Ptr(event.TokenUsage.Total.TotalTokens),
+				Size:      cloneOptionalInt64(event.TokenUsage.ModelContextWindow),
+			},
+		}, false, ""
 	case codex.TurnEventTypeReasoningDelta:
 		t.phase = turnPhaseStreaming
 		return []SessionUpdateParams{
@@ -4416,6 +4448,22 @@ func (t *turnLifecycle) apply(event codex.TurnEvent) ([]SessionUpdateParams, boo
 				Status:    "review_mode_exited",
 			},
 		}, false, ""
+	case codex.TurnEventTypeBackendError:
+		t.phase = turnPhaseStreaming
+		status := "backend_error"
+		if event.WillRetry {
+			status = "backend_error_retrying"
+		}
+		return []SessionUpdateParams{
+			{
+				SessionID: t.sessionID,
+				TurnID:    t.turnID,
+				Type:      "status",
+				Phase:     string(t.phase),
+				Status:    status,
+				Message:   event.Message,
+			},
+		}, false, ""
 	case codex.TurnEventTypeCompleted:
 		stopReason := normalizeStopReason(event.StopReason)
 		if t.cancelRequested {
@@ -4439,12 +4487,19 @@ func (t *turnLifecycle) apply(event codex.TurnEvent) ([]SessionUpdateParams, boo
 		if diffUpdate, ok := t.diffTerminalUpdate(diffStatus, diffMessage); ok {
 			updates = append(updates, diffUpdate)
 		}
+		status := "turn_completed"
+		message := ""
+		if stopReason == "error" {
+			status = "turn_error"
+			message = event.Message
+		}
 		updates = append(updates, SessionUpdateParams{
 			SessionID: t.sessionID,
 			TurnID:    t.turnID,
 			Type:      "status",
 			Phase:     string(t.phase),
-			Status:    "turn_completed",
+			Status:    status,
+			Message:   message,
 		})
 		return updates, true, stopReason
 	case codex.TurnEventTypeError:
@@ -4610,6 +4665,34 @@ func (t *turnLifecycle) shouldEmitRuntimeToolCallStatus(toolCallID string, statu
 		t.toolCallStatus[toolCallID] = status
 		return true
 	}
+}
+
+func int64Ptr(value int64) *int64 {
+	cloned := value
+	return &cloned
+}
+
+func cloneOptionalInt64(value *int64) *int64 {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func optionalInt64Value(value *int64) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
+func cloneSessionUsageCost(cost *SessionUsageCost) *SessionUsageCost {
+	if cost == nil {
+		return nil
+	}
+	cloned := *cost
+	return &cloned
 }
 
 func (t *turnLifecycle) isTerminalToolCall(toolCallID string) bool {

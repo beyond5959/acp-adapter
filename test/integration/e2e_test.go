@@ -59,6 +59,8 @@ type sessionUpdateParams struct {
 	Plan               []planEntry               `json:"plan,omitempty"`
 	ConfigOptions      []sessionConfigOption     `json:"configOptions,omitempty"`
 	AvailableCommands  []sessionAvailableCommand `json:"availableCommands,omitempty"`
+	Used               *int64                    `json:"used,omitempty"`
+	Size               *int64                    `json:"size,omitempty"`
 	Update             *sessionUpdatePayload     `json:"update,omitempty"`
 }
 
@@ -83,6 +85,8 @@ type sessionUpdatePayload struct {
 	Status            string                    `json:"status,omitempty"`
 	Title             string                    `json:"title,omitempty"`
 	ToolCallID        string                    `json:"toolCallId,omitempty"`
+	Used              *int64                    `json:"used,omitempty"`
+	Size              *int64                    `json:"size,omitempty"`
 }
 
 type sessionUpdateContent struct {
@@ -111,6 +115,8 @@ func (p *sessionUpdatePayload) UnmarshalJSON(data []byte) error {
 		Status            string                    `json:"status,omitempty"`
 		Title             string                    `json:"title,omitempty"`
 		ToolCallID        string                    `json:"toolCallId,omitempty"`
+		Used              *int64                    `json:"used,omitempty"`
+		Size              *int64                    `json:"size,omitempty"`
 	}
 
 	var raw rawPayload
@@ -125,6 +131,8 @@ func (p *sessionUpdatePayload) UnmarshalJSON(data []byte) error {
 	p.Status = raw.Status
 	p.Title = raw.Title
 	p.ToolCallID = raw.ToolCallID
+	p.Used = raw.Used
+	p.Size = raw.Size
 
 	if len(raw.Content) == 0 {
 		return nil
@@ -1318,6 +1326,122 @@ func TestE2EAcceptanceB1AppServerCrashDuringTurnRetryFailureHasHint(t *testing.T
 	h.assertStdoutPureJSONRPC()
 }
 
+func TestE2ETurnCompletedFailedErrorDetailsSurfaced(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "turn completed error detail",
+	})
+
+	gotPromptResp := false
+	turnErrorMessage := ""
+	deadline := time.Now().Add(responseTimeout)
+	for !gotPromptResp {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for failed turn completion")
+		}
+		msg := h.nextMessage(time.Until(deadline))
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.Status == "turn_error" {
+				turnErrorMessage = update.Message
+			}
+			continue
+		}
+		if messageID(msg) != "3" {
+			continue
+		}
+		var result struct {
+			StopReason string `json:"stopReason"`
+		}
+		unmarshalResult(t, msg, &result)
+		if result.StopReason != "error" {
+			t.Fatalf("failed turn expected stopReason=error, got %q", result.StopReason)
+		}
+		gotPromptResp = true
+	}
+
+	if !strings.Contains(turnErrorMessage, "apply_patch verification failed") {
+		t.Fatalf("expected turn_error to include apply_patch verification failure, got %q", turnErrorMessage)
+	}
+	if !strings.Contains(turnErrorMessage, "internal/httpapi/httpapi.go") {
+		t.Fatalf("expected turn_error to include target file path, got %q", turnErrorMessage)
+	}
+
+	h.assertStdoutPureJSONRPC()
+}
+
+func TestE2EErrorNotificationRetryingSurfaced(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "error notification retry",
+	})
+
+	gotPromptResp := false
+	retryingMessage := ""
+	sawTurnError := false
+	deadline := time.Now().Add(responseTimeout)
+	for !gotPromptResp {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for retrying error notification flow")
+		}
+		msg := h.nextMessage(time.Until(deadline))
+		if msg.Method == "session/update" {
+			update := decodeSessionUpdate(t, msg)
+			if update.Status == "backend_error_retrying" {
+				retryingMessage = update.Message
+			}
+			if update.Status == "turn_error" {
+				sawTurnError = true
+			}
+			continue
+		}
+		if messageID(msg) != "3" {
+			continue
+		}
+		var result struct {
+			StopReason string `json:"stopReason"`
+		}
+		unmarshalResult(t, msg, &result)
+		if result.StopReason != "end_turn" {
+			t.Fatalf("retrying error flow expected stopReason=end_turn, got %q", result.StopReason)
+		}
+		gotPromptResp = true
+	}
+
+	if !strings.Contains(retryingMessage, "temporary upstream connection drop") {
+		t.Fatalf("expected backend_error_retrying message, got %q", retryingMessage)
+	}
+	if sawTurnError {
+		t.Fatalf("retrying error notification should not terminate the turn")
+	}
+
+	h.assertStdoutPureJSONRPC()
+}
+
 func TestE2ENotificationRoutingBySessionAndTurn(t *testing.T) {
 	h := startAdapter(t)
 
@@ -1915,6 +2039,69 @@ func TestE2EACPPlanUpdateMappedFromPlanDeltaFallback(t *testing.T) {
 	}
 	if last[1].Content != "implement mapping" || last[1].Status != "pending" || last[1].Priority != "medium" {
 		t.Fatalf("second final fallback plan entry mismatch: %+v", last[1])
+	}
+}
+
+func TestE2EACPUsageUpdateMappedFromThreadTokenUsageUpdated(t *testing.T) {
+	h := startAdapter(t)
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "token usage mapping",
+	})
+
+	gotPromptResp := false
+	sawUsageUpdate := false
+	for !gotPromptResp || !sawUsageUpdate {
+		msg := h.nextMessage(responseTimeout)
+		switch msg.Method {
+		case "session/update":
+			update := decodeSessionUpdate(t, msg)
+			if update.SessionID != newResult.SessionID || update.Type != "usage_update" {
+				continue
+			}
+			if update.Update == nil {
+				t.Fatalf("usage update must include standard params.update envelope")
+			}
+			if update.Update.SessionUpdate != "usage_update" {
+				t.Fatalf("usage update envelope kind=%q, want usage_update", update.Update.SessionUpdate)
+			}
+			if update.Used == nil || *update.Used != 53000 {
+				t.Fatalf("top-level usage update used=%v, want 53000", update.Used)
+			}
+			if update.Size == nil || *update.Size != 200000 {
+				t.Fatalf("top-level usage update size=%v, want 200000", update.Size)
+			}
+			if update.Update.Used == nil || *update.Update.Used != 53000 {
+				t.Fatalf("nested usage update used=%v, want 53000", update.Update.Used)
+			}
+			if update.Update.Size == nil || *update.Update.Size != 200000 {
+				t.Fatalf("nested usage update size=%v, want 200000", update.Update.Size)
+			}
+			sawUsageUpdate = true
+		default:
+			if messageID(msg) != "3" {
+				continue
+			}
+			var result struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, msg, &result)
+			if result.StopReason != "end_turn" {
+				t.Fatalf("token usage prompt expected stopReason=end_turn, got %q", result.StopReason)
+			}
+			gotPromptResp = true
+		}
 	}
 }
 

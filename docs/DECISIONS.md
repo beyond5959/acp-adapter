@@ -52,6 +52,8 @@
 - ADR-0046：Codex runtime `commandExecution` 映射为 ACP `tool_call_update`
 - ADR-0047：工具图片输出桥接为 ACP `image` content block
 - ADR-0048：Codex `PatchChangeKind` 运行时兼容策略
+- ADR-0049：Codex turn 失败详情桥接策略（`error` notification + `turn.error`）
+- ADR-0050：Codex token usage 桥接策略（`thread/tokenUsage/updated` -> ACP `usage_update`）
 
 ### ADR-0048：Codex `PatchChangeKind` 运行时兼容策略
 - 日期：2026-03-26
@@ -75,6 +77,80 @@
   - `internal/codex/client_notification_test.go`
 - 验证方式（测试/验收项）：
   - `TestHandleNotification_FileChangePatchKindCompatibility`
+  - 回归 `go test ./...`
+
+### ADR-0049：Codex turn 失败详情桥接策略（`error` notification + `turn.error`）
+- 日期：2026-03-27
+- 状态：Accepted
+- 背景：
+  - 真实 Codex 失败经常只在子进程 stderr 留下可读日志，例如 `apply_patch verification failed ...`，而 adapter 现有桥接只看 `turn/completed.status=failed`，没有把 `turn.error` 或 `error` notification 的细节传给 ACP 上游。
+  - 结果是上游只能看到 `stopReason=error` 或笼统 `turn_error`，排障仍需翻子进程日志。
+- 决策：
+  - 为 `internal/codex/types.go` 补齐 schema 已存在的 `TurnError` 与 `ErrorNotification` 形态。
+  - `internal/codex/client`：
+    - 解析 `error` notification，并把 `willRetry` 一起桥接成非终态内部事件。
+    - 解析 `turn/completed.turn.error`，把 `message` / `additionalDetails` / `codexErrorInfo` 拼成可读消息挂到 completed event。
+  - `internal/acp/server`：
+    - 对 `error` notification 输出非终态 `session/update(status="backend_error"|"backend_error_retrying")`
+    - 对最终 failed turn 输出 `session/update(status="turn_error")`，并携带真实失败消息，同时 `session/prompt` 仍以 `stopReason=error` 结束。
+- 备选方案：
+  - 方案A：继续只依赖 stderr 日志，由用户自行排查。（拒绝）
+  - 方案B：只桥接 `turn/completed.status=failed`，仍不解析 `turn.error` / `error` notification。（拒绝）
+  - 方案C：桥接结构化错误详情，同时区分“中途报错但会重试”和“最终失败”。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：真实失败原因直接进入 ACP 协议流；`apply_patch` 校验失败、响应流断开等问题对上游更可见；不再要求用户总去翻 stderr。
+  - Cons：新增少量状态名与错误拼接逻辑；后台无 turn 关联的 Codex stderr 噪声仍无法完全结构化。
+- 影响范围（文件/模块）：
+  - `internal/codex/types.go`
+  - `internal/codex/client.go`
+  - `internal/acp/server.go`
+  - `testdata/fake_codex_app_server/main.go`
+  - `internal/codex/client_notification_test.go`
+  - `test/integration/e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `TestHandleNotification_TurnCompletedIncludesErrorMessage`
+  - `TestHandleNotification_ErrorNotificationRetrying`
+  - `TestE2ETurnCompletedFailedErrorDetailsSurfaced`
+  - `TestE2EErrorNotificationRetryingSurfaced`
+  - 回归 `go test ./...`
+
+### ADR-0050：Codex token usage 桥接策略（`thread/tokenUsage/updated` -> ACP `usage_update`）
+- 日期：2026-03-30
+- 状态：Accepted
+- 背景：
+  - Codex app-server 已提供 `thread/tokenUsage/updated` notification，包含 `tokenUsage.last`、`tokenUsage.total` 与 `modelContextWindow`。
+  - ACP session usage RFD 约定 agent 通过 `session/update(update.sessionUpdate="usage_update")` 主动发布会话上下文窗口占用，供客户端显示 token 使用量。
+  - 现有 adapter 尚未把下游 token usage 事件桥接到 ACP，上游无法在会话过程中看到 token 使用量。
+- 决策：
+  - 在 `internal/codex/client` 中，把 `thread/tokenUsage/updated` 解析为新的内部 `TurnEventTypeTokenUsageUpdated`。
+  - 在 `internal/acp/server` 中，将该事件映射为 ACP `session/update(type="usage_update")`，字段规则为：
+    - `used` <- `tokenUsage.total.totalTokens`
+    - `size` <- `tokenUsage.modelContextWindow`
+  - 继续沿用 adapter 当前的兼容输出策略：
+    - 顶层保留 `used` / `size`
+    - 同时填充标准 `params.update.sessionUpdate="usage_update"`
+  - 当前不伪造 `cost` 字段，因为 Codex notification 本身不提供成本信息。
+  - 当前不把 `tokenUsage.last.*` 单独桥接到 ACP；它先保留在内部结构中，供未来如需扩展 prompt response usage 或更细粒度 UI 时复用。
+- 备选方案：
+  - 方案A：忽略该 notification，仅靠 stderr/trace 排查 token 使用。（拒绝）
+  - 方案B：把 `last.totalTokens` 直接映射为 ACP `used`。（拒绝）
+  - 方案C：使用 `tokenUsage.total.totalTokens` 与 `modelContextWindow` 作为 ACP 会话窗口 usage 来源，并保持标准 envelope 兼容。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：ACP client 可实时看到会话 token 占用；与 Codex schema 对齐；复用现有 `session/update` 双形态兼容策略。
+  - Cons：若未来 Codex 对 `total` 的语义调整，仍需重新核对映射；`cost` 暂时缺失；晚于 `turn/completed` 才到达的 token usage notification 目前仍受现有 turn 流关闭时序限制。
+- 影响范围（文件/模块）：
+  - `internal/codex/types.go`
+  - `internal/codex/client.go`
+  - `internal/acp/types.go`
+  - `internal/acp/server.go`
+  - `testdata/fake_codex_app_server/main.go`
+  - `internal/codex/client_notification_test.go`
+  - `internal/acp/server_stdio_test.go`
+  - `test/integration/e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `TestHandleNotification_ThreadTokenUsageUpdated`
+  - `TestBuildSessionUpdatePayloadUsageUpdate`
+  - `TestE2EACPUsageUpdateMappedFromThreadTokenUsageUpdated`
   - 回归 `go test ./...`
 
 ---
