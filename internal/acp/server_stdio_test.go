@@ -248,6 +248,32 @@ func TestBuildSessionUpdatePayloadUsageUpdate(t *testing.T) {
 	}
 }
 
+func TestUsageUpdateUsedTokensUsesLatestInputTokens(t *testing.T) {
+	t.Parallel()
+
+	usage := &codex.ThreadTokenUsage{
+		Last: codex.TokenUsageBreakdown{
+			CachedInputTokens:     1000,
+			InputTokens:           4000,
+			OutputTokens:          500,
+			ReasoningOutputTokens: 250,
+			TotalTokens:           5750,
+		},
+		Total: codex.TokenUsageBreakdown{
+			CachedInputTokens:     5000,
+			InputTokens:           35000,
+			OutputTokens:          12000,
+			ReasoningOutputTokens: 1000,
+			TotalTokens:           53000,
+		},
+	}
+
+	got := usageUpdateUsedTokens(usage)
+	if got == nil || *got != 4000 {
+		t.Fatalf("usageUpdateUsedTokens=%v, want 4000", got)
+	}
+}
+
 func TestBuildSessionUpdatePayloadToolCallContent(t *testing.T) {
 	t.Parallel()
 

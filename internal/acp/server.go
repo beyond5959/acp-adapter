@@ -4302,7 +4302,7 @@ func (t *turnLifecycle) apply(event codex.TurnEvent) ([]SessionUpdateParams, boo
 				TurnID:    t.turnID,
 				Type:      sessionUpdateTypeUsage,
 				Phase:     string(t.phase),
-				Used:      int64Ptr(event.TokenUsage.Total.TotalTokens),
+				Used:      usageUpdateUsedTokens(event.TokenUsage),
 				Size:      cloneOptionalInt64(event.TokenUsage.ModelContextWindow),
 			},
 		}, false, ""
@@ -4678,6 +4678,16 @@ func cloneOptionalInt64(value *int64) *int64 {
 	}
 	cloned := *value
 	return &cloned
+}
+
+func usageUpdateUsedTokens(value *codex.ThreadTokenUsage) *int64 {
+	if value == nil {
+		return nil
+	}
+	// Codex reports `total` as thread-lifetime token usage. ACP `usage_update.used`
+	// is intended to approximate current context-window occupancy, so the latest
+	// request's input token count is the closest downstream signal we have today.
+	return int64Ptr(value.Last.InputTokens)
 }
 
 func optionalInt64Value(value *int64) any {
