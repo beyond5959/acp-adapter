@@ -2095,10 +2095,18 @@ func TestE2EACPUsageUpdateMappedFromThreadTokenUsageUpdated(t *testing.T) {
 			}
 			var result struct {
 				StopReason string `json:"stopReason"`
+				Used       *int64 `json:"used,omitempty"`
+				Size       *int64 `json:"size,omitempty"`
 			}
 			unmarshalResult(t, msg, &result)
 			if result.StopReason != "end_turn" {
 				t.Fatalf("token usage prompt expected stopReason=end_turn, got %q", result.StopReason)
+			}
+			if result.Used == nil || *result.Used != 4000 {
+				t.Fatalf("prompt result used=%v, want 4000", result.Used)
+			}
+			if result.Size == nil || *result.Size != 200000 {
+				t.Fatalf("prompt result size=%v, want 200000", result.Size)
 			}
 			gotPromptResp = true
 		}

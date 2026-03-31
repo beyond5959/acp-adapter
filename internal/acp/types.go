@@ -187,9 +187,12 @@ type SessionPromptParams struct {
 	PromptConfig
 }
 
-// SessionPromptResult returns final stop reason.
+// SessionPromptResult returns final stop reason and optional usage snapshot.
 type SessionPromptResult struct {
-	StopReason string `json:"stopReason"`
+	StopReason string            `json:"stopReason"`
+	Used       *int64            `json:"used,omitempty"`
+	Size       *int64            `json:"size,omitempty"`
+	Cost       *SessionUsageCost `json:"cost,omitempty"`
 }
 
 // SessionCancelParams requests turn cancellation.

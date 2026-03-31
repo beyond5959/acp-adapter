@@ -113,6 +113,7 @@ type turnLifecycle struct {
 	turnID                string
 	phase                 turnPhase
 	cancelRequested       bool
+	lastUsage             *promptUsageSnapshot
 	messageBuffer         strings.Builder
 	toolCallStatus        map[string]string
 	commandToolCalls      map[string]*codex.CommandExecution
@@ -155,6 +156,12 @@ type runtimeOptions struct {
 	Sandbox            string
 	Personality        string
 	SystemInstructions string
+}
+
+type promptUsageSnapshot struct {
+	Used *int64
+	Size *int64
+	Cost *SessionUsageCost
 }
 
 type slashCommandKind string
@@ -878,11 +885,11 @@ func (s *Server) handleSessionPrompt(ctx context.Context, id json.RawMessage, pa
 		case <-turnCtx.Done():
 			lifecycle.markCancelRequested()
 			s.emitUpdates(lifecycle.cancelledUpdate())
-			s.writePromptResult(id, "cancelled")
+			s.writePromptResultWithUsage(id, "cancelled", lifecycle.lastUsage)
 			return
 		case event, ok := <-events:
 			if !ok {
-				s.writePromptResult(id, lifecycle.fallbackStopReason())
+				s.writePromptResultWithUsage(id, lifecycle.fallbackStopReason(), lifecycle.lastUsage)
 				return
 			}
 			if event.Type == codex.TurnEventTypeError {
@@ -932,7 +939,7 @@ func (s *Server) handleSessionPrompt(ctx context.Context, id json.RawMessage, pa
 							},
 						})
 						s.clearTurnTodosOnFailure(params.SessionID, "error")
-						s.writePromptResult(id, "error")
+						s.writePromptResultWithUsage(id, "error", lifecycle.lastUsage)
 						return
 					}
 					if _, replaceErr := s.sessions.ReplaceTurn(params.SessionID, activeTurnID, retryTurnID, cancel); replaceErr != nil {
@@ -952,7 +959,7 @@ func (s *Server) handleSessionPrompt(ctx context.Context, id json.RawMessage, pa
 							},
 						})
 						s.clearTurnTodosOnFailure(params.SessionID, "error")
-						s.writePromptResult(id, "error")
+						s.writePromptResultWithUsage(id, "error", lifecycle.lastUsage)
 						return
 					}
 
@@ -973,7 +980,7 @@ func (s *Server) handleSessionPrompt(ctx context.Context, id json.RawMessage, pa
 						},
 					})
 					s.clearTurnTodosOnFailure(params.SessionID, "error")
-					s.writePromptResult(id, "error")
+					s.writePromptResultWithUsage(id, "error", lifecycle.lastUsage)
 					return
 				}
 			}
@@ -982,7 +989,7 @@ func (s *Server) handleSessionPrompt(ctx context.Context, id json.RawMessage, pa
 				updates, done, stopReason := s.handleApprovalEvent(turnCtx, lifecycle, event)
 				s.emitUpdates(updates)
 				if done {
-					s.writePromptResult(id, stopReason)
+					s.writePromptResultWithUsage(id, stopReason, lifecycle.lastUsage)
 					return
 				}
 				continue
@@ -1000,7 +1007,7 @@ func (s *Server) handleSessionPrompt(ctx context.Context, id json.RawMessage, pa
 			s.emitUpdates(updates)
 			if done {
 				s.clearTurnTodosOnFailure(params.SessionID, stopReason)
-				s.writePromptResult(id, stopReason)
+				s.writePromptResultWithUsage(id, stopReason, lifecycle.lastUsage)
 				return
 			}
 		}
@@ -1650,9 +1657,19 @@ func (s *Server) handleDiffEvent(
 }
 
 func (s *Server) writePromptResult(id json.RawMessage, stopReason string) {
-	_ = s.codec.WriteResult(id, SessionPromptResult{
+	s.writePromptResultWithUsage(id, stopReason, nil)
+}
+
+func (s *Server) writePromptResultWithUsage(id json.RawMessage, stopReason string, usage *promptUsageSnapshot) {
+	result := SessionPromptResult{
 		StopReason: normalizeStopReason(stopReason),
-	})
+	}
+	if usage != nil {
+		result.Used = cloneOptionalInt64(usage.Used)
+		result.Size = cloneOptionalInt64(usage.Size)
+		result.Cost = cloneSessionUsageCost(usage.Cost)
+	}
+	_ = s.codec.WriteResult(id, result)
 }
 
 func (s *Server) writeInvalidParams(id json.RawMessage, data map[string]any) {
@@ -4132,6 +4149,7 @@ func (t *turnLifecycle) markCancelRequested() {
 
 func (t *turnLifecycle) resetForRetry() {
 	t.phase = turnPhaseStarted
+	t.lastUsage = nil
 	t.messageBuffer.Reset()
 	t.toolCallStatus = nil
 	t.commandToolCalls = nil
@@ -4296,6 +4314,7 @@ func (t *turnLifecycle) apply(event codex.TurnEvent) ([]SessionUpdateParams, boo
 		if event.TokenUsage == nil {
 			return nil, false, ""
 		}
+		t.lastUsage = promptUsageFromTokenUsage(event.TokenUsage)
 		return []SessionUpdateParams{
 			{
 				SessionID: t.sessionID,
@@ -4688,6 +4707,16 @@ func usageUpdateUsedTokens(value *codex.ThreadTokenUsage) *int64 {
 	// is intended to approximate current context-window occupancy, so the latest
 	// request's input token count is the closest downstream signal we have today.
 	return int64Ptr(value.Last.InputTokens)
+}
+
+func promptUsageFromTokenUsage(value *codex.ThreadTokenUsage) *promptUsageSnapshot {
+	if value == nil {
+		return nil
+	}
+	return &promptUsageSnapshot{
+		Used: usageUpdateUsedTokens(value),
+		Size: cloneOptionalInt64(value.ModelContextWindow),
+	}
 }
 
 func optionalInt64Value(value *int64) any {
