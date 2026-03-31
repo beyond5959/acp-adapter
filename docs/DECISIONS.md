@@ -54,6 +54,8 @@
 - ADR-0048：Codex `PatchChangeKind` 运行时兼容策略
 - ADR-0049：Codex turn 失败详情桥接策略（`error` notification + `turn.error`）
 - ADR-0050：Codex token usage 桥接策略（`thread/tokenUsage/updated` -> ACP `usage_update`）
+- ADR-0051：Codex `usage_update.used` 改为最新输入 token 近似值
+- ADR-0052：ACP `session/prompt` 最终 response 复用最后一次 usage 快照
 
 ### ADR-0048：Codex `PatchChangeKind` 运行时兼容策略
 - 日期：2026-03-26
@@ -116,7 +118,7 @@
 
 ### ADR-0050：Codex token usage 桥接策略（`thread/tokenUsage/updated` -> ACP `usage_update`）
 - 日期：2026-03-30
-- 状态：Accepted
+- 状态：Superseded by ADR-0051
 - 背景：
   - Codex app-server 已提供 `thread/tokenUsage/updated` notification，包含 `tokenUsage.last`、`tokenUsage.total` 与 `modelContextWindow`。
   - ACP session usage RFD 约定 agent 通过 `session/update(update.sessionUpdate="usage_update")` 主动发布会话上下文窗口占用，供客户端显示 token 使用量。
@@ -150,6 +152,59 @@
 - 验证方式（测试/验收项）：
   - `TestHandleNotification_ThreadTokenUsageUpdated`
   - `TestBuildSessionUpdatePayloadUsageUpdate`
+  - `TestE2EACPUsageUpdateMappedFromThreadTokenUsageUpdated`
+  - 回归 `go test ./...`
+
+### ADR-0051：Codex `usage_update.used` 改为最新输入 token 近似值
+- 日期：2026-03-31
+- 状态：Accepted
+- 背景：
+  - 真实 `codex-cli 0.117.0` app-server 运行时探针显示：
+    - `tokenUsage.total.totalTokens` 会随同一 thread 多轮持续累加
+    - `tokenUsage.last.*` 则保持在最近一次模型调用的单轮量级
+  - 因此 ADR-0050 中把 ACP `usage_update.used` 映射到 `total.totalTokens`，会把 thread 累计消耗误当成“当前上下文窗口占用”。
+  - 现有公开 schema 仅给出字段形状，没有进一步定义“窗口占用”的专门字段；这里的语义判断来自真实 app-server 观测。
+- 决策：
+  - 将 ACP `session/update(type="usage_update").used` 改为 `tokenUsage.last.inputTokens`。
+  - 保持 `size <- tokenUsage.modelContextWindow` 不变。
+  - `last.totalTokens` 与 `total.totalTokens` 继续保留在内部 `ThreadTokenUsage` 结构里，不在 ACP `usage_update` 上直接暴露。
+- 备选方案：
+  - 方案A：继续使用 `total.totalTokens`，把 ACP usage 解释为 thread lifetime 累计成本。（拒绝）
+  - 方案B：改用 `last.totalTokens`，把最近一轮总消耗视为窗口占用。（拒绝）
+  - 方案C：改用 `last.inputTokens` 作为“当前送入模型的上下文大小”近似值。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：比 thread 累计值更接近 UI 想表达的“当前上下文占用”；不会随 thread 轮数无界累加；和真实运行时观测一致。
+  - Cons：它仍然只是近似值，不是 app-server 明确定义的“live occupied context”；不会计入本轮新生成输出对下一轮上下文的增量。
+- 影响范围（文件/模块）：
+  - `internal/acp/server.go`
+  - `internal/acp/server_stdio_test.go`
+  - `test/integration/e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `TestUsageUpdateUsedTokensUsesLatestInputTokens`
+  - `TestE2EACPUsageUpdateMappedFromThreadTokenUsageUpdated`
+  - 回归 `go test ./...`
+
+### ADR-0052：ACP `session/prompt` 最终 response 复用最后一次 usage 快照
+- 日期：2026-03-31
+- 状态：Accepted
+- 背景：
+  - ACP 上游常常希望在 prompt 终态 result 上直接读取最后一次 usage，而不只依赖独立的 `session/update(type="usage_update")` 流。
+  - 真实 `codex app-server` 当前没有把 usage 内联到 `turn/completed`；稳定来源仍是独立的 `thread/tokenUsage/updated` notification。
+- 决策：
+  - 扩展 `SessionPromptResult`，新增可选 `used/size/cost` 字段，保持 `stopReason` 兼容。
+  - `session/prompt` 路径缓存同一 turn 最近一次 usage snapshot，并在最终 result 复用该快照。
+  - inline slash command 等不经过下游 turn/token usage 通知的路径，继续只返回 `stopReason`。
+- 备选方案：
+  - 方案A：继续只发独立 `usage_update`，最终 result 不带 usage。（拒绝）
+  - 方案B：在最终 result 上复用最后一次已知 usage snapshot。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：更贴近 ACP 上游“终态即得 usage”的读取习惯；不影响现有 `usage_update` 流；字段可选，兼容旧客户端。
+  - Cons：仍受 `thread/tokenUsage/updated` 时序影响；若 usage notification 晚于 `turn/completed`，最终 result 仍拿不到该快照。
+- 影响范围（文件/模块）：
+  - `internal/acp/types.go`
+  - `internal/acp/server.go`
+  - `test/integration/e2e_test.go`
+- 验证方式（测试/验收项）：
   - `TestE2EACPUsageUpdateMappedFromThreadTokenUsageUpdated`
   - 回归 `go test ./...`
 

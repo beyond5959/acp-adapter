@@ -2076,14 +2076,14 @@ func TestE2EACPUsageUpdateMappedFromThreadTokenUsageUpdated(t *testing.T) {
 			if update.Update.SessionUpdate != "usage_update" {
 				t.Fatalf("usage update envelope kind=%q, want usage_update", update.Update.SessionUpdate)
 			}
-			if update.Used == nil || *update.Used != 53000 {
-				t.Fatalf("top-level usage update used=%v, want 53000", update.Used)
+			if update.Used == nil || *update.Used != 4000 {
+				t.Fatalf("top-level usage update used=%v, want 4000", update.Used)
 			}
 			if update.Size == nil || *update.Size != 200000 {
 				t.Fatalf("top-level usage update size=%v, want 200000", update.Size)
 			}
-			if update.Update.Used == nil || *update.Update.Used != 53000 {
-				t.Fatalf("nested usage update used=%v, want 53000", update.Update.Used)
+			if update.Update.Used == nil || *update.Update.Used != 4000 {
+				t.Fatalf("nested usage update used=%v, want 4000", update.Update.Used)
 			}
 			if update.Update.Size == nil || *update.Update.Size != 200000 {
 				t.Fatalf("nested usage update size=%v, want 200000", update.Update.Size)
@@ -2095,14 +2095,24 @@ func TestE2EACPUsageUpdateMappedFromThreadTokenUsageUpdated(t *testing.T) {
 			}
 			var result struct {
 				StopReason string `json:"stopReason"`
+				Used       *int64 `json:"used,omitempty"`
+				Size       *int64 `json:"size,omitempty"`
 			}
 			unmarshalResult(t, msg, &result)
 			if result.StopReason != "end_turn" {
 				t.Fatalf("token usage prompt expected stopReason=end_turn, got %q", result.StopReason)
 			}
+			if result.Used == nil || *result.Used != 4000 {
+				t.Fatalf("prompt result used=%v, want 4000", result.Used)
+			}
+			if result.Size == nil || *result.Size != 200000 {
+				t.Fatalf("prompt result size=%v, want 200000", result.Size)
+			}
 			gotPromptResp = true
 		}
 	}
+
+	h.assertStdoutPureJSONRPC()
 }
 
 func TestE2EAcceptanceD1ToD5ApprovalsBridge(t *testing.T) {

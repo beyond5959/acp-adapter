@@ -6,7 +6,17 @@
 ## 项目概览
 - 项目：acp-adapter（基于 Codex App Server 的 ACP 适配器，同时支持 Claude Code CLI 子进程适配）
 - 当前阶段：Claude Adapter CLI 重构完成（C-R5 内部迭代）
-- 最近更新：2026-03-30
+- 最近更新：2026-03-31
+
+## 2026-03-31 增量修复（ACP `session/prompt` 最终 response 携带 usage 快照）
+- 修复点：
+  - `internal/acp/server.go` 已先把 `usage_update.used` 从 thread 累计 `tokenUsage.total.totalTokens` 校正为最新输入 token 近似值 `tokenUsage.last.inputTokens`，避免把 lifetime usage 误当成窗口占用。
+  - `internal/acp/types.go` 扩展 `SessionPromptResult`，在保留 `stopReason` 的同时新增可选 `used/size/cost` 字段。
+  - `internal/acp/server.go` 在 `session/prompt` 路径缓存同一 turn 最近一次 `thread/tokenUsage/updated` 映射后的 usage 快照，并在最终 JSON-RPC result 一并返回。
+  - 这样上游除了持续接收 `session/update(type="usage_update")`，也能在 prompt 最终 response 中直接拿到最后一次 usage snapshot。
+- 测试与回归：
+  - 更新 `test/integration/e2e_test.go::TestE2EACPUsageUpdateMappedFromThreadTokenUsageUpdated`
+  - 全量通过：`go test ./...`
 
 ## 2026-03-30 增量修复（Codex `thread/tokenUsage/updated` -> ACP `usage_update`）
 - 修复点：

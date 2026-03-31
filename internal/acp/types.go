@@ -187,9 +187,12 @@ type SessionPromptParams struct {
 	PromptConfig
 }
 
-// SessionPromptResult returns final stop reason.
+// SessionPromptResult returns final stop reason and optional usage snapshot.
 type SessionPromptResult struct {
-	StopReason string `json:"stopReason"`
+	StopReason string            `json:"stopReason"`
+	Used       *int64            `json:"used,omitempty"`
+	Size       *int64            `json:"size,omitempty"`
+	Cost       *SessionUsageCost `json:"cost,omitempty"`
 }
 
 // SessionCancelParams requests turn cancellation.
@@ -315,6 +318,23 @@ type SessionUsageCost struct {
 	Amount   float64 `json:"amount"`
 	Currency string  `json:"currency"`
 }
+
+const (
+	sessionUpdateTypeMessage           = "message"
+	sessionUpdateTypeToolCall          = "tool_call_update"
+	sessionUpdateTypeConfigOptions     = "config_options_update"
+	sessionUpdateTypePlan              = "plan"
+	sessionUpdateTypeReasoning         = "reasoning"
+	sessionUpdateTypeAvailableCommands = "available_commands_update"
+	sessionUpdateTypeUsage             = "usage_update"
+
+	sessionUpdateChunkAgentMessage = "agent_message_chunk"
+	sessionUpdateChunkUserMessage  = "user_message_chunk"
+	sessionUpdateChunkAgentThought = "agent_thought_chunk"
+
+	sessionConfigCategoryReasoning = "reasoning"
+	sessionItemTypePlan            = "plan"
+)
 
 // SessionUpdateParams is emitted via session/update notification.
 type SessionUpdateParams struct {

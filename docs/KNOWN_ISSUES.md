@@ -52,6 +52,7 @@
 - KI-0046：`turn/diff/updated` 的 ACP 结构化 diff 重建依赖 `fs/read_text_file` 与旧文件一致性
 - KI-0047：Codex ChatGPT Apps 后台拉取失败仍只表现为子进程 stderr 日志
 - KI-0048：Codex `thread/tokenUsage/updated` 目前仍依赖通知先于 `turn/completed`
+- KI-0049：ACP usage 仍缺少 app-server 原生“live context occupancy”字段
 
 ---
 
@@ -672,14 +673,37 @@
 ## KI-0048：Codex `thread/tokenUsage/updated` 目前仍依赖通知先于 `turn/completed`
 - 现象：
   - adapter 已把 `thread/tokenUsage/updated` 桥接为 ACP `session/update(type="usage_update")`。
-  - 但当前 prompt turn 仍以 `turn/completed` 为终态立刻收敛；如果某个 app-server 版本把 token usage notification 放在 `turn/completed` 之后发送，这次 turn 的 ACP 流不会再补发 usage update。
+  - 当前 `session/prompt` 最终 response 也只会复用同 turn 里“已经收到”的最后一次 usage 快照。
+  - 因此如果某个 app-server 版本把 token usage notification 放在 `turn/completed` 之后发送，这次 turn 的 ACP 流不会再补发 usage update，最终 response 里也拿不到 usage。
 - 影响：
   - 当前 fake server 与已知联调路径都能正常看到 usage update。
-  - 但如果下游通知时序发生变化，个别 turn 可能缺少“最后一次” token usage 刷新。
+  - 但如果下游通知时序发生变化，个别 turn 可能缺少“最后一次” token usage 刷新，最终 prompt result 也会缺 usage 字段。
 - 复现：
   - 使用会在 `turn/completed` 之后才发送 `thread/tokenUsage/updated` 的 codex app-server 版本执行 prompt。
 - Workaround：
   - 当前优先消费同一 turn 中较早到达的 `usage_update`。
-  - 若 UI 需要最新 usage，可继续读取后续 turn 的下一次 `usage_update` 作为最新会话视图。
+  - 若 UI 需要最新 usage，可继续读取后续 turn 的下一次 `usage_update` 作为最新会话视图；不要假设每个 prompt 的最终 result 都一定带 usage。
 - 后续计划：
   - 评估为 terminal turn 增加短暂的 post-completion usage drain，或引入独立于 turn 生命周期的 thread-level notification 通道，降低对通知顺序的依赖。
+
+## KI-0049：ACP usage 仍缺少 app-server 原生“live context occupancy”字段
+- 现象：
+  - 真实 `codex app-server` 会在 `thread/tokenUsage/updated` 中同时提供：
+    - `last.*`：最近一次模型调用的 usage 快照
+    - `total.*`：当前 thread 累计 usage
+    - `modelContextWindow`：模型窗口上限
+  - adapter 当前把 ACP `usage_update.used` 与 prompt 最终 response 里的 `used` 都映射为 `last.inputTokens`，用于近似“最近一次送入模型的上下文大小”。
+  - 但 app-server 目前没有显式提供“此刻 thread 已占用上下文窗口”的精确定义字段，因此这仍是近似值。
+- 影响：
+  - UI 看到的 `used/size` 更接近“本轮送入模型的上下文大小”，不会再随着 thread 生命周期无限累加。
+  - 但它不会自动计入“本轮刚生成的输出在下一轮会追加进上下文”这部分增量，因此不是严格的 next-turn occupancy。
+- 复现：
+  - 在同一 thread 连续执行多轮 prompt，观察真实 `thread/tokenUsage/updated`：
+    - `total.totalTokens` 持续累加
+    - `last.inputTokens` 保持单轮量级
+- Workaround：
+  - 若 UI 需要“本轮发给模型的上下文大小”，直接使用当前 adapter 的 `used/size` 即可。
+  - 若要展示“累计消耗”，应单独读取/桥接 `tokenUsage.total.*`，不要复用 `used`。
+- 后续计划：
+  - 若后续 app-server 提供更明确的 thread/window occupancy 字段，改为直接桥接该字段。
+  - 评估是否以扩展字段形式补充 `last.totalTokens` / `total.totalTokens`，同时满足“窗口占用”与“累计成本”两类 UI。
