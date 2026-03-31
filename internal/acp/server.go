@@ -761,7 +761,7 @@ func (s *Server) handleSessionSetConfigOption(ctx context.Context, id json.RawMe
 	s.emitUpdates([]SessionUpdateParams{
 		{
 			SessionID:     params.SessionID,
-			Type:          "config_options_update",
+			Type:          sessionUpdateTypeConfigOptions,
 			ConfigOptions: configOptions,
 		},
 	})
@@ -1362,7 +1362,7 @@ func historyUpdatesFromThread(sessionID string, thread codex.Thread) []SessionUp
 				updates = append(updates, SessionUpdateParams{
 					SessionID: sessionID,
 					TurnID:    turnID,
-					Type:      "message",
+					Type:      sessionUpdateTypeMessage,
 					Role:      "user",
 					ItemID:    strings.TrimSpace(item.ID),
 					ItemType:  item.Type,
@@ -1375,7 +1375,7 @@ func historyUpdatesFromThread(sessionID string, thread codex.Thread) []SessionUp
 				update := SessionUpdateParams{
 					SessionID: sessionID,
 					TurnID:    turnID,
-					Type:      "message",
+					Type:      sessionUpdateTypeMessage,
 					Role:      "assistant",
 					ItemID:    strings.TrimSpace(item.ID),
 					ItemType:  item.Type,
@@ -1727,16 +1727,16 @@ func buildSessionUpdatePayload(update SessionUpdateParams) map[string]any {
 	if len(update.Todo) > 0 {
 		payload["todo"] = update.Todo
 	}
-	if update.Type == "plan" || len(update.Plan) > 0 {
+	if update.Type == sessionUpdateTypePlan || len(update.Plan) > 0 {
 		payload["plan"] = clonePlanEntriesOrEmpty(update.Plan)
 	}
 	if len(update.ConfigOptions) > 0 {
 		payload["configOptions"] = update.ConfigOptions
 	}
-	if update.Type == "available_commands_update" || len(update.AvailableCommands) > 0 {
+	if update.Type == sessionUpdateTypeAvailableCommands || len(update.AvailableCommands) > 0 {
 		payload["availableCommands"] = cloneAvailableCommandsOrEmpty(update.AvailableCommands)
 	}
-	if update.Type == "usage_update" || update.Used != nil || update.Size != nil || update.Cost != nil {
+	if update.Type == sessionUpdateTypeUsage || update.Used != nil || update.Size != nil || update.Cost != nil {
 		payload["used"] = optionalInt64Value(update.Used)
 		payload["size"] = optionalInt64Value(update.Size)
 		if update.Cost != nil {
@@ -1753,10 +1753,10 @@ func buildSessionUpdatePayload(update SessionUpdateParams) map[string]any {
 
 func mapACPUpdateForClient(update SessionUpdateParams) map[string]any {
 	switch update.Type {
-	case "message":
-		sessionUpdate := "agent_message_chunk"
+	case sessionUpdateTypeMessage:
+		sessionUpdate := sessionUpdateChunkAgentMessage
 		if strings.EqualFold(strings.TrimSpace(update.Role), "user") {
-			sessionUpdate = "user_message_chunk"
+			sessionUpdate = sessionUpdateChunkUserMessage
 		}
 		content := update.Content
 		if content == nil {
@@ -1769,9 +1769,9 @@ func mapACPUpdateForClient(update SessionUpdateParams) map[string]any {
 			"sessionUpdate": sessionUpdate,
 			"content":       clonePromptContentBlock(content),
 		}
-	case "tool_call_update":
+	case sessionUpdateTypeToolCall:
 		mapped := map[string]any{
-			"sessionUpdate": "tool_call_update",
+			"sessionUpdate": sessionUpdateTypeToolCall,
 		}
 		if update.ToolCallID != "" {
 			mapped["toolCallId"] = update.ToolCallID
@@ -1790,35 +1790,35 @@ func mapACPUpdateForClient(update SessionUpdateParams) map[string]any {
 			mapped["content"] = content
 		}
 		return mapped
-	case "config_options_update":
+	case sessionUpdateTypeConfigOptions:
 		mapped := map[string]any{
-			"sessionUpdate": "config_options_update",
+			"sessionUpdate": sessionUpdateTypeConfigOptions,
 		}
 		if len(update.ConfigOptions) > 0 {
 			mapped["configOptions"] = update.ConfigOptions
 		}
 		return mapped
-	case "plan":
+	case sessionUpdateTypePlan:
 		return map[string]any{
-			"sessionUpdate": "plan",
+			"sessionUpdate": sessionUpdateTypePlan,
 			"entries":       clonePlanEntriesOrEmpty(update.Plan),
 		}
-	case "reasoning":
+	case sessionUpdateTypeReasoning:
 		return map[string]any{
-			"sessionUpdate": "agent_thought_chunk",
+			"sessionUpdate": sessionUpdateChunkAgentThought,
 			"content": map[string]any{
 				"type": "text",
 				"text": update.Delta,
 			},
 		}
-	case "available_commands_update":
+	case sessionUpdateTypeAvailableCommands:
 		return map[string]any{
-			"sessionUpdate":     "available_commands_update",
+			"sessionUpdate":     sessionUpdateTypeAvailableCommands,
 			"availableCommands": cloneAvailableCommandsOrEmpty(update.AvailableCommands),
 		}
-	case "usage_update":
+	case sessionUpdateTypeUsage:
 		mapped := map[string]any{
-			"sessionUpdate": "usage_update",
+			"sessionUpdate": sessionUpdateTypeUsage,
 			"used":          optionalInt64Value(update.Used),
 			"size":          optionalInt64Value(update.Size),
 		}
@@ -1841,7 +1841,7 @@ func mapACPUpdateForClient(update SessionUpdateParams) map[string]any {
 			text = "status"
 		}
 		return map[string]any{
-			"sessionUpdate": "agent_thought_chunk",
+			"sessionUpdate": sessionUpdateChunkAgentThought,
 			"content": map[string]any{
 				"type": "text",
 				"text": text,
@@ -2081,7 +2081,7 @@ func warningUpdates(sessionID string, turnID string, warnings []string) []Sessio
 		updates = append(updates, SessionUpdateParams{
 			SessionID: sessionID,
 			TurnID:    turnID,
-			Type:      "message",
+			Type:      sessionUpdateTypeMessage,
 			Phase:     string(turnPhaseStreaming),
 			Delta:     "[adapter warning] " + warning,
 		})
@@ -3090,7 +3090,7 @@ func normalizeACPPlanStatus(status string) string {
 }
 
 func isPlanItemType(itemType string) bool {
-	return strings.EqualFold(strings.TrimSpace(itemType), "plan")
+	return strings.EqualFold(strings.TrimSpace(itemType), sessionItemTypePlan)
 }
 
 func (t *turnLifecycle) rememberFallbackPlanItem(itemID string) {
@@ -3202,7 +3202,7 @@ func (s *Server) emitAvailableCommandUpdate(sessionID string) {
 	s.emitUpdates([]SessionUpdateParams{
 		{
 			SessionID:         sessionID,
-			Type:              "available_commands_update",
+			Type:              sessionUpdateTypeAvailableCommands,
 			AvailableCommands: s.sessionAvailableCommands(),
 		},
 	})
@@ -3226,7 +3226,7 @@ func (s *Server) emitAvailableCommandUpdates(sessionIDs []string) {
 		seen[sessionID] = struct{}{}
 		updates = append(updates, SessionUpdateParams{
 			SessionID:         sessionID,
-			Type:              "available_commands_update",
+			Type:              sessionUpdateTypeAvailableCommands,
 			AvailableCommands: commands,
 		})
 	}
@@ -3555,7 +3555,7 @@ func buildThoughtLevelSessionConfig(
 
 	return SessionConfig{
 		ID:           configIDThoughtLevel,
-		Category:     "reasoning",
+		Category:     sessionConfigCategoryReasoning,
 		Name:         "Thought level",
 		Description:  "Reasoning effort used for this session",
 		Type:         "select",
@@ -3939,7 +3939,7 @@ func (s *Server) handleLogoutSlash(ctx context.Context, id json.RawMessage, sess
 			{
 				SessionID: sessionID,
 				TurnID:    lifecycle.turnID,
-				Type:      "message",
+				Type:      sessionUpdateTypeMessage,
 				Phase:     string(lifecycle.phase),
 				Delta:     recovery,
 			},
@@ -3970,7 +3970,7 @@ func (s *Server) handleMCPListSlash(ctx context.Context, id json.RawMessage, ses
 			{
 				SessionID: sessionID,
 				TurnID:    lifecycle.turnID,
-				Type:      "message",
+				Type:      sessionUpdateTypeMessage,
 				Phase:     string(lifecycle.phase),
 				Delta:     message,
 			},
@@ -4004,7 +4004,7 @@ func (s *Server) handleMCPOAuthSlash(
 			{
 				SessionID: sessionID,
 				TurnID:    lifecycle.turnID,
-				Type:      "message",
+				Type:      sessionUpdateTypeMessage,
 				Phase:     string(lifecycle.phase),
 				Delta:     strings.TrimSpace(message),
 			},
@@ -4063,7 +4063,7 @@ func (s *Server) handleMCPCallSlash(
 						{
 							SessionID: sessionID,
 							TurnID:    lifecycle.turnID,
-							Type:      "message",
+							Type:      sessionUpdateTypeMessage,
 							Phase:     string(lifecycle.phase),
 							Delta:     text,
 							Content:   textPromptContentBlock(text),
@@ -4171,7 +4171,7 @@ func (t *turnLifecycle) toolCallInProgressUpdates(event codex.TurnEvent) []Sessi
 		{
 			SessionID:  t.sessionID,
 			TurnID:     t.turnID,
-			Type:       "tool_call_update",
+			Type:       sessionUpdateTypeToolCall,
 			Phase:      string(t.phase),
 			Status:     "in_progress",
 			ToolCallID: event.Approval.ToolCallID,
@@ -4192,7 +4192,7 @@ func (t *turnLifecycle) toolCallOutcomeUpdate(
 	return SessionUpdateParams{
 		SessionID:          t.sessionID,
 		TurnID:             t.turnID,
-		Type:               "tool_call_update",
+		Type:               sessionUpdateTypeToolCall,
 		Phase:              string(t.phase),
 		Status:             status,
 		ToolCallID:         event.Approval.ToolCallID,
@@ -4218,7 +4218,7 @@ func (t *turnLifecycle) diffInProgressUpdate(content []ToolCallContentItem) Sess
 	return SessionUpdateParams{
 		SessionID:       t.sessionID,
 		TurnID:          t.turnID,
-		Type:            "tool_call_update",
+		Type:            sessionUpdateTypeToolCall,
 		Phase:           string(t.phase),
 		ItemType:        "turn_diff",
 		Status:          "in_progress",
@@ -4238,7 +4238,7 @@ func (t *turnLifecycle) diffTerminalUpdate(status string, message string) (Sessi
 	return SessionUpdateParams{
 		SessionID:       t.sessionID,
 		TurnID:          t.turnID,
-		Type:            "tool_call_update",
+		Type:            sessionUpdateTypeToolCall,
 		Phase:           string(t.phase),
 		ItemType:        "turn_diff",
 		Status:          status,
@@ -4269,7 +4269,7 @@ func (t *turnLifecycle) apply(event codex.TurnEvent) ([]SessionUpdateParams, boo
 		update := SessionUpdateParams{
 			SessionID: t.sessionID,
 			TurnID:    t.turnID,
-			Type:      "message",
+			Type:      sessionUpdateTypeMessage,
 			Phase:     string(t.phase),
 			ItemID:    event.ItemID,
 			Delta:     event.Delta,
@@ -4285,7 +4285,7 @@ func (t *turnLifecycle) apply(event codex.TurnEvent) ([]SessionUpdateParams, boo
 			{
 				SessionID: t.sessionID,
 				TurnID:    t.turnID,
-				Type:      "plan",
+				Type:      sessionUpdateTypePlan,
 				Phase:     string(t.phase),
 				Message:   event.Message,
 				Plan:      planEntriesFromTurnPlan(event.Plan),
@@ -4300,7 +4300,7 @@ func (t *turnLifecycle) apply(event codex.TurnEvent) ([]SessionUpdateParams, boo
 			{
 				SessionID: t.sessionID,
 				TurnID:    t.turnID,
-				Type:      "usage_update",
+				Type:      sessionUpdateTypeUsage,
 				Phase:     string(t.phase),
 				Used:      int64Ptr(event.TokenUsage.Total.TotalTokens),
 				Size:      cloneOptionalInt64(event.TokenUsage.ModelContextWindow),
@@ -4312,7 +4312,7 @@ func (t *turnLifecycle) apply(event codex.TurnEvent) ([]SessionUpdateParams, boo
 			{
 				SessionID: t.sessionID,
 				TurnID:    t.turnID,
-				Type:      "reasoning",
+				Type:      sessionUpdateTypeReasoning,
 				Phase:     string(t.phase),
 				ItemID:    event.ItemID,
 				ItemType:  event.ItemType,
@@ -4333,7 +4333,7 @@ func (t *turnLifecycle) apply(event codex.TurnEvent) ([]SessionUpdateParams, boo
 			{
 				SessionID: t.sessionID,
 				TurnID:    t.turnID,
-				Type:      "plan",
+				Type:      sessionUpdateTypePlan,
 				Phase:     string(t.phase),
 				ItemID:    event.ItemID,
 				Plan:      entries,
@@ -4359,7 +4359,7 @@ func (t *turnLifecycle) apply(event codex.TurnEvent) ([]SessionUpdateParams, boo
 						{
 							SessionID: t.sessionID,
 							TurnID:    t.turnID,
-							Type:      "plan",
+							Type:      sessionUpdateTypePlan,
 							Phase:     string(t.phase),
 							ItemID:    event.ItemID,
 							Plan:      entries,
@@ -4413,7 +4413,7 @@ func (t *turnLifecycle) apply(event codex.TurnEvent) ([]SessionUpdateParams, boo
 						{
 							SessionID: t.sessionID,
 							TurnID:    t.turnID,
-							Type:      "plan",
+							Type:      sessionUpdateTypePlan,
 							Phase:     string(t.phase),
 							ItemID:    event.ItemID,
 							Plan:      entries,
@@ -4551,7 +4551,7 @@ func (t *turnLifecycle) commandExecutionToolCallUpdate(event codex.TurnEvent) (S
 	return SessionUpdateParams{
 		SessionID:  t.sessionID,
 		TurnID:     t.turnID,
-		Type:       "tool_call_update",
+		Type:       sessionUpdateTypeToolCall,
 		Phase:      string(t.phase),
 		ItemID:     event.ItemID,
 		ItemType:   event.ItemType,
@@ -4585,7 +4585,7 @@ func (t *turnLifecycle) toolExecutionToolCallUpdate(event codex.TurnEvent) (Sess
 	return SessionUpdateParams{
 		SessionID:       t.sessionID,
 		TurnID:          t.turnID,
-		Type:            "tool_call_update",
+		Type:            sessionUpdateTypeToolCall,
 		Phase:           string(t.phase),
 		ItemID:          event.ItemID,
 		ItemType:        event.ItemType,
@@ -4619,7 +4619,7 @@ func (t *turnLifecycle) commandExecutionDeltaToolCallUpdate(event codex.TurnEven
 	return SessionUpdateParams{
 		SessionID:  t.sessionID,
 		TurnID:     t.turnID,
-		Type:       "tool_call_update",
+		Type:       sessionUpdateTypeToolCall,
 		Phase:      string(t.phase),
 		ItemID:     event.ItemID,
 		ItemType:   event.ItemType,

@@ -316,6 +316,23 @@ type SessionUsageCost struct {
 	Currency string  `json:"currency"`
 }
 
+const (
+	sessionUpdateTypeMessage           = "message"
+	sessionUpdateTypeToolCall          = "tool_call_update"
+	sessionUpdateTypeConfigOptions     = "config_options_update"
+	sessionUpdateTypePlan              = "plan"
+	sessionUpdateTypeReasoning         = "reasoning"
+	sessionUpdateTypeAvailableCommands = "available_commands_update"
+	sessionUpdateTypeUsage             = "usage_update"
+
+	sessionUpdateChunkAgentMessage = "agent_message_chunk"
+	sessionUpdateChunkUserMessage  = "user_message_chunk"
+	sessionUpdateChunkAgentThought = "agent_thought_chunk"
+
+	sessionConfigCategoryReasoning = "reasoning"
+	sessionItemTypePlan            = "plan"
+)
+
 // SessionUpdateParams is emitted via session/update notification.
 type SessionUpdateParams struct {
 	SessionID          string                `json:"sessionId"`

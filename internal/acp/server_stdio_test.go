@@ -137,7 +137,7 @@ func TestBuildSessionUpdatePayloadPlan(t *testing.T) {
 	payload := buildSessionUpdatePayload(SessionUpdateParams{
 		SessionID: "session-1",
 		TurnID:    "turn-1",
-		Type:      "plan",
+		Type:      sessionUpdateTypePlan,
 		Plan: []PlanEntry{
 			{
 				Content:  "capture requirements",
@@ -151,8 +151,8 @@ func TestBuildSessionUpdatePayloadPlan(t *testing.T) {
 	if !ok {
 		t.Fatalf("payload missing update envelope: %+v", payload)
 	}
-	if got, _ := update["sessionUpdate"].(string); got != "plan" {
-		t.Fatalf("update.sessionUpdate=%q, want plan", got)
+	if got, _ := update["sessionUpdate"].(string); got != sessionUpdateTypePlan {
+		t.Fatalf("update.sessionUpdate=%q, want %s", got, sessionUpdateTypePlan)
 	}
 	entries, ok := update["entries"].([]PlanEntry)
 	if !ok {
@@ -175,7 +175,7 @@ func TestBuildSessionUpdatePayloadAvailableCommands(t *testing.T) {
 
 	payload := buildSessionUpdatePayload(SessionUpdateParams{
 		SessionID: "session-1",
-		Type:      "available_commands_update",
+		Type:      sessionUpdateTypeAvailableCommands,
 		AvailableCommands: []AvailableCommand{
 			{
 				Name:        "review",
@@ -195,8 +195,8 @@ func TestBuildSessionUpdatePayloadAvailableCommands(t *testing.T) {
 	if !ok {
 		t.Fatalf("payload missing update envelope: %+v", payload)
 	}
-	if got, _ := update["sessionUpdate"].(string); got != "available_commands_update" {
-		t.Fatalf("update.sessionUpdate=%q, want available_commands_update", got)
+	if got, _ := update["sessionUpdate"].(string); got != sessionUpdateTypeAvailableCommands {
+		t.Fatalf("update.sessionUpdate=%q, want %s", got, sessionUpdateTypeAvailableCommands)
 	}
 	entries, ok := update["availableCommands"].([]AvailableCommand)
 	if !ok {
@@ -222,7 +222,7 @@ func TestBuildSessionUpdatePayloadUsageUpdate(t *testing.T) {
 	payload := buildSessionUpdatePayload(SessionUpdateParams{
 		SessionID: "session-1",
 		TurnID:    "turn-1",
-		Type:      "usage_update",
+		Type:      sessionUpdateTypeUsage,
 		Used:      &used,
 		Size:      &size,
 	})
@@ -231,8 +231,8 @@ func TestBuildSessionUpdatePayloadUsageUpdate(t *testing.T) {
 	if !ok {
 		t.Fatalf("payload missing update envelope: %+v", payload)
 	}
-	if got, _ := update["sessionUpdate"].(string); got != "usage_update" {
-		t.Fatalf("update.sessionUpdate=%q, want usage_update", got)
+	if got, _ := update["sessionUpdate"].(string); got != sessionUpdateTypeUsage {
+		t.Fatalf("update.sessionUpdate=%q, want %s", got, sessionUpdateTypeUsage)
 	}
 	if got, _ := update["used"].(int64); got != used {
 		t.Fatalf("update.used=%v, want %d", update["used"], used)
@@ -254,7 +254,7 @@ func TestBuildSessionUpdatePayloadToolCallContent(t *testing.T) {
 	payload := buildSessionUpdatePayload(SessionUpdateParams{
 		SessionID:  "session-1",
 		TurnID:     "turn-1",
-		Type:       "tool_call_update",
+		Type:       sessionUpdateTypeToolCall,
 		Status:     "completed",
 		ToolCallID: "tool-1",
 		ToolCallContent: []ToolCallContentItem{
@@ -279,8 +279,8 @@ func TestBuildSessionUpdatePayloadToolCallContent(t *testing.T) {
 	if !ok {
 		t.Fatalf("payload missing update envelope: %+v", payload)
 	}
-	if got, _ := update["sessionUpdate"].(string); got != "tool_call_update" {
-		t.Fatalf("update.sessionUpdate=%q, want tool_call_update", got)
+	if got, _ := update["sessionUpdate"].(string); got != sessionUpdateTypeToolCall {
+		t.Fatalf("update.sessionUpdate=%q, want %s", got, sessionUpdateTypeToolCall)
 	}
 	content, ok := update["content"].([]ToolCallContentItem)
 	if !ok {
