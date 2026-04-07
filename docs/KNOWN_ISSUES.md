@@ -15,7 +15,7 @@
 - KI-0009：真实 App Server 与 fake server 事件形态可能不完全一致
 - KI-0010：审批超时默认取消可能影响长时间人工确认场景
 - KI-0011：Mode B（ACP fs 落盘）依赖客户端 `fs/write_text_file` 契约
-- KI-0012：`/logout` 后缺少同进程重新登录入口
+- KI-0012：`authenticate` 只恢复本地可用态，不负责外部登录/凭据采集
 - KI-0013：profiles 配置目前仅支持 JSON（未实现 toml）
 - KI-0014：J1 压测默认不在 `go test ./...` 中执行
 - KI-0015：MCP/compact/auth/model-list 方法名对真实 app-server 版本敏感
@@ -53,6 +53,9 @@
 - KI-0047：Codex ChatGPT Apps 后台拉取失败仍只表现为子进程 stderr 日志
 - KI-0048：Codex `thread/tokenUsage/updated` 目前仍依赖通知先于 `turn/completed`
 - KI-0049：ACP usage 仍缺少 app-server 原生“live context occupancy”字段
+- KI-0050：Pi permission gate 当前只覆盖 `bash` / `write` / `edit`
+- KI-0051：Pi custom commands 与非 gate `extension_ui_request` 尚未桥接到 ACP
+- KI-0052：Pi 的 archived session / native review / MCP 与 Codex 仍不对齐
 
 ---
 
@@ -136,19 +139,21 @@
 - 后续计划：
   - PR5 增加 fs 方法适配层与 capability 检测，按客户端能力动态选择模式。
 
-## KI-0012：`/logout` 后缺少同进程重新登录入口
-- 现象：执行 `/logout` 后，适配器进入未认证状态，后续 `session/new`/`session/prompt` 会被 auth gate 拒绝。
+## KI-0012：`authenticate` 只恢复本地可用态，不负责外部登录/凭据采集
+- 现象：
+  - `/logout` 后，adapter 现在支持通过 `authenticate` 在同进程恢复本地 auth 状态，并继续已有 session（Pi/Claude 已验证）。
+  - 但 `authenticate` 本身不会替用户执行浏览器登录、token 录入、环境变量注入或下游 CLI 的真实登录流程。
 - 影响：
-  - 现在会提供按 auth 模式区分的可复制恢复指令（API key / `codex login`），但仍需重启 adapter 恢复可用。
-  - subscription 模式在无浏览器或本地回调不可用环境下，`codex login` 可能无法完成。
+  - 如果外部凭据/登录态本来就缺失或失效，`authenticate` 仍可能返回成功，但后续第一次真实下游请求才暴露认证失败。
+  - subscription 模式在无浏览器或本地回调不可用环境下，外部 `codex login` 之类流程仍可能无法完成。
 - 复现：
-  - 先正常对话，再发送 `/logout`，随后发送任意 prompt。
+  - 清空/失效下游凭据（如 API key、CLI login state），执行 `/logout`，再直接调用 `authenticate` 并发送 prompt。
 - Workaround：
-  - 按 `/logout` 输出的 next-step 指令执行：
-    - API key：设置 `CODEX_API_KEY` 或 `OPENAI_API_KEY` 后重启 adapter。
-    - subscription：运行 `codex login` 完成浏览器登录/本地回调后重启 adapter。
+  - 先按 `/logout` 输出的 next-step 指令恢复下游真实认证，再调用 `authenticate`：
+    - API key：设置 `CODEX_API_KEY` / `OPENAI_API_KEY` 或相应 provider 凭据。
+    - subscription / CLI：先完成 `codex login` 或对应 CLI 登录。
 - 后续计划：
-  - 评估增加显式 re-auth RPC 或与下游 auth 流程对接，实现无重启恢复。
+  - 评估让 `authenticate` 支持可选的下游健康探测，或对接显式交互式登录流程，使“authenticated=true”更接近真实可用态。
 
 ## KI-0013：profiles 配置目前仅支持 JSON（未实现 toml）
 - 现象：PR5 新增 profile 配置读取仅支持 `CODEX_ACP_PROFILES_JSON`/`CODEX_ACP_PROFILES_FILE(JSON)`。
@@ -272,6 +277,48 @@
 - 后续计划：
   - 若 Claude CLI/SDK 后续提供稳定的会话列表或 transcript 读取接口，再升级为真正的 `session/list` / `session/load` 历史回放实现。
   - 评估是否在 adapter 内持久化“ACP session id -> Claude native session id”映射，减少上游自行缓存的负担。
+
+## KI-0050：Pi permission gate 当前只覆盖 `bash` / `write` / `edit`
+- 现象：
+  - Pi adapter 通过注入 extension gate 把 Pi RPC `tool_call` 拦截成 ACP permission。
+  - 当前 gate 仅拦截 `bash` / `write` / `edit` 三类工具；`bash` 中的 network 判定也只是基于命令字符串关键字启发式识别。
+- 影响：
+  - 对其他潜在副作用工具，当前不会自动上收为 ACP `session/request_permission`。
+  - 某些间接网络命令可能只被识别为普通 command approval，而不是更细的 network approval。
+- 复现：
+  - 在 Pi prompt 中触发非 `bash` / `write` / `edit` 的副作用工具，或使用未命中关键字的联网命令。
+- Workaround：
+  - 当前把 Pi 默认能力范围收敛在已覆盖工具上；对需要更细 network 判定的流程，优先让模型显式使用 `curl` / `wget` / 包管理命令等已识别形式。
+- 后续计划：
+  - 基于更多真实 Pi tool schema 扩展 gate 拦截范围，并评估把 network 判定从字符串启发式升级为结构化参数识别。
+
+## KI-0051：Pi custom commands 与非 gate `extension_ui_request` 尚未桥接到 ACP
+- 现象：
+  - Pi RPC 提供 `get_commands` 与通用 `extension_ui_request`，但当前 adapter 只对外广告固定 ACP slash commands（`review/review-branch/review-commit/init/compact/logout`）。
+  - 非 adapter gate 产生的 `extension_ui_request` 目前会被自动取消，并作为 backend warning 暴露。
+- 影响：
+  - Pi 自定义命令不会自动进入 ACP `available_commands_update`。
+  - 依赖 extension UI 的 Pi 功能在 ACP 客户端里当前不可交互。
+- 复现：
+  - 在 Pi 配置自定义命令，或安装会发出 `extension_ui_request` 的其他 extension。
+- Workaround：
+  - 当前只依赖 adapter 固定 slash command 面；对其他 extension UI 功能视为未接入。
+- 后续计划：
+  - 评估把 `get_commands` 合并进 ACP command catalog，并定义通用 `extension_ui_request` -> ACP 交互映射。
+
+## KI-0052：Pi 的 archived session / native review / MCP 与 Codex 仍不对齐
+- 现象：
+  - Pi `session/list` 当前只暴露 active session 文件，不支持 archived 分页。
+  - `/review` 在 Pi 后端上通过普通 prompt + synthetic review mode 事件模拟，不是下游 native review/start。
+  - Pi adapter 当前不支持 MCP list/call/oauth，因此也不会广告 `/mcp`。
+- 影响：
+  - Pi 后端与 Codex 后端在会话浏览、review 语义和 MCP 能力上仍有可见差异。
+- 复现：
+  - 以 `--adapter pi` 调用 `session/list` 的 archived page、执行 `/review`、查看 available commands。
+- Workaround：
+  - 当前将 Pi 定位为“尽量对齐 Codex 交互形状”的 RPC 后端，而不是 feature-complete 的 Codex 等价实现。
+- 后续计划：
+  - 继续调研 Pi 官方 RPC 与扩展能力，评估 archived session、native review 和更多 tool surface 的桥接空间。
 
 ## KI-0042：`available_commands_update` 目前仍是 adapter 级命令目录
 - 现象：

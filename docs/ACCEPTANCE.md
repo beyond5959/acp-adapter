@@ -183,3 +183,29 @@ L8. **库模式（等同 K1-K5）**
 L9. **Codex 零回退**
 - 操作：在新增 Claude 适配器代码后执行 `go test ./...`。
 - 预期：全部 Codex 相关测试通过；`cmd/acp --adapter codex` 行为与改动前一致。
+
+## M. Pi Mode（Pi Coding Agent RPC 适配器）
+
+M1. **协议基线（等同 A1-A5）**
+- 操作：以 `--adapter pi` 启动适配器，执行 initialize/session/new/session/prompt/session/cancel 全流程。
+- 预期：stdout 仅 ACP JSON-RPC；流式输出 >=1 条 `session/update`；最终 `stopReason=end_turn`；cancel 收敛为 `stopReason=cancelled`。
+
+M2. **Pi RPC 后端与会话配置**
+- 操作：设置 `--pi-provider/--pi-model`，执行 `session/new` 与 `session/set_config_option(model,thought_level)`。
+- 预期：通过官方 `pi --mode rpc` 建立 session；`configOptions` 至少包含 `model` 与 `thought_level`；切换后收到 `config_options_update`。
+
+M3. **Pi session/list 与 session/load**
+- 操作：准备 Pi session jsonl 文件后调用 `session/list` 与 `session/load`。
+- 预期：可列出当前 session 目录里的历史会话；`session/load` 会回放至少 user/assistant 基础历史，并允许继续 `session/prompt`。
+
+M4. **Pi permission gate**
+- 操作：触发 Pi `bash` / `write` / `edit` 工具调用。
+- 预期：适配器先通过 ACP `session/request_permission` 向上游申请；approve 后继续执行并完成 turn；decline/cancel 不执行副作用。
+
+M5. **Pi 命令目录对齐**
+- 操作：执行 `session/new` 后观察 `available_commands_update`。
+- 预期：默认广告 `/review`、`/review-branch`、`/review-commit`、`/init`、`/compact`、`/logout`；不误广告 `/mcp`。
+
+M6. **全量零回退**
+- 操作：新增 Pi 适配器后执行 `go test ./...`。
+- 预期：Pi 用例通过，既有 Codex / Claude / embedded 契约测试全部通过。

@@ -1,4 +1,4 @@
-package claudeacp
+package piacp
 
 import (
 	"context"
@@ -9,8 +9,8 @@ import (
 
 	"github.com/beyond5959/acp-adapter/internal/acp"
 	"github.com/beyond5959/acp-adapter/internal/bridge"
-	"github.com/beyond5959/acp-adapter/internal/claude"
 	"github.com/beyond5959/acp-adapter/internal/observability"
+	"github.com/beyond5959/acp-adapter/internal/pi"
 )
 
 func runRuntime(
@@ -47,7 +47,20 @@ func runRuntime(
 		return errors.New("acp transport is nil")
 	}
 
-	client := claude.NewClient(toClaudeCliConfig(cfg))
+	client := pi.NewClient(pi.Config{
+		PiBin:           cfg.PiBin,
+		ExtraArgs:       append([]string(nil), cfg.PiArgs...),
+		DefaultProvider: cfg.DefaultProvider,
+		DefaultModel:    cfg.DefaultModel,
+		SessionDir:      cfg.SessionDir,
+		EnableGate:      cfg.EnableGate,
+		Stderr:          stderr,
+		Trace: func(direction string, payload []byte) {
+			if traceFile != nil {
+				traceFile.TraceAppServer(direction, payload)
+			}
+		},
+	})
 
 	server := acp.NewServer(
 		transport,
@@ -58,17 +71,17 @@ func runRuntime(
 			PatchApplyMode:  cfg.PatchApplyMode,
 			Profiles:        toACPProfiles(cfg.Profiles),
 			DefaultProfile:  cfg.DefaultProfile,
-			InitialAuthMode: "claude_cli",
+			InitialAuthMode: "pi",
 			AuthMethods: []acp.AuthMethod{
 				{
-					ID:          "claude_cli",
-					Name:        "Claude CLI",
-					Description: "Authenticate with configured Claude CLI login state or credentials.",
-					Type:        "claude_cli",
-					Label:       "Claude CLI",
+					ID:          "pi",
+					Name:        "Pi credentials",
+					Description: "Authenticate with configured Pi provider credentials or existing login state.",
+					Type:        "pi",
+					Label:       "Pi credentials",
 				},
 			},
-			AvailableCommands: acp.ClaudeAvailableCommands(),
+			AvailableCommands: acp.PiAvailableCommands(),
 		},
 	)
 

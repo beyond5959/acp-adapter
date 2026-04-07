@@ -4,9 +4,37 @@
 > 更新频率：每合并一个 PR 必须更新一次；每次发现阻塞也要更新。
 
 ## 项目概览
-- 项目：acp-adapter（基于 Codex App Server 的 ACP 适配器，同时支持 Claude Code CLI 子进程适配）
-- 当前阶段：Claude Adapter CLI 重构完成（C-R5 内部迭代）
-- 最近更新：2026-03-31
+- 项目：acp-adapter（ACP 适配器，当前支持 Codex App Server、Claude Code CLI、Pi RPC 模式）
+- 当前阶段：Pi Adapter RPC 初版完成，Library Mode 持续收尾（R5 in progress）
+- 最近更新：2026-04-07
+
+## 2026-04-07 新增后端（Pi RPC Adapter 初版）
+- 完成点：
+  - 新增 `internal/pi` 与 `pkg/piacp`，通过官方 `pi --mode rpc` 子进程接入 ACP，不解析交互式 CLI 文本。
+  - `cmd/acp` 新增 `--adapter pi` 与配套参数：`--pi-bin`、`--pi-args`、`--pi-provider`、`--pi-model`、`--pi-session-dir`、`--pi-disable-gate`。
+  - 支持 `session/new` / `session/prompt` / `session/cancel` / `session/list` / `session/load` / `session/set_config_option(model,thought_level)` / `authenticate` / `/compact` / `/logout`。
+  - `session/list` / `session/load` 基于 Pi session jsonl 文件恢复历史；thread id 以 `sessionFile` 路径为准。
+  - 新增 adapter-managed Pi permission gate extension：把 `bash` / `write` / `edit` 工具调用上收为 ACP `session/request_permission`。
+  - `authenticate` 现在会下发到后端恢复本地 auth 状态；Pi/Claude 在 `/logout` 后可同进程恢复，Pi 缺失 live session 时会按 `sessionFile` 懒恢复后再继续 turn。
+  - `internal/acp/server` 现在支持按后端注入 `authMethods` 与 `availableCommands`，不再默认写死 Codex auth 目录。
+- 测试与回归：
+  - 新增 `testdata/fake_pi_rpc`
+  - 新增 `test/integration/pi_e2e_test.go`
+    - `TestPiE2EBasicPromptCancelAndAvailableCommands`
+    - `TestPiE2ESessionConfigOptionsModelListAndSwitch`
+    - `TestPiE2ESessionListLoadAndPrompt`
+    - `TestPiE2EPermissionGate`
+    - `TestPiE2ELogoutAuthenticateAndPrompt`
+  - 新增 `test/integration/pi_real_e2e_test.go`
+    - `TestRealPiBasicPromptCancelAndAvailableCommands`
+    - `TestRealPiSessionListLoadAndPrompt`
+    - `TestRealPiSessionConfigOptionsModelAndThoughtLevel`
+    - `TestRealPiPermissionGateCommandAndWrite`
+    - `TestRealPiSlashCommandsAndLogout`
+  - 全量通过：`go test ./...`
+- 下一步：
+  - 继续评估 Pi `get_commands` / 非 gate `extension_ui_request` 的 ACP 桥接策略。
+  - 继续补齐 Pi 与 Codex 在 review 语义、archived session、MCP 能力上的差距说明与验收项。
 
 ## 2026-03-31 增量修复（ACP `session/prompt` 最终 response 携带 usage 快照）
 - 修复点：
@@ -87,6 +115,9 @@
 - [x] PR5：Slash commands + Custom prompts + MCP + Auth 收尾
   - 状态：Done
   - 说明：已补齐 G1-G6、H1、I1-I3、J1（脚本化压力回归）与 MCP list/call/oauth 主流程
+- [x] Pi RPC backend 初版
+  - 状态：Done
+  - 说明：已新增 `--adapter pi`、Pi RPC 子进程 client、session/list/load、permission gate 与基础 e2e 覆盖
 
 ## 2026-03-13 增量修复（ACP `available_commands_update` 主动发布）
 - 修复点：

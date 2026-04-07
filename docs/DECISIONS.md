@@ -56,6 +56,7 @@
 - ADR-0050：Codex token usage 桥接策略（`thread/tokenUsage/updated` -> ACP `usage_update`）
 - ADR-0051：Codex `usage_update.used` 改为最新输入 token 近似值
 - ADR-0052：ACP `session/prompt` 最终 response 复用最后一次 usage 快照
+- ADR-0053：Pi 适配器架构（官方 RPC 模式 + session 文件恢复 + extension permission gate）
 
 ### ADR-0048：Codex `PatchChangeKind` 运行时兼容策略
 - 日期：2026-03-26
@@ -206,6 +207,43 @@
   - `test/integration/e2e_test.go`
 - 验证方式（测试/验收项）：
   - `TestE2EACPUsageUpdateMappedFromThreadTokenUsageUpdated`
+  - 回归 `go test ./...`
+
+### ADR-0053：Pi 适配器架构（官方 RPC 模式 + session 文件恢复 + extension permission gate）
+- 日期：2026-04-07
+- 状态：Accepted
+- 背景：
+  - 项目需要新增第三类下游后端 Pi，并尽可能复用 ACP 现有 `session/*`、config option、permission 与 slash command 语义。
+  - Pi 官方提供 machine-readable RPC 模式和 session jsonl 文件，但不像 Codex 一样直接提供 ACP 所需的 permission 事件、thread/list archived 语义或 native review/start。
+- 决策：
+  - 适配器通过官方 `pi --mode rpc` 子进程接入，所有上下游通信都走 JSON 行协议，不解析 CLI/TUI 文本。
+  - 内部 thread 标识直接使用 Pi `sessionFile` 路径；`session/list` 直接扫描 Pi session jsonl 文件，`session/load` 通过 `switch_session + get_messages` 恢复历史。
+  - Pi 权限桥接采用 adapter-managed extension gate：
+    - 注入临时 TypeScript extension
+    - 拦截 `bash` / `write` / `edit`
+    - 通过 `extension_ui_request` 转成 ACP `session/request_permission`
+  - `/review` 在 Pi 后端上先用普通 prompt + synthetic review mode 事件模拟；MCP 不对 Pi 广告。
+  - Pi `agent_end` 的完成事件不得被同步 stats 请求阻塞；session stats 仅做 best-effort 补充。
+- 备选方案：
+  - 方案A：直接解析 Pi CLI 文本输出和交互提示。（拒绝）
+  - 方案B：只做最小 prompt 桥接，不支持 session/list/load 与 permission。（拒绝）
+  - 方案C：使用官方 RPC + session 文件 + extension gate，优先对齐现有 ACP 语义，无法原生表达的能力做显式降级。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：严格遵守“只走官方 machine-readable 通道”；能较高程度复用现有 ACP server、config option 和 permission 流程；session/list/load 对上游可见。
+  - Cons：permission 语义依赖注入 extension；Pi custom slash commands、archived session、native review 仍与 Codex 不完全对齐；best-effort stats 不能保证每次 turn 都拿到 usage。
+- 影响范围（文件/模块）：
+  - `internal/pi/*`
+  - `pkg/piacp/*`
+  - `cmd/acp/main.go`
+  - `internal/acp/server.go`
+  - `pkg/claudeacp/runtime_runner.go`
+  - `testdata/fake_pi_rpc/main.go`
+  - `test/integration/pi_e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `TestPiE2EBasicPromptCancelAndAvailableCommands`
+  - `TestPiE2ESessionConfigOptionsModelListAndSwitch`
+  - `TestPiE2ESessionListLoadAndPrompt`
+  - `TestPiE2EPermissionGate`
   - 回归 `go test ./...`
 
 ---
