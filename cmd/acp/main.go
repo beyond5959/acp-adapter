@@ -19,15 +19,16 @@ import (
 	"github.com/beyond5959/acp-adapter/internal/config"
 	"github.com/beyond5959/acp-adapter/pkg/claudeacp"
 	"github.com/beyond5959/acp-adapter/pkg/codexacp"
+	"github.com/beyond5959/acp-adapter/pkg/piacp"
 )
 
 const usage = `acp — ACP adapter with multiple backend support
 
 Usage:
-  acp [--adapter codex|claude] [flags]
+  acp [--adapter codex|claude|pi] [flags]
 
 Flags (shared):
-  --adapter          Backend adapter: codex (default) or claude
+  --adapter          Backend adapter: codex (default), claude, or pi
   --log-level        Log level: debug|info|warn|error (default: info)
   --trace-json       Enable raw JSON tracing to file
   --trace-json-file  Trace JSONL output file (default: trace-jsonl.log)
@@ -49,6 +50,14 @@ Flags (--adapter claude):
   --efforts               Comma-separated effort list for picker UI (env: CLAUDE_EFFORTS)
   --max-turns             Max agentic turns per invocation (default: 10)
   --skip-perms            Pass --dangerously-skip-permissions to claude (default: true)
+
+Flags (--adapter pi):
+  --pi-bin                Path to pi binary (env: PI_BIN, default: pi)
+  --pi-args               Extra pi CLI args, space separated
+  --pi-provider           Default pi provider (optional)
+  --pi-model              Default pi model (optional)
+  --pi-session-dir        Custom pi session directory
+  --pi-disable-gate       Disable adapter-managed Pi permission gate extension
 `
 
 func main() {
@@ -66,7 +75,7 @@ func run(ctx context.Context, args []string) error {
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 
 	// ---- shared flags ----
-	adapter := fs.String("adapter", firstEnv("ACP_ADAPTER", "codex"), "backend adapter: codex|claude")
+	adapter := fs.String("adapter", firstEnv("ACP_ADAPTER", "codex"), "backend adapter: codex|claude|pi")
 	logLevel := fs.String("log-level", firstEnv("LOG_LEVEL", "info"), "log level")
 	traceJSON := fs.Bool("trace-json", false, "enable raw JSON tracing")
 	traceJSONFile := fs.String("trace-json-file", firstEnv("TRACE_JSON_FILE", "trace-jsonl.log"), "trace JSONL output file")
@@ -92,6 +101,14 @@ func run(ctx context.Context, args []string) error {
 	efforts := fs.String("efforts", os.Getenv("CLAUDE_EFFORTS"), "Claude effort list for picker UI")
 	maxTurns := fs.Int("max-turns", 10, "max agentic turns per invocation")
 	skipPerms := fs.Bool("skip-perms", parseBoolDefault(os.Getenv("CLAUDE_SKIP_PERMS"), true), "pass --dangerously-skip-permissions to claude")
+
+	// ---- pi-specific flags ----
+	piBin := fs.String("pi-bin", firstEnv("PI_BIN", "pi"), "path to pi binary")
+	piArgs := fs.String("pi-args", os.Getenv("PI_ARGS"), "extra pi cli args")
+	piProvider := fs.String("pi-provider", os.Getenv("PI_PROVIDER"), "default pi provider")
+	piModel := fs.String("pi-model", os.Getenv("PI_MODEL"), "default pi model")
+	piSessionDir := fs.String("pi-session-dir", os.Getenv("PI_SESSION_DIR"), "custom pi session directory")
+	piDisableGate := fs.Bool("pi-disable-gate", parseBoolDefault(os.Getenv("PI_DISABLE_GATE"), false), "disable adapter-managed pi permission gate extension")
 
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -131,8 +148,24 @@ func run(ctx context.Context, args []string) error {
 			profilesJSON:   *profilesJSON,
 			defaultProfile: *defaultProfile,
 		})
+	case "pi":
+		return runPiAdapter(ctx, runPiParams{
+			piBin:          *piBin,
+			piArgs:         strings.Fields(*piArgs),
+			piProvider:     *piProvider,
+			piModel:        *piModel,
+			piSessionDir:   *piSessionDir,
+			enableGate:     !*piDisableGate,
+			logLevel:       *logLevel,
+			traceJSON:      *traceJSON,
+			traceJSONFile:  *traceJSONFile,
+			patchApplyMode: *patchApplyMode,
+			profilesFile:   *profilesFile,
+			profilesJSON:   *profilesJSON,
+			defaultProfile: *defaultProfile,
+		})
 	default:
-		return fmt.Errorf("unknown adapter %q; choose codex or claude", *adapter)
+		return fmt.Errorf("unknown adapter %q; choose codex, claude, or pi", *adapter)
 	}
 }
 
@@ -193,6 +226,22 @@ type runClaudeParams struct {
 	defaultProfile string
 }
 
+type runPiParams struct {
+	piBin          string
+	piArgs         []string
+	piProvider     string
+	piModel        string
+	piSessionDir   string
+	enableGate     bool
+	logLevel       string
+	traceJSON      bool
+	traceJSONFile  string
+	patchApplyMode string
+	profilesFile   string
+	profilesJSON   string
+	defaultProfile string
+}
+
 func runClaudeAdapter(ctx context.Context, p runClaudeParams) error {
 	profiles := loadProfiles(p.profilesFile, p.profilesJSON)
 	availableModels := collectClaudeModels(p.models, p.model, profiles)
@@ -214,6 +263,26 @@ func runClaudeAdapter(ctx context.Context, p runClaudeParams) error {
 		DefaultProfile:   p.defaultProfile,
 	}
 	return claudeacp.RunStdio(ctx, cfg, os.Stdin, os.Stdout, os.Stderr)
+}
+
+func runPiAdapter(ctx context.Context, p runPiParams) error {
+	profiles := loadProfiles(p.profilesFile, p.profilesJSON)
+
+	cfg := piacp.RuntimeConfig{
+		PiBin:           p.piBin,
+		PiArgs:          p.piArgs,
+		DefaultProvider: p.piProvider,
+		DefaultModel:    p.piModel,
+		SessionDir:      p.piSessionDir,
+		EnableGate:      p.enableGate,
+		TraceJSON:       p.traceJSON,
+		TraceJSONFile:   p.traceJSONFile,
+		LogLevel:        p.logLevel,
+		PatchApplyMode:  p.patchApplyMode,
+		Profiles:        mapPiProfiles(profiles),
+		DefaultProfile:  p.defaultProfile,
+	}
+	return piacp.RunStdio(ctx, cfg, os.Stdin, os.Stdout, os.Stderr)
 }
 
 // ---- profile loading (shared) ----
@@ -308,6 +377,24 @@ func mapClaudeProfiles(profiles map[string]profileValues) map[string]claudeacp.P
 			Sandbox:            p.Sandbox,
 			Personality:        p.Personality,
 			SystemInstructions: p.SystemInstructions,
+		}
+	}
+	return out
+}
+
+func mapPiProfiles(profiles map[string]profileValues) map[string]piacp.ProfileConfig {
+	if len(profiles) == 0 {
+		return map[string]piacp.ProfileConfig{}
+	}
+	out := make(map[string]piacp.ProfileConfig, len(profiles))
+	for name, profile := range profiles {
+		out[name] = piacp.ProfileConfig{
+			Model:              profile.Model,
+			ThoughtLevel:       profile.ThoughtLevel,
+			ApprovalPolicy:     profile.ApprovalPolicy,
+			Sandbox:            profile.Sandbox,
+			Personality:        profile.Personality,
+			SystemInstructions: profile.SystemInstructions,
 		}
 	}
 	return out

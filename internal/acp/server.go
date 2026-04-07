@@ -212,6 +212,10 @@ type appClient interface {
 	Logout(ctx context.Context) error
 }
 
+type appAuthenticator interface {
+	Authenticate(ctx context.Context, methodID string) error
+}
+
 type appSessionLister interface {
 	ThreadList(ctx context.Context, params codex.ThreadListParams) (codex.ThreadListResult, error)
 }
@@ -241,6 +245,7 @@ type ServerOptions struct {
 	Profiles          map[string]ProfileConfig
 	DefaultProfile    string
 	InitialAuthMode   string
+	AuthMethods       []AuthMethod
 	AvailableCommands []AvailableCommand
 }
 
@@ -295,6 +300,9 @@ func NewServer(
 	} else {
 		options.AvailableCommands = cloneAvailableCommands(options.AvailableCommands)
 	}
+	if len(options.AuthMethods) > 0 {
+		options.AuthMethods = cloneAuthMethods(options.AuthMethods)
+	}
 
 	return &Server{
 		codec:                codec,
@@ -339,6 +347,11 @@ func CodexAvailableCommands() []AvailableCommand {
 
 // ClaudeAvailableCommands returns the slash commands published for the Claude-backed adapter.
 func ClaudeAvailableCommands() []AvailableCommand {
+	return DefaultAvailableCommands()
+}
+
+// PiAvailableCommands returns the slash commands published for the Pi-backed adapter.
+func PiAvailableCommands() []AvailableCommand {
 	return DefaultAvailableCommands()
 }
 
@@ -403,7 +416,7 @@ func (s *Server) handleRequest(ctx context.Context, msg RPCMessage) {
 	case methodInitialize:
 		s.handleInitialize(rawID, msg.Params)
 	case methodAuthenticate:
-		s.handleAuthenticate(rawID, msg.Params)
+		s.handleAuthenticate(ctx, rawID, msg.Params)
 	case methodSessionLoad:
 		s.handleSessionLoad(ctx, rawID, msg.Params)
 	case methodSessionList:
@@ -460,6 +473,9 @@ func (s *Server) handleInitialize(id json.RawMessage, paramsRaw json.RawMessage)
 			Label:       "ChatGPT subscription",
 		},
 	}
+	if len(s.options.AuthMethods) > 0 {
+		authMethods = cloneAuthMethods(s.options.AuthMethods)
+	}
 
 	result := InitializeResult{
 		ProtocolVersion: 1,
@@ -494,7 +510,7 @@ func (s *Server) handleInitialize(id json.RawMessage, paramsRaw json.RawMessage)
 	_ = s.codec.WriteResult(id, result)
 }
 
-func (s *Server) handleAuthenticate(id json.RawMessage, paramsRaw json.RawMessage) {
+func (s *Server) handleAuthenticate(ctx context.Context, id json.RawMessage, paramsRaw json.RawMessage) {
 	var params AuthenticateParams
 	if err := decodeParams(paramsRaw, &params); err != nil {
 		s.writeInvalidParams(id, map[string]any{"error": err.Error()})
@@ -505,18 +521,26 @@ func (s *Server) handleAuthenticate(id json.RawMessage, paramsRaw json.RawMessag
 	if methodID == "" {
 		methodID = strings.TrimSpace(params.Type)
 	}
-	switch methodID {
-	case "codex_api_key", "openai_api_key", "chatgpt_subscription":
-	default:
+	allowed := []string{"codex_api_key", "openai_api_key", "chatgpt_subscription"}
+	if len(s.options.AuthMethods) > 0 {
+		allowed = allowedAuthMethodIDs(s.options.AuthMethods)
+	}
+	if !containsString(allowed, methodID) {
 		s.writeInvalidParams(id, map[string]any{
 			"methodId": "unsupported auth method",
-			"allowed": []string{
-				"codex_api_key",
-				"openai_api_key",
-				"chatgpt_subscription",
-			},
+			"allowed":  allowed,
 		})
 		return
+	}
+
+	if authenticator, ok := s.app.(appAuthenticator); ok {
+		if err := authenticator.Authenticate(ctx, methodID); err != nil {
+			s.writeInternalError(id, "authenticate failed", map[string]any{
+				"error":    err.Error(),
+				"methodId": methodID,
+			})
+			return
+		}
 	}
 
 	s.authMu.Lock()
@@ -3076,6 +3100,40 @@ func cloneAvailableCommandsOrEmpty(commands []AvailableCommand) []AvailableComma
 	return cloneAvailableCommands(commands)
 }
 
+func cloneAuthMethods(methods []AuthMethod) []AuthMethod {
+	if len(methods) == 0 {
+		return nil
+	}
+	out := make([]AuthMethod, len(methods))
+	copy(out, methods)
+	return out
+}
+
+func allowedAuthMethodIDs(methods []AuthMethod) []string {
+	out := make([]string, 0, len(methods))
+	for _, method := range methods {
+		id := strings.TrimSpace(method.ID)
+		if id == "" {
+			id = strings.TrimSpace(method.Type)
+		}
+		if id == "" {
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
+}
+
+func containsString(values []string, target string) bool {
+	target = strings.TrimSpace(target)
+	for _, value := range values {
+		if strings.TrimSpace(value) == target {
+			return true
+		}
+	}
+	return false
+}
+
 func planEntriesFromTurnPlan(steps []codex.TurnPlanStep) []PlanEntry {
 	entries := make([]PlanEntry, 0, len(steps))
 	for _, step := range steps {
@@ -3316,6 +3374,10 @@ func authRecoveryHint(mode string) (string, string) {
 		return "set OPENAI_API_KEY then restart the ACP agent process", `export OPENAI_API_KEY="YOUR_OPENAI_API_KEY" && unset CODEX_API_KEY`
 	case "chatgpt_subscription":
 		return "run codex login then restart the ACP agent process", "codex login"
+	case "claude_cli":
+		return "configure Claude CLI authentication, then restart the ACP agent process", "claude auth login"
+	case "pi":
+		return "configure Pi provider credentials or login state, then restart the ACP agent process", "pi --help"
 	default:
 		return "set CODEX_API_KEY or OPENAI_API_KEY, or run codex login; then restart the ACP agent process", `export CODEX_API_KEY="YOUR_CODEX_API_KEY"`
 	}
@@ -3343,6 +3405,19 @@ func logoutRecoveryInstructions(mode string) string {
 			"Next step (copy/paste):",
 			"codex login",
 			"Complete the browser login/local callback flow, then restart the ACP agent process.",
+		}, "\n")
+	case "claude_cli":
+		return strings.Join([]string{
+			"logout completed; re-authentication required.",
+			"Next step (copy/paste):",
+			"claude auth login",
+			"Then restart the ACP agent process.",
+		}, "\n")
+	case "pi":
+		return strings.Join([]string{
+			"logout completed; re-authentication required.",
+			"Next step:",
+			"Restore Pi provider credentials or login state, then restart the ACP agent process.",
 		}, "\n")
 	default:
 		return strings.Join([]string{

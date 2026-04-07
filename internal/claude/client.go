@@ -463,6 +463,12 @@ func (c *Client) MCPOAuthLogin(_ context.Context, _ string) (codex.MCPOAuthLogin
 	}, nil
 }
 
+// Authenticate restores prompt execution after a prior logout.
+func (c *Client) Authenticate(_ context.Context, _ string) error {
+	c.loggedOut.Store(false)
+	return nil
+}
+
 // Logout marks the client as logged out.
 func (c *Client) Logout(_ context.Context) error {
 	c.loggedOut.Store(true)
