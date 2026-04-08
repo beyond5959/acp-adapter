@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1647,15 +1648,37 @@ func (s *fakeServer) requestApproval(approval codex.ApprovalRequest) (codex.Appr
 	}
 
 	var result struct {
-		Outcome  string `json:"outcome"`
-		Decision string `json:"decision"`
+		Outcome  json.RawMessage `json:"outcome"`
+		Decision string          `json:"decision"`
 	}
 	if len(resp.Result) > 0 {
 		if err := json.Unmarshal(resp.Result, &result); err != nil {
 			return "", fmt.Errorf("decode approval decision: %w", err)
 		}
 	}
-	decision := strings.TrimSpace(strings.ToLower(result.Outcome))
+	decision := ""
+	outcomeRaw := bytes.TrimSpace(result.Outcome)
+	if len(outcomeRaw) > 0 && !bytes.Equal(outcomeRaw, []byte("null")) {
+		if len(outcomeRaw) > 0 && outcomeRaw[0] == '"' {
+			if err := json.Unmarshal(outcomeRaw, &decision); err != nil {
+				return "", fmt.Errorf("decode approval outcome string: %w", err)
+			}
+		} else {
+			var selected struct {
+				Outcome  string `json:"outcome"`
+				OptionID string `json:"optionId,omitempty"`
+			}
+			if err := json.Unmarshal(outcomeRaw, &selected); err != nil {
+				return "", fmt.Errorf("decode approval outcome object: %w", err)
+			}
+			if strings.EqualFold(strings.TrimSpace(selected.Outcome), "selected") {
+				decision = selected.OptionID
+			} else {
+				decision = selected.Outcome
+			}
+		}
+	}
+	decision = strings.TrimSpace(strings.ToLower(decision))
 	if decision == "" {
 		decision = strings.TrimSpace(strings.ToLower(result.Decision))
 	}

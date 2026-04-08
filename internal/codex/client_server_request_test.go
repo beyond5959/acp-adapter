@@ -83,6 +83,25 @@ func TestApprovalResponsePayload_ItemApprovalDecision(t *testing.T) {
 	}
 }
 
+func TestApprovalResponsePayload_ItemApprovalDecisionAcceptForSession(t *testing.T) {
+	t.Parallel()
+
+	raw, err := approvalResponsePayload(methodItemCommandExecutionRequestApproval, ApprovalDecisionApprovedForSession)
+	if err != nil {
+		t.Fatalf("approvalResponsePayload returned error: %v", err)
+	}
+
+	var payload struct {
+		Decision string `json:"decision"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload.Decision != "acceptForSession" {
+		t.Fatalf("decision=%q, want %q", payload.Decision, "acceptForSession")
+	}
+}
+
 func TestApprovalResponsePayload_LegacyOutcome(t *testing.T) {
 	t.Parallel()
 
@@ -122,5 +141,30 @@ func TestApprovalFromCommandExecution_NetworkContext(t *testing.T) {
 	}
 	if approval.Protocol != "https" {
 		t.Fatalf("protocol=%q, want %q", approval.Protocol, "https")
+	}
+}
+
+func TestApprovalFromCommandExecution_KeepExtendedFields(t *testing.T) {
+	t.Parallel()
+
+	actionPath := "docs"
+	approval := approvalFromCommandExecution(CommandExecutionRequestApprovalParams{
+		ThreadID:                    "thread-1",
+		TurnID:                      "turn-1",
+		ItemID:                      "item-1",
+		Command:                     "rg permission .",
+		CWD:                         "/workspace/project",
+		CommandActions:              []CommandAction{{Type: "search", Command: "rg permission .", Path: &actionPath}},
+		ProposedExecpolicyAmendment: []string{"allow rg permission ."},
+	})
+
+	if approval.CWD != "/workspace/project" {
+		t.Fatalf("cwd=%q, want %q", approval.CWD, "/workspace/project")
+	}
+	if len(approval.CommandActions) != 1 {
+		t.Fatalf("commandActions=%d, want 1", len(approval.CommandActions))
+	}
+	if len(approval.ProposedExecpolicyAmendment) != 1 || approval.ProposedExecpolicyAmendment[0] != "allow rg permission ." {
+		t.Fatalf("proposedExecpolicyAmendment=%v", approval.ProposedExecpolicyAmendment)
 	}
 }

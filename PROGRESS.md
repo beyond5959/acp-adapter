@@ -6,7 +6,50 @@
 ## 项目概览
 - 项目：acp-adapter（ACP 适配器，当前支持 Codex App Server、Claude Code CLI、Pi RPC 模式）
 - 当前阶段：Pi Adapter RPC 初版完成，Library Mode 持续收尾（R5 in progress）
-- 最近更新：2026-04-07
+- 最近更新：2026-04-08
+
+## 2026-04-08 增量修复（Codex permission request 标准 options + `acceptForSession`）
+- 修复点：
+  - `internal/acp/types` / `internal/acp/server` 的 `session/request_permission` 已升级为“标准 + 兼容”双形态：
+    - 新增 ACP 标准 `toolCall` 与 `options[]`
+    - 同时保留既有 `approval/command/files/...` 扁平字段，兼容旧客户端
+  - ACP permission response 现在同时支持：
+    - 旧形态：`{"outcome":"approved|declined|cancelled"}`
+    - 标准形态：`{"outcome":{"outcome":"selected","optionId":"..."}}`
+  - Codex command/file/network approval 现在会向上游广告 `acceptForSession`，并在用户选择后回写下游 item approval `{"decision":"acceptForSession"}`
+  - `pkg/codexacp` / `pkg/claudeacp` / `pkg/piacp` 的 embedded `PermissionDecision` 也新增标准 selected-option 序列化支持，保持库模式一致性
+  - `internal/codex/client` 同步补齐 command approval payload 中此前被截断的 `cwd`、`commandActions`、`proposedExecpolicyAmendment`、`proposedNetworkPolicyAmendments` 元数据，供 ACP permission/toolCall rawInput 使用
+- 测试与回归：
+  - 新增 `internal/acp/server_prompt_test.go`
+    - `TestSessionRequestPermissionResultUnmarshalStandardSelected`
+    - `TestNormalizePermissionOutcomeSelectedAcceptForSession`
+    - `TestPermissionRequestOptionsCommandIncludeAllowForSession`
+  - 新增 `internal/codex/client_server_request_test.go::TestApprovalResponsePayload_ItemApprovalDecisionAcceptForSession`
+  - 扩展 `internal/codex/client_server_request_test.go::TestApprovalFromCommandExecution_KeepExtendedFields`
+  - 扩展 `test/integration/e2e_test.go::TestE2EAcceptanceD1ToD5ApprovalsBridge`，覆盖标准 ACP selected-option 与 `acceptForSession`
+  - 全量通过：`go test ./...`
+- 下一步：
+  - 继续评估把 Codex `acceptWithExecpolicyAmendment` / `applyNetworkPolicyAmendment` 这类更高级 approval option 也桥接成 ACP permission options（见 KI-0053）
+
+## 2026-04-08 增量修复（Pi `acceptForSession` session cache）
+- 修复点：
+  - `internal/pi/client` 现在会把 ACP `approved_for_session` 决策映射成：
+    - 当前 `extension_ui_request` 立即 `confirmed=true`
+    - 同一 Pi session 内记住本次 approval 规则
+  - 后续同 session 内再次遇到相同 approval 时，adapter 直接回 Pi `extension_ui_response`，不再向上游重复发送 `session/request_permission`
+  - 当前 Pi cache 规则采用 adapter-managed exact-match：
+    - `command` / `network`：按命令字符串精确匹配
+    - `file`：按文件列表精确匹配
+- 测试与回归：
+  - 新增 `internal/pi/client_test.go`
+    - `TestSessionApprovalRuleFromApproval`
+    - `TestClientRememberSessionApproval`
+  - 新增 `test/integration/pi_e2e_test.go::TestPiE2EPermissionAcceptForSessionCachesWithinSession`
+  - 定向回归通过：
+    - `go test ./internal/pi -run 'TestSessionApprovalRuleFromApproval|TestClientRememberSessionApproval'`
+    - `go test ./internal/pi ./test/integration -run 'TestPiE2EPermissionAcceptForSessionCachesWithinSession|TestPiE2EPermissionGate|TestPiE2EBasicPromptCancelAndAvailableCommands|TestPiE2ESessionConfigOptionsModelListAndSwitch|TestPiE2ESessionListLoadAndPrompt|TestPiE2ELogoutAuthenticateAndPrompt'`
+- 下一步：
+  - 评估把 Pi session cache 从 exact-match 扩展到更稳定的 host/path 级规则，或等待 Pi 上游暴露原生 remember-choice 能力（见 KI-0054）
 
 ## 2026-04-07 新增后端（Pi RPC Adapter 初版）
 - 完成点：

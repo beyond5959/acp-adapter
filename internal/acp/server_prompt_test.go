@@ -2,7 +2,10 @@ package acp
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
+
+	"github.com/beyond5959/acp-adapter/internal/codex"
 )
 
 func TestPrepareTurnInputImageResourceLinkUsesLocalImagePath(t *testing.T) {
@@ -50,5 +53,54 @@ func TestPrepareTurnInputImageResourceLinkUsesLocalImagePath(t *testing.T) {
 	}
 	if input[1].Path != imagePath {
 		t.Fatalf("input[1].Path = %q, want %q", input[1].Path, imagePath)
+	}
+}
+
+func TestSessionRequestPermissionResultUnmarshalStandardSelected(t *testing.T) {
+	t.Parallel()
+
+	var result SessionRequestPermissionResult
+	if err := json.Unmarshal([]byte(`{"outcome":{"outcome":"selected","optionId":"acceptForSession"}}`), &result); err != nil {
+		t.Fatalf("unmarshal permission result: %v", err)
+	}
+	if result.Outcome != "selected" {
+		t.Fatalf("outcome=%q, want %q", result.Outcome, "selected")
+	}
+	if result.SelectedOptionID != "acceptForSession" {
+		t.Fatalf("selectedOptionId=%q, want %q", result.SelectedOptionID, "acceptForSession")
+	}
+}
+
+func TestNormalizePermissionOutcomeSelectedAcceptForSession(t *testing.T) {
+	t.Parallel()
+
+	got := normalizePermissionOutcome(SessionRequestPermissionResult{
+		Outcome:          "selected",
+		SelectedOptionID: "acceptForSession",
+	})
+	if got != permissionOutcomeApprovedForSession {
+		t.Fatalf("normalizePermissionOutcome=%q, want %q", got, permissionOutcomeApprovedForSession)
+	}
+}
+
+func TestPermissionRequestOptionsCommandIncludeAllowForSession(t *testing.T) {
+	t.Parallel()
+
+	options := permissionRequestOptions(codex.ApprovalRequest{Kind: codex.ApprovalKindCommand})
+	foundAccept := false
+	foundAllowAlways := false
+	for _, option := range options {
+		if option.OptionID == "accept" && option.Kind == "allow_once" {
+			foundAccept = true
+		}
+		if option.OptionID == "acceptForSession" && option.Kind == "allow_always" {
+			foundAllowAlways = true
+		}
+	}
+	if !foundAccept {
+		t.Fatalf("permission options missing accept: %+v", options)
+	}
+	if !foundAllowAlways {
+		t.Fatalf("permission options missing acceptForSession: %+v", options)
 	}
 }

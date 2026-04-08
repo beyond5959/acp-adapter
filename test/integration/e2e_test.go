@@ -205,18 +205,39 @@ type sessionConfigValue struct {
 }
 
 type sessionRequestPermissionParams struct {
-	SessionID  string   `json:"sessionId"`
-	TurnID     string   `json:"turnId"`
-	Approval   string   `json:"approval"`
-	ToolCallID string   `json:"toolCallId,omitempty"`
-	Command    string   `json:"command,omitempty"`
-	Files      []string `json:"files,omitempty"`
-	Host       string   `json:"host,omitempty"`
-	Protocol   string   `json:"protocol,omitempty"`
-	Port       int      `json:"port,omitempty"`
-	MCPServer  string   `json:"mcpServer,omitempty"`
-	MCPTool    string   `json:"mcpTool,omitempty"`
-	Message    string   `json:"message,omitempty"`
+	Options    []permissionOption  `json:"options,omitempty"`
+	SessionID  string              `json:"sessionId"`
+	TurnID     string              `json:"turnId"`
+	ToolCall   *permissionToolCall `json:"toolCall,omitempty"`
+	Approval   string              `json:"approval"`
+	ToolCallID string              `json:"toolCallId,omitempty"`
+	Command    string              `json:"command,omitempty"`
+	Files      []string            `json:"files,omitempty"`
+	Host       string              `json:"host,omitempty"`
+	Protocol   string              `json:"protocol,omitempty"`
+	Port       int                 `json:"port,omitempty"`
+	MCPServer  string              `json:"mcpServer,omitempty"`
+	MCPTool    string              `json:"mcpTool,omitempty"`
+	Message    string              `json:"message,omitempty"`
+}
+
+type permissionOption struct {
+	OptionID string `json:"optionId"`
+	Name     string `json:"name"`
+	Kind     string `json:"kind"`
+}
+
+type permissionToolCall struct {
+	ToolCallID string               `json:"toolCallId"`
+	Title      string               `json:"title"`
+	Kind       string               `json:"kind,omitempty"`
+	Status     string               `json:"status,omitempty"`
+	Locations  []permissionLocation `json:"locations,omitempty"`
+	RawInput   map[string]any       `json:"rawInput,omitempty"`
+}
+
+type permissionLocation struct {
+	Path string `json:"path"`
 }
 
 type fsWriteTextFileParams struct {
@@ -2132,21 +2153,25 @@ func TestE2EAcceptanceD1ToD5ApprovalsBridge(t *testing.T) {
 	}
 
 	testCases := []struct {
-		name         string
-		prompt       string
-		approvalKind string
-		outcome      string
-		expectStatus string
-		expectExec   bool
-		validate     func(*testing.T, sessionRequestPermissionParams)
+		name                  string
+		prompt                string
+		approvalKind          string
+		responsePayload       map[string]any
+		expectedDecision      string
+		expectStatus          string
+		expectExec            bool
+		expectAllowForSession bool
+		validate              func(*testing.T, sessionRequestPermissionParams)
 	}{
 		{
-			name:         "command_approve",
-			prompt:       "approval command",
-			approvalKind: "command",
-			outcome:      "approved",
-			expectStatus: "completed",
-			expectExec:   true,
+			name:                  "command_approve",
+			prompt:                "approval command",
+			approvalKind:          "command",
+			responsePayload:       map[string]any{"outcome": "approved"},
+			expectedDecision:      "approved",
+			expectStatus:          "completed",
+			expectExec:            true,
+			expectAllowForSession: true,
 			validate: func(t *testing.T, req sessionRequestPermissionParams) {
 				if req.Command == "" {
 					t.Fatalf("command approval must include command")
@@ -2154,12 +2179,14 @@ func TestE2EAcceptanceD1ToD5ApprovalsBridge(t *testing.T) {
 			},
 		},
 		{
-			name:         "command_decline",
-			prompt:       "approval command",
-			approvalKind: "command",
-			outcome:      "declined",
-			expectStatus: "failed",
-			expectExec:   false,
+			name:                  "command_decline",
+			prompt:                "approval command",
+			approvalKind:          "command",
+			responsePayload:       map[string]any{"outcome": "declined"},
+			expectedDecision:      "declined",
+			expectStatus:          "failed",
+			expectExec:            false,
+			expectAllowForSession: true,
 			validate: func(t *testing.T, req sessionRequestPermissionParams) {
 				if req.Command == "" {
 					t.Fatalf("command approval must include command")
@@ -2167,12 +2194,29 @@ func TestE2EAcceptanceD1ToD5ApprovalsBridge(t *testing.T) {
 			},
 		},
 		{
-			name:         "file_decline",
-			prompt:       "approval file",
-			approvalKind: "file",
-			outcome:      "declined",
-			expectStatus: "failed",
-			expectExec:   false,
+			name:                  "command_accept_for_session",
+			prompt:                "approval command",
+			approvalKind:          "command",
+			responsePayload:       map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": "acceptForSession"}},
+			expectedDecision:      "approved_for_session",
+			expectStatus:          "completed",
+			expectExec:            true,
+			expectAllowForSession: true,
+			validate: func(t *testing.T, req sessionRequestPermissionParams) {
+				if req.Command == "" {
+					t.Fatalf("command approval must include command")
+				}
+			},
+		},
+		{
+			name:                  "file_decline",
+			prompt:                "approval file",
+			approvalKind:          "file",
+			responsePayload:       map[string]any{"outcome": "declined"},
+			expectedDecision:      "declined",
+			expectStatus:          "failed",
+			expectExec:            false,
+			expectAllowForSession: true,
 			validate: func(t *testing.T, req sessionRequestPermissionParams) {
 				if len(req.Files) == 0 {
 					t.Fatalf("file approval must include file targets")
@@ -2180,12 +2224,14 @@ func TestE2EAcceptanceD1ToD5ApprovalsBridge(t *testing.T) {
 			},
 		},
 		{
-			name:         "network_cancel",
-			prompt:       "approval network",
-			approvalKind: "network",
-			outcome:      "cancelled",
-			expectStatus: "failed",
-			expectExec:   false,
+			name:                  "network_cancel",
+			prompt:                "approval network",
+			approvalKind:          "network",
+			responsePayload:       map[string]any{"outcome": "cancelled"},
+			expectedDecision:      "cancelled",
+			expectStatus:          "failed",
+			expectExec:            false,
+			expectAllowForSession: true,
 			validate: func(t *testing.T, req sessionRequestPermissionParams) {
 				if req.Host == "" || req.Protocol == "" || req.Port <= 0 {
 					t.Fatalf("network approval must include host/protocol/port, got %+v", req)
@@ -2193,12 +2239,14 @@ func TestE2EAcceptanceD1ToD5ApprovalsBridge(t *testing.T) {
 			},
 		},
 		{
-			name:         "mcp_decline",
-			prompt:       "approval mcp",
-			approvalKind: "mcp",
-			outcome:      "declined",
-			expectStatus: "failed",
-			expectExec:   false,
+			name:                  "mcp_decline",
+			prompt:                "approval mcp",
+			approvalKind:          "mcp",
+			responsePayload:       map[string]any{"outcome": "declined"},
+			expectedDecision:      "declined",
+			expectStatus:          "failed",
+			expectExec:            false,
+			expectAllowForSession: false,
 			validate: func(t *testing.T, req sessionRequestPermissionParams) {
 				if req.MCPServer == "" || req.MCPTool == "" {
 					t.Fatalf("mcp approval must include server/tool, got %+v", req)
@@ -2243,8 +2291,29 @@ func TestE2EAcceptanceD1ToD5ApprovalsBridge(t *testing.T) {
 					if req.ToolCallID == "" {
 						t.Fatalf("permission missing toolCallId")
 					}
+					if req.ToolCall == nil {
+						t.Fatalf("permission missing standard toolCall payload")
+					}
+					if req.ToolCall.ToolCallID != req.ToolCallID {
+						t.Fatalf("toolCall.toolCallId=%q, want %q", req.ToolCall.ToolCallID, req.ToolCallID)
+					}
+					if req.ToolCall.Title == "" {
+						t.Fatalf("toolCall missing title")
+					}
+					if !hasPermissionOption(req.Options, "accept") {
+						t.Fatalf("permission options missing accept: %+v", req.Options)
+					}
+					if !hasPermissionOption(req.Options, "decline") {
+						t.Fatalf("permission options missing decline: %+v", req.Options)
+					}
+					if tc.expectAllowForSession && !hasPermissionOption(req.Options, "acceptForSession") {
+						t.Fatalf("permission options missing acceptForSession: %+v", req.Options)
+					}
+					if !tc.expectAllowForSession && hasPermissionOption(req.Options, "acceptForSession") {
+						t.Fatalf("permission options unexpectedly exposed acceptForSession: %+v", req.Options)
+					}
 					tc.validate(t, req)
-					h.sendResultResponse(messageID(msg), map[string]any{"outcome": tc.outcome})
+					h.sendResultResponse(messageID(msg), tc.responsePayload)
 				case "session/update":
 					update := decodeSessionUpdate(t, msg)
 					if update.Type == "message" {
@@ -2296,8 +2365,8 @@ func TestE2EAcceptanceD1ToD5ApprovalsBridge(t *testing.T) {
 			if finalToolStatus != tc.expectStatus {
 				t.Fatalf("tool_call_update status mismatch: got=%q want=%q", finalToolStatus, tc.expectStatus)
 			}
-			if finalDecision != tc.outcome {
-				t.Fatalf("permission decision mismatch: got=%q want=%q", finalDecision, tc.outcome)
+			if finalDecision != tc.expectedDecision {
+				t.Fatalf("permission decision mismatch: got=%q want=%q", finalDecision, tc.expectedDecision)
 			}
 			if tc.expectExec {
 				if !sawExecuted {
@@ -5136,6 +5205,15 @@ func decodeRPCErrorDataMap(t *testing.T, errObj *rpcError) map[string]any {
 func valueAsStringAny(value any) string {
 	text, _ := value.(string)
 	return text
+}
+
+func hasPermissionOption(options []permissionOption, optionID string) bool {
+	for _, option := range options {
+		if option.OptionID == optionID {
+			return true
+		}
+	}
+	return false
 }
 
 func decodeSessionRequestPermission(t *testing.T, msg rpcMessage) sessionRequestPermissionParams {

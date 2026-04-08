@@ -378,6 +378,8 @@ func mapDecisionToItemApproval(decision ApprovalDecision) string {
 	switch decision {
 	case ApprovalDecisionApproved:
 		return "accept"
+	case ApprovalDecisionApprovedForSession:
+		return "acceptForSession"
 	case ApprovalDecisionDeclined:
 		return "decline"
 	default:
@@ -387,7 +389,7 @@ func mapDecisionToItemApproval(decision ApprovalDecision) string {
 
 func mapDecisionToLegacyApproval(decision ApprovalDecision) string {
 	switch decision {
-	case ApprovalDecisionApproved:
+	case ApprovalDecisionApproved, ApprovalDecisionApprovedForSession:
 		return "approved"
 	case ApprovalDecisionDeclined:
 		return "denied"
@@ -656,13 +658,17 @@ func (c *Client) registerApprovalRequest(
 
 func approvalFromCommandExecution(params CommandExecutionRequestApprovalParams) ApprovalRequest {
 	approval := ApprovalRequest{
-		ThreadID:   strings.TrimSpace(params.ThreadID),
-		TurnID:     strings.TrimSpace(params.TurnID),
-		ApprovalID: strings.TrimSpace(params.ApprovalID),
-		ToolCallID: strings.TrimSpace(params.ItemID),
-		Kind:       ApprovalKindCommand,
-		Command:    strings.TrimSpace(params.Command),
-		Message:    strings.TrimSpace(params.Reason),
+		ThreadID:                        strings.TrimSpace(params.ThreadID),
+		TurnID:                          strings.TrimSpace(params.TurnID),
+		ApprovalID:                      strings.TrimSpace(params.ApprovalID),
+		ToolCallID:                      strings.TrimSpace(params.ItemID),
+		Kind:                            ApprovalKindCommand,
+		Command:                         strings.TrimSpace(params.Command),
+		CommandActions:                  cloneCommandActions(params.CommandActions),
+		CWD:                             strings.TrimSpace(params.CWD),
+		Message:                         strings.TrimSpace(params.Reason),
+		ProposedExecpolicyAmendment:     trimNonEmptyStrings(params.ProposedExecpolicyAmendment),
+		ProposedNetworkPolicyAmendments: cloneNetworkPolicyAmendments(params.ProposedNetworkPolicyAmendments),
 	}
 	if params.NetworkApprovalContext != nil {
 		host := strings.TrimSpace(params.NetworkApprovalContext.Host)
@@ -674,6 +680,79 @@ func approvalFromCommandExecution(params CommandExecutionRequestApprovalParams) 
 		}
 	}
 	return approval
+}
+
+func cloneCommandActions(actions []CommandAction) []CommandAction {
+	if len(actions) == 0 {
+		return nil
+	}
+	out := make([]CommandAction, 0, len(actions))
+	for _, action := range actions {
+		command := strings.TrimSpace(action.Command)
+		actionType := strings.TrimSpace(action.Type)
+		name := strings.TrimSpace(action.Name)
+		if command == "" && actionType == "" && name == "" && action.Path == nil && action.Query == nil {
+			continue
+		}
+		item := CommandAction{
+			Type:    actionType,
+			Command: command,
+			Name:    name,
+		}
+		if action.Path != nil {
+			path := strings.TrimSpace(*action.Path)
+			item.Path = &path
+		}
+		if action.Query != nil {
+			query := strings.TrimSpace(*action.Query)
+			item.Query = &query
+		}
+		out = append(out, item)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func trimNonEmptyStrings(items []string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		out = append(out, item)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func cloneNetworkPolicyAmendments(items []NetworkPolicyAmendment) []NetworkPolicyAmendment {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]NetworkPolicyAmendment, 0, len(items))
+	for _, item := range items {
+		action := strings.TrimSpace(item.Action)
+		host := strings.TrimSpace(item.Host)
+		if action == "" && host == "" {
+			continue
+		}
+		out = append(out, NetworkPolicyAmendment{
+			Action: action,
+			Host:   host,
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func approvalFromFileChange(params FileChangeRequestApprovalParams) ApprovalRequest {

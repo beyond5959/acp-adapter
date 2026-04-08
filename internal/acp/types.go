@@ -1,6 +1,9 @@
 package acp
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+)
 
 // RPCMessage is ACP stdio JSON-RPC envelope.
 type RPCMessage struct {
@@ -228,25 +231,92 @@ type SessionCancelResult struct {
 
 // SessionRequestPermissionParams requests user permission from ACP client.
 type SessionRequestPermissionParams struct {
-	SessionID  string   `json:"sessionId"`
-	TurnID     string   `json:"turnId"`
-	Approval   string   `json:"approval"`
-	ToolCallID string   `json:"toolCallId,omitempty"`
-	Command    string   `json:"command,omitempty"`
-	Files      []string `json:"files,omitempty"`
-	Host       string   `json:"host,omitempty"`
-	Protocol   string   `json:"protocol,omitempty"`
-	Port       int      `json:"port,omitempty"`
-	MCPServer  string   `json:"mcpServer,omitempty"`
-	MCPTool    string   `json:"mcpTool,omitempty"`
-	Message    string   `json:"message,omitempty"`
+	Options    []PermissionOption  `json:"options,omitempty"`
+	SessionID  string              `json:"sessionId"`
+	TurnID     string              `json:"turnId"`
+	ToolCall   *PermissionToolCall `json:"toolCall,omitempty"`
+	Approval   string              `json:"approval"`
+	ToolCallID string              `json:"toolCallId,omitempty"`
+	Command    string              `json:"command,omitempty"`
+	Files      []string            `json:"files,omitempty"`
+	Host       string              `json:"host,omitempty"`
+	Protocol   string              `json:"protocol,omitempty"`
+	Port       int                 `json:"port,omitempty"`
+	MCPServer  string              `json:"mcpServer,omitempty"`
+	MCPTool    string              `json:"mcpTool,omitempty"`
+	Message    string              `json:"message,omitempty"`
 }
 
 // SessionRequestPermissionResult is ACP client decision for one permission prompt.
 type SessionRequestPermissionResult struct {
-	Outcome  string `json:"outcome,omitempty"`
-	Decision string `json:"decision,omitempty"`
-	Approved *bool  `json:"approved,omitempty"`
+	Outcome          string `json:"-"`
+	SelectedOptionID string `json:"-"`
+	Decision         string `json:"decision,omitempty"`
+	Approved         *bool  `json:"approved,omitempty"`
+}
+
+// PermissionOption is one ACP-standard permission choice.
+type PermissionOption struct {
+	OptionID string `json:"optionId"`
+	Name     string `json:"name"`
+	Kind     string `json:"kind"`
+}
+
+// PermissionToolCall is the ACP-standard tool-call payload embedded in
+// session/request_permission.
+type PermissionToolCall struct {
+	ToolCallID string               `json:"toolCallId"`
+	Title      string               `json:"title"`
+	Kind       string               `json:"kind,omitempty"`
+	Status     string               `json:"status,omitempty"`
+	Locations  []PermissionLocation `json:"locations,omitempty"`
+	RawInput   map[string]any       `json:"rawInput,omitempty"`
+}
+
+// PermissionLocation points to one file touched by a permission-gated action.
+type PermissionLocation struct {
+	Path string `json:"path"`
+	Line *int   `json:"line,omitempty"`
+}
+
+// UnmarshalJSON accepts both the legacy string outcome shape and the ACP
+// standard object outcome shape.
+func (r *SessionRequestPermissionResult) UnmarshalJSON(data []byte) error {
+	type rawResult struct {
+		Outcome  json.RawMessage `json:"outcome,omitempty"`
+		Decision string          `json:"decision,omitempty"`
+		Approved *bool           `json:"approved,omitempty"`
+	}
+
+	var raw rawResult
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	*r = SessionRequestPermissionResult{
+		Decision: raw.Decision,
+		Approved: raw.Approved,
+	}
+
+	outcome := bytes.TrimSpace(raw.Outcome)
+	if len(outcome) == 0 || bytes.Equal(outcome, []byte("null")) {
+		return nil
+	}
+
+	if outcome[0] == '"' {
+		return json.Unmarshal(outcome, &r.Outcome)
+	}
+
+	var standard struct {
+		Outcome  string `json:"outcome"`
+		OptionID string `json:"optionId,omitempty"`
+	}
+	if err := json.Unmarshal(outcome, &standard); err != nil {
+		return err
+	}
+	r.Outcome = standard.Outcome
+	r.SelectedOptionID = standard.OptionID
+	return nil
 }
 
 // ByteRange marks byte offsets for one referenced resource window.

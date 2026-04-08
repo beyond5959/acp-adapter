@@ -708,6 +708,138 @@ func TestPiE2ELogoutAuthenticateAndPrompt(t *testing.T) {
 	}
 }
 
+func TestPiE2EPermissionAcceptForSessionCachesWithinSession(t *testing.T) {
+	piBin := buildFakePiRPC(t)
+	h := startPiAdapter(t, piBin, t.TempDir())
+
+	h.sendRequest("1", "initialize", map[string]any{})
+	_ = h.waitResponse("1", responseTimeout)
+
+	h.sendRequest("2", "session/new", map[string]any{
+		"cwd": repoRoot(t),
+	})
+	newResp := h.waitResponse("2", responseTimeout)
+	var newResult struct {
+		SessionID string `json:"sessionId"`
+	}
+	unmarshalResult(t, newResp, &newResult)
+	if newResult.SessionID == "" {
+		t.Fatalf("session/new returned empty sessionId")
+	}
+
+	// Drain the initial available_commands_update so the prompt loops only
+	// observe approval- and prompt-related traffic.
+	for {
+		msg := h.nextMessage(responseTimeout)
+		if msg.Method != "session/update" {
+			continue
+		}
+		update := decodeSessionUpdate(t, msg)
+		if update.SessionID == newResult.SessionID && update.Type == "available_commands_update" {
+			break
+		}
+	}
+
+	h.sendRequest("3", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "approval command",
+	})
+
+	sawPermission := false
+	sawExecutedFirst := false
+	gotPromptResp := false
+	deadline := time.Now().Add(2 * responseTimeout)
+	for !gotPromptResp {
+		if time.Now().After(deadline) {
+			t.Fatalf("first Pi approval flow timed out")
+		}
+		msg := h.nextMessage(time.Until(deadline))
+		switch msg.Method {
+		case "session/request_permission":
+			sawPermission = true
+			req := decodeSessionRequestPermission(t, msg)
+			if !hasPermissionOption(req.Options, "acceptForSession") {
+				t.Fatalf("Pi permission options missing acceptForSession: %+v", req.Options)
+			}
+			h.sendResultResponse(messageID(msg), map[string]any{
+				"outcome": map[string]any{
+					"outcome":  "selected",
+					"optionId": "acceptForSession",
+				},
+			})
+		case "session/update":
+			update := decodeSessionUpdate(t, msg)
+			if update.Type == "message" && strings.Contains(update.Delta, "executed command") {
+				sawExecutedFirst = true
+			}
+		default:
+			if messageID(msg) != "3" {
+				continue
+			}
+			var result struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, msg, &result)
+			if result.StopReason != "end_turn" {
+				t.Fatalf("first Pi prompt expected stopReason=end_turn, got %q", result.StopReason)
+			}
+			gotPromptResp = true
+		}
+	}
+
+	if !sawPermission {
+		t.Fatalf("first Pi approval flow expected session/request_permission")
+	}
+	if !sawExecutedFirst {
+		t.Fatalf("first Pi approval flow expected executed command marker")
+	}
+
+	h.sendRequest("4", "session/prompt", map[string]any{
+		"sessionId": newResult.SessionID,
+		"prompt":    "approval command",
+	})
+
+	sawExecutedSecond := false
+	gotSecondPromptResp := false
+	unexpectedPermission := false
+	deadline = time.Now().Add(2 * responseTimeout)
+	for !gotSecondPromptResp {
+		if time.Now().After(deadline) {
+			t.Fatalf("second Pi approval flow timed out")
+		}
+		msg := h.nextMessage(time.Until(deadline))
+		switch msg.Method {
+		case "session/request_permission":
+			unexpectedPermission = true
+			h.sendResultResponse(messageID(msg), map[string]any{"outcome": "approved"})
+		case "session/update":
+			update := decodeSessionUpdate(t, msg)
+			if update.Type == "message" && strings.Contains(update.Delta, "executed command") {
+				sawExecutedSecond = true
+			}
+		default:
+			if messageID(msg) != "4" {
+				continue
+			}
+			var result struct {
+				StopReason string `json:"stopReason"`
+			}
+			unmarshalResult(t, msg, &result)
+			if result.StopReason != "end_turn" {
+				t.Fatalf("second Pi prompt expected stopReason=end_turn, got %q", result.StopReason)
+			}
+			gotSecondPromptResp = true
+		}
+	}
+
+	if unexpectedPermission {
+		t.Fatalf("second Pi approval flow should be auto-approved by session cache")
+	}
+	if !sawExecutedSecond {
+		t.Fatalf("second Pi approval flow expected executed command marker")
+	}
+}
+
 func writePiSeedSession(t *testing.T, sessionDir string, sessionID string, title string, cwd string, userText string, assistantText string) string {
 	t.Helper()
 

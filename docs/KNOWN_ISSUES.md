@@ -56,6 +56,8 @@
 - KI-0050：Pi permission gate 当前只覆盖 `bash` / `write` / `edit`
 - KI-0051：Pi custom commands 与非 gate `extension_ui_request` 尚未桥接到 ACP
 - KI-0052：Pi 的 archived session / native review / MCP 与 Codex 仍不对齐
+- KI-0053：Codex 高级 approval policy amendment 选项尚未完整桥接到 ACP permission UI
+- KI-0054：Pi `acceptForSession` 当前仅为 adapter-managed exact-match cache
 
 ---
 
@@ -754,3 +756,44 @@
 - 后续计划：
   - 若后续 app-server 提供更明确的 thread/window occupancy 字段，改为直接桥接该字段。
   - 评估是否以扩展字段形式补充 `last.totalTokens` / `total.totalTokens`，同时满足“窗口占用”与“累计成本”两类 UI。
+
+## KI-0053：Codex 高级 approval policy amendment 选项尚未完整桥接到 ACP permission UI
+- 现象：
+  - 2026-04-08 起，adapter 已把 Codex command/file/network approval 升级为 ACP 标准 `session/request_permission(options/toolCall)`，并支持 `acceptForSession`。
+  - 但 Codex command approval schema 里更丰富的 option 仍包括：
+    - `acceptWithExecpolicyAmendment`
+    - `applyNetworkPolicyAmendment`
+  - 当前 adapter 只把这些 proposal 元数据放进 `toolCall.rawInput`，还没有把它们展开成可选的 ACP permission options。
+- 影响：
+  - 用户现在能看到并选择 `allow once` / `allow for session` / `reject once`，解决了最常见的 session-scoped allow 缺失问题。
+  - 但还不能直接在 ACP permission UI 里一键选择“记住相似命令规则”或“对某 host 持久 allow/deny”这类更高级策略。
+- 复现：
+  - 使用会在 `item/commandExecution/requestApproval` 中携带 `proposedExecpolicyAmendment` 或 `proposedNetworkPolicyAmendments` 的真实 codex app-server 版本触发命令/网络审批。
+- Workaround：
+  - 需要 session 级放行时，先使用已支持的 `acceptForSession`。
+  - 需要更长期/更精细的策略时，暂时仍通过 Codex 自身配置或后端原生客户端完成，而不是依赖 ACP permission UI。
+- 后续计划：
+  - 评估把上述 proposal 映射成 ACP `options[]` 的扩展 optionId，并在回包时生成 Codex 要求的 object decision。
+  - 在完成桥接前，继续保持当前策略：不伪造这些高级选项，避免上游 UI 暴露了无法正确回写的按钮。
+
+## KI-0054：Pi `acceptForSession` 当前仅为 adapter-managed exact-match cache
+- 现象：
+  - 2026-04-08 起，Pi backend 已支持 ACP `acceptForSession`，但实现方式不是 Pi 原生 remember-choice，而是 adapter 在 `internal/pi/client` 里维护的 session cache。
+  - 当前 cache 命中规则较保守：
+    - `command` / `network`：命令字符串完全一致才自动放行
+    - `file`：文件列表完全一致才自动放行
+- 影响：
+  - 重复执行完全相同的 Pi gate request 时，第二次开始不会再触发 ACP `session/request_permission`。
+  - 但对“语义相近但字符串不同”的操作，仍会继续弹 permission：
+    - 同一 host 的不同 `curl`/`wget` 命令
+    - 同一目录下不同文件写入
+    - 同一路径但文件集合不同的多文件 edit
+- 复现：
+  - 在 Pi backend 中第一次对 `approval command` 选择 `acceptForSession`，再重复相同 prompt，可见第二次不再请求 permission。
+  - 改成不同但相似的命令文本后再次触发，则仍会请求 permission。
+- Workaround：
+  - 若希望命中当前缓存，尽量保持重复操作的命令字符串或文件集合一致。
+  - 对更宽泛的长期规则，暂时仍需重复批准，或在 Pi / 宿主侧配置更上层的安全策略。
+- 后续计划：
+  - 评估为 network 审批补充 host 级 cache key、为 file 审批补充路径归一化规则。
+  - 若 Pi 上游后续提供原生 remember-choice / policy API，优先切换到上游原生能力。

@@ -165,6 +165,17 @@ type rpcSession struct {
 	nextID atomic.Uint64
 }
 
+type piPendingApproval struct {
+	sess     *rpcSession
+	approval codex.ApprovalRequest
+}
+
+type sessionApprovalRule struct {
+	Kind    codex.ApprovalKind
+	Command string
+	Files   []string
+}
+
 func (s *rpcSession) nextRequestID() string {
 	return fmt.Sprintf("pi-rpc-%d", s.nextID.Add(1))
 }
@@ -642,7 +653,13 @@ func (s *rpcSession) handleExtensionUIRequest(line []byte) {
 		if err := json.Unmarshal([]byte(request.Message), &payload); err == nil && payload.Gate == "acp-adapter" {
 			approval := approvalFromGatePayload(payload)
 			approval.ApprovalID = request.ID
-			s.client.registerApproval(request.ID, s)
+			approval.ThreadID = s.threadID
+			if s.client.shouldAutoApprove(s.threadID, approval) {
+				confirmed := true
+				_ = s.respondExtensionUI(request.ID, &confirmed, false)
+				return
+			}
+			s.client.registerApproval(request.ID, s, approval)
 			run.send(codex.TurnEvent{
 				Type:     codex.TurnEventTypeApprovalRequired,
 				ThreadID: s.threadID,
@@ -850,9 +867,10 @@ type Client struct {
 	loggedOut atomic.Bool
 	nextTurn  atomic.Uint64
 
-	mu        sync.Mutex
-	sessions  map[string]*rpcSession
-	approvals map[string]*rpcSession
+	mu            sync.Mutex
+	sessions      map[string]*rpcSession
+	approvals     map[string]piPendingApproval
+	approvalCache map[string][]sessionApprovalRule
 
 	modelsMu    sync.Mutex
 	modelsCache []codex.ModelOption
@@ -862,9 +880,10 @@ type Client struct {
 func NewClient(cfg Config) *Client {
 	cfg = cfg.Normalize()
 	return &Client{
-		cfg:       cfg,
-		sessions:  make(map[string]*rpcSession),
-		approvals: make(map[string]*rpcSession),
+		cfg:           cfg,
+		sessions:      make(map[string]*rpcSession),
+		approvals:     make(map[string]piPendingApproval),
+		approvalCache: make(map[string][]sessionApprovalRule),
 	}
 }
 
@@ -889,22 +908,61 @@ func (c *Client) removeSession(threadID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.sessions, threadID)
+	delete(c.approvalCache, threadID)
 }
 
-func (c *Client) registerApproval(approvalID string, sess *rpcSession) {
+func (c *Client) registerApproval(approvalID string, sess *rpcSession, approval codex.ApprovalRequest) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.approvals[approvalID] = sess
+	c.approvals[approvalID] = piPendingApproval{
+		sess:     sess,
+		approval: approval,
+	}
 }
 
-func (c *Client) takeApproval(approvalID string) (*rpcSession, bool) {
+func (c *Client) takeApproval(approvalID string) (piPendingApproval, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	sess, ok := c.approvals[approvalID]
+	approval, ok := c.approvals[approvalID]
 	if ok {
 		delete(c.approvals, approvalID)
 	}
-	return sess, ok
+	return approval, ok
+}
+
+func (c *Client) shouldAutoApprove(threadID string, approval codex.ApprovalRequest) bool {
+	threadID = strings.TrimSpace(threadID)
+	rule, ok := sessionApprovalRuleFromApproval(approval)
+	if !ok || threadID == "" {
+		return false
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	rules := c.approvalCache[threadID]
+	for _, cached := range rules {
+		if cached.matches(rule) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Client) rememberSessionApproval(threadID string, approval codex.ApprovalRequest) {
+	threadID = strings.TrimSpace(threadID)
+	rule, ok := sessionApprovalRuleFromApproval(approval)
+	if !ok || threadID == "" {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, cached := range c.approvalCache[threadID] {
+		if cached.matches(rule) {
+			return
+		}
+	}
+	c.approvalCache[threadID] = append(c.approvalCache[threadID], rule)
 }
 
 func (c *Client) sessionArgs() ([]string, error) {
@@ -1309,19 +1367,23 @@ func (c *Client) anySession() (*rpcSession, bool) {
 
 // ApprovalRespond maps ACP permission responses back to Pi extension_ui_response.
 func (c *Client) ApprovalRespond(ctx context.Context, approvalID string, decision codex.ApprovalDecision) error {
-	sess, ok := c.takeApproval(approvalID)
+	pending, ok := c.takeApproval(approvalID)
 	if !ok {
 		return fmt.Errorf("pi rpc: unknown approval %q", approvalID)
 	}
 	switch decision {
 	case codex.ApprovalDecisionApproved:
 		confirmed := true
-		return sess.respondExtensionUI(approvalID, &confirmed, false)
+		return pending.sess.respondExtensionUI(approvalID, &confirmed, false)
+	case codex.ApprovalDecisionApprovedForSession:
+		c.rememberSessionApproval(pending.sess.threadID, pending.approval)
+		confirmed := true
+		return pending.sess.respondExtensionUI(approvalID, &confirmed, false)
 	case codex.ApprovalDecisionDeclined:
 		confirmed := false
-		return sess.respondExtensionUI(approvalID, &confirmed, false)
+		return pending.sess.respondExtensionUI(approvalID, &confirmed, false)
 	default:
-		return sess.respondExtensionUI(approvalID, nil, true)
+		return pending.sess.respondExtensionUI(approvalID, nil, true)
 	}
 }
 
@@ -1738,6 +1800,73 @@ func approvalFromGatePayload(payload gateRequestPayload) codex.ApprovalRequest {
 		Files:      append([]string(nil), payload.Files...),
 		Message:    strings.TrimSpace(payload.Message),
 	}
+}
+
+func sessionApprovalRuleFromApproval(approval codex.ApprovalRequest) (sessionApprovalRule, bool) {
+	switch approval.Kind {
+	case codex.ApprovalKindCommand, codex.ApprovalKindNetwork:
+		command := strings.TrimSpace(approval.Command)
+		if command == "" {
+			return sessionApprovalRule{}, false
+		}
+		return sessionApprovalRule{
+			Kind:    approval.Kind,
+			Command: command,
+		}, true
+	case codex.ApprovalKindFile:
+		files := normalizeApprovalFiles(approval.Files)
+		if len(files) == 0 {
+			return sessionApprovalRule{}, false
+		}
+		return sessionApprovalRule{
+			Kind:  approval.Kind,
+			Files: files,
+		}, true
+	default:
+		return sessionApprovalRule{}, false
+	}
+}
+
+func normalizeApprovalFiles(files []string) []string {
+	if len(files) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(files))
+	out := make([]string, 0, len(files))
+	for _, file := range files {
+		file = strings.TrimSpace(file)
+		if file == "" {
+			continue
+		}
+		if _, ok := set[file]; ok {
+			continue
+		}
+		set[file] = struct{}{}
+		out = append(out, file)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (r sessionApprovalRule) matches(other sessionApprovalRule) bool {
+	if r.Kind != other.Kind {
+		return false
+	}
+	if r.Command != "" || other.Command != "" {
+		return strings.TrimSpace(r.Command) == strings.TrimSpace(other.Command)
+	}
+	if len(r.Files) != len(other.Files) {
+		return false
+	}
+	for i := range r.Files {
+		if r.Files[i] != other.Files[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func tokenUsageFromStats(stats *rpcSessionStats) *codex.ThreadTokenUsage {

@@ -57,6 +57,8 @@
 - ADR-0051：Codex `usage_update.used` 改为最新输入 token 近似值
 - ADR-0052：ACP `session/prompt` 最终 response 复用最后一次 usage 快照
 - ADR-0053：Pi 适配器架构（官方 RPC 模式 + session 文件恢复 + extension permission gate）
+- ADR-0054：Codex permission 桥接升级为 ACP 标准 `options/toolCall` 并支持 `acceptForSession`
+- ADR-0055：Pi `acceptForSession` 采用 adapter-managed exact-match session cache
 
 ### ADR-0048：Codex `PatchChangeKind` 运行时兼容策略
 - 日期：2026-03-26
@@ -238,6 +240,89 @@
   - `internal/acp/server.go`
   - `pkg/claudeacp/runtime_runner.go`
   - `testdata/fake_pi_rpc/main.go`
+
+### ADR-0054：Codex permission 桥接升级为 ACP 标准 `options/toolCall` 并支持 `acceptForSession`
+- 日期：2026-04-08
+- 状态：Accepted
+- 背景：
+  - ACP 官方 schema 的 `session/request_permission` 已要求 agent 发送标准 `toolCall` 与 `options[]`，客户端再以 `selected(optionId)` 或 `cancelled` 回应。
+  - 当前 adapter 仍停留在早期自定义三态：
+    - 请求只有 `approval/command/files/...` 扁平字段
+    - 响应只接受 `approved|declined|cancelled`
+  - Codex app-server 的 item approval schema 已支持 `acceptForSession`，但旧桥接会把它压扁掉，导致上游 UI 无法展示 session-scoped allow。
+- 决策：
+  - `session/request_permission` 改为“标准优先，兼容旧字段”：
+    - 新增 ACP 标准 `toolCall`
+    - 新增 ACP 标准 `options[]`
+    - 保留现有 `approval/command/files/host/...` 便于旧客户端继续工作
+  - 上游 permission response 同时接受两种形态：
+    - 旧形态：`{"outcome":"approved|declined|cancelled"}`
+    - 标准形态：`{"outcome":{"outcome":"selected","optionId":"..."}}`
+  - 对 Codex command/file/network approval，向上游广告以下 option：
+    - `accept` -> `allow_once`
+    - `acceptForSession` -> `allow_always`
+    - `decline` -> `reject_once`
+  - 当用户选择 `acceptForSession` 时，adapter 回写下游 item approval `{"decision":"acceptForSession"}`；legacy approval method 则保守降级为普通 `approved`
+  - embedded runtime 的 `PermissionDecision` 同步支持标准 selected-option 序列化，保持 standalone / embedded 契约一致
+- 备选方案：
+  - 方案A：继续维持旧三态，只在内部把 `acceptForSession` 当普通 approved。（拒绝）
+  - 方案B：全面切断旧字段，只输出 ACP 标准形态。（拒绝）
+  - 方案C：采用标准 `toolCall/options`，同时保留旧字段兼容，并把 `acceptForSession` 明确桥回 Codex item approval。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：上游 ACP client 可展示更完整的 permission 选项；Codex session-scoped allow 语义不再丢失；不会打破已有仅识别旧字段/旧 outcome 的客户端。
+  - Cons：adapter 在一段时间内需要同时维护标准与 legacy 两套形态；更高级的 object approval decision（execpolicy/network policy amendment）暂未完全桥接，见 KI-0053。
+- 影响范围（文件/模块）：
+  - `internal/acp/types.go`
+  - `internal/acp/server.go`
+  - `internal/acp/server_prompt_test.go`
+  - `internal/codex/types.go`
+  - `internal/codex/client.go`
+  - `internal/codex/client_server_request_test.go`
+  - `pkg/codexacp/embedded.go`
+  - `pkg/claudeacp/embedded.go`
+  - `pkg/piacp/embedded.go`
+  - `test/integration/e2e_test.go`
+  - `testdata/fake_codex_app_server/main.go`
+- 验证方式（测试/验收项）：
+  - `TestSessionRequestPermissionResultUnmarshalStandardSelected`
+  - `TestNormalizePermissionOutcomeSelectedAcceptForSession`
+  - `TestPermissionRequestOptionsCommandIncludeAllowForSession`
+  - `TestApprovalResponsePayload_ItemApprovalDecisionAcceptForSession`
+  - `TestApprovalFromCommandExecution_KeepExtendedFields`
+  - `TestE2EAcceptanceD1ToD5ApprovalsBridge`
+  - `go test ./...`
+
+### ADR-0055：Pi `acceptForSession` 采用 adapter-managed exact-match session cache
+- 日期：2026-04-08
+- 状态：Accepted
+- 背景：
+  - Pi backend 的 permission gate 来自 adapter 注入的 extension：Pi 本身只回布尔 `confirmed/cancelled`，没有原生 session-scoped remember-choice 机制。
+  - 在共享 ACP bridge 已经开始向上游广告 `acceptForSession` 后，Pi 路径如果继续只识别 `approved/declined/cancelled`，会把 `approved_for_session` 误处理为 cancel。
+- 决策：
+  - 在 `internal/pi/client` 内新增 adapter-managed session approval cache。
+  - 当 ACP 回写 `approved_for_session` 时：
+    - 当前这次 Pi `extension_ui_request` 立即按 `confirmed=true` 放行
+    - 同时把 approval 规则写入当前 Pi session 的 cache
+  - 后续命中 cache 的 approval 不再上收 ACP `session/request_permission`，而是直接向 Pi 回 `extension_ui_response`
+  - 当前 cache 规则先采用可解释、低风险的 exact-match：
+    - command / network：按命令字符串精确匹配
+    - file：按文件列表精确匹配
+- 备选方案：
+  - 方案A：Pi 上继续不支持 `acceptForSession`，把该选项留给 UI 但实际视为 cancel。（拒绝）
+  - 方案B：命中更宽泛的启发式规则，例如任意同类 command/file 都自动放行。（拒绝）
+  - 方案C：由 adapter 管理 session cache，但先限制为 exact-match，后续再演进。（采用）
+- 取舍（Pros/Cons）：
+  - Pros：Pi 路径不再把 `acceptForSession` 误判为 cancel；重复执行同一命令/同一文件操作时能真正免去二次确认；实现边界清晰且 fail-closed。
+  - Cons：这不是 Pi 原生 remember-choice；对“语义相近但字符串不同”的命令不会自动命中，例如同 host 的不同网络命令仍会再次询问，详见 KI-0054。
+- 影响范围（文件/模块）：
+  - `internal/pi/client.go`
+  - `internal/pi/client_test.go`
+  - `test/integration/pi_e2e_test.go`
+- 验证方式（测试/验收项）：
+  - `TestSessionApprovalRuleFromApproval`
+  - `TestClientRememberSessionApproval`
+  - `TestPiE2EPermissionAcceptForSessionCachesWithinSession`
+  - `go test ./internal/pi ./test/integration -run 'TestPiE2EPermissionAcceptForSessionCachesWithinSession|TestPiE2EPermissionGate|TestPiE2EBasicPromptCancelAndAvailableCommands|TestPiE2ESessionConfigOptionsModelListAndSwitch|TestPiE2ESessionListLoadAndPrompt|TestPiE2ELogoutAuthenticateAndPrompt'`
   - `test/integration/pi_e2e_test.go`
 - 验证方式（测试/验收项）：
   - `TestPiE2EBasicPromptCancelAndAvailableCommands`

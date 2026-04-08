@@ -501,29 +501,34 @@ const (
 type ApprovalDecision string
 
 const (
-	ApprovalDecisionApproved  ApprovalDecision = "approved"
-	ApprovalDecisionDeclined  ApprovalDecision = "declined"
-	ApprovalDecisionCancelled ApprovalDecision = "cancelled"
+	ApprovalDecisionApproved           ApprovalDecision = "approved"
+	ApprovalDecisionApprovedForSession ApprovalDecision = "approved_for_session"
+	ApprovalDecisionDeclined           ApprovalDecision = "declined"
+	ApprovalDecisionCancelled          ApprovalDecision = "cancelled"
 )
 
 // ApprovalRequest is server-initiated permission payload.
 type ApprovalRequest struct {
-	ThreadID   string       `json:"threadId"`
-	TurnID     string       `json:"turnId"`
-	ApprovalID string       `json:"approvalId,omitempty"`
-	ToolCallID string       `json:"toolCallId,omitempty"`
-	Kind       ApprovalKind `json:"kind"`
-	Command    string       `json:"command,omitempty"`
-	Files      []string     `json:"files,omitempty"`
-	Host       string       `json:"host,omitempty"`
-	Protocol   string       `json:"protocol,omitempty"`
-	Port       int          `json:"port,omitempty"`
-	MCPServer  string       `json:"mcpServer,omitempty"`
-	MCPTool    string       `json:"mcpTool,omitempty"`
-	Message    string       `json:"message,omitempty"`
-	WritePath  string       `json:"writePath,omitempty"`
-	WriteText  string       `json:"writeText,omitempty"`
-	Patch      string       `json:"patch,omitempty"`
+	ThreadID                        string                   `json:"threadId"`
+	TurnID                          string                   `json:"turnId"`
+	ApprovalID                      string                   `json:"approvalId,omitempty"`
+	ToolCallID                      string                   `json:"toolCallId,omitempty"`
+	Kind                            ApprovalKind             `json:"kind"`
+	Command                         string                   `json:"command,omitempty"`
+	CommandActions                  []CommandAction          `json:"commandActions,omitempty"`
+	CWD                             string                   `json:"cwd,omitempty"`
+	Files                           []string                 `json:"files,omitempty"`
+	Host                            string                   `json:"host,omitempty"`
+	Protocol                        string                   `json:"protocol,omitempty"`
+	Port                            int                      `json:"port,omitempty"`
+	MCPServer                       string                   `json:"mcpServer,omitempty"`
+	MCPTool                         string                   `json:"mcpTool,omitempty"`
+	Message                         string                   `json:"message,omitempty"`
+	ProposedExecpolicyAmendment     []string                 `json:"proposedExecpolicyAmendment,omitempty"`
+	ProposedNetworkPolicyAmendments []NetworkPolicyAmendment `json:"proposedNetworkPolicyAmendments,omitempty"`
+	WritePath                       string                   `json:"writePath,omitempty"`
+	WriteText                       string                   `json:"writeText,omitempty"`
+	Patch                           string                   `json:"patch,omitempty"`
 }
 
 // ApprovalDecisionResult is sent as JSON-RPC result for approval request.
@@ -533,19 +538,29 @@ type ApprovalDecisionResult struct {
 
 // CommandExecutionRequestApprovalParams are server params for one command approval.
 type CommandExecutionRequestApprovalParams struct {
-	ThreadID               string                  `json:"threadId"`
-	TurnID                 string                  `json:"turnId"`
-	ItemID                 string                  `json:"itemId"`
-	ApprovalID             string                  `json:"approvalId,omitempty"`
-	Command                string                  `json:"command,omitempty"`
-	Reason                 string                  `json:"reason,omitempty"`
-	NetworkApprovalContext *NetworkApprovalContext `json:"networkApprovalContext,omitempty"`
+	ThreadID                        string                   `json:"threadId"`
+	TurnID                          string                   `json:"turnId"`
+	ItemID                          string                   `json:"itemId"`
+	ApprovalID                      string                   `json:"approvalId,omitempty"`
+	Command                         string                   `json:"command,omitempty"`
+	CommandActions                  []CommandAction          `json:"commandActions,omitempty"`
+	CWD                             string                   `json:"cwd,omitempty"`
+	Reason                          string                   `json:"reason,omitempty"`
+	NetworkApprovalContext          *NetworkApprovalContext  `json:"networkApprovalContext,omitempty"`
+	ProposedExecpolicyAmendment     []string                 `json:"proposedExecpolicyAmendment,omitempty"`
+	ProposedNetworkPolicyAmendments []NetworkPolicyAmendment `json:"proposedNetworkPolicyAmendments,omitempty"`
 }
 
 // NetworkApprovalContext carries optional host/protocol hints for network approvals.
 type NetworkApprovalContext struct {
 	Host     string `json:"host"`
 	Protocol string `json:"protocol"`
+}
+
+// NetworkPolicyAmendment carries one proposed host allow/deny rule.
+type NetworkPolicyAmendment struct {
+	Action string `json:"action"`
+	Host   string `json:"host"`
 }
 
 // FileChangeRequestApprovalParams are server params for one file-change approval.

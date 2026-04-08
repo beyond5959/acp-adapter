@@ -38,9 +38,31 @@ type RPCError struct {
 
 // PermissionDecision is one session/request_permission response payload.
 type PermissionDecision struct {
-	Outcome  string `json:"outcome,omitempty"`
-	Decision string `json:"decision,omitempty"`
-	Approved *bool  `json:"approved,omitempty"`
+	Outcome          string `json:"outcome,omitempty"`
+	SelectedOptionID string `json:"-"`
+	Decision         string `json:"decision,omitempty"`
+	Approved         *bool  `json:"approved,omitempty"`
+}
+
+// MarshalJSON keeps the legacy string outcome shape while allowing the ACP
+// standard selected-option object outcome.
+func (d PermissionDecision) MarshalJSON() ([]byte, error) {
+	payload := map[string]any{}
+	if d.SelectedOptionID != "" {
+		payload["outcome"] = map[string]any{
+			"outcome":  "selected",
+			"optionId": d.SelectedOptionID,
+		}
+	} else if d.Outcome != "" {
+		payload["outcome"] = d.Outcome
+	}
+	if d.Decision != "" {
+		payload["decision"] = d.Decision
+	}
+	if d.Approved != nil {
+		payload["approved"] = d.Approved
+	}
+	return json.Marshal(payload)
 }
 
 // EmbeddedRuntime hosts a Claude ACP server in-process using in-memory transport.

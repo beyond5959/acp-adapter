@@ -75,9 +75,10 @@ const (
 type permissionOutcome string
 
 const (
-	permissionOutcomeApproved  permissionOutcome = "approved"
-	permissionOutcomeDeclined  permissionOutcome = "declined"
-	permissionOutcomeCancelled permissionOutcome = "cancelled"
+	permissionOutcomeApproved           permissionOutcome = "approved"
+	permissionOutcomeApprovedForSession permissionOutcome = "approved_for_session"
+	permissionOutcomeDeclined           permissionOutcome = "declined"
+	permissionOutcomeCancelled          permissionOutcome = "cancelled"
 )
 
 type patchApplyMode string
@@ -1608,14 +1609,14 @@ func (s *Server) handleApprovalEvent(
 	}
 
 	toolStatus := "failed"
-	toolMessage := fmt.Sprintf("permission %s", decision)
+	toolMessage := permissionOutcomeMessage(decision)
 	respondDecision := mapDecisionToAppServer(decision)
-	if decision == permissionOutcomeApproved {
+	if permissionOutcomeAllowsExecution(decision) {
 		toolStatus = "completed"
 	}
 
 	mode := normalizePatchApplyMode(s.options.PatchApplyMode)
-	if mode == patchApplyModeACPFS && event.Approval.Kind == codex.ApprovalKindFile && decision == permissionOutcomeApproved {
+	if mode == patchApplyModeACPFS && event.Approval.Kind == codex.ApprovalKindFile && permissionOutcomeAllowsExecution(decision) {
 		if err := s.applyPatchViaACPFS(ctx, lifecycle.sessionID, lifecycle.turnID, event.Approval); err != nil {
 			toolStatus = "failed"
 			toolMessage = fmt.Sprintf("permission approved but ACP fs apply failed: %v", err)
@@ -1901,8 +1902,10 @@ func (s *Server) requestPermission(
 	defer cancel()
 
 	params := SessionRequestPermissionParams{
+		Options:    permissionRequestOptions(approval),
 		SessionID:  sessionID,
 		TurnID:     turnID,
+		ToolCall:   permissionRequestToolCall(approval),
 		Approval:   string(approval.Kind),
 		ToolCallID: approval.ToolCallID,
 		Command:    approval.Command,
@@ -4136,8 +4139,8 @@ func (s *Server) handleMCPCallSlash(
 		}
 
 		toolStatus := "failed"
-		toolMessage := fmt.Sprintf("permission %s", decision)
-		if decision == permissionOutcomeApproved {
+		toolMessage := permissionOutcomeMessage(decision)
+		if permissionOutcomeAllowsExecution(decision) {
 			result, callErr := s.app.MCPToolCall(turnCtx, codex.MCPToolCallParams{
 				Server:    command.argOne,
 				Tool:      command.argTwo,
@@ -5178,6 +5181,10 @@ func (t *turnLifecycle) fallbackStopReason() string {
 }
 
 func normalizePermissionOutcome(result SessionRequestPermissionResult) permissionOutcome {
+	if outcome := permissionOutcomeFromOptionID(result.SelectedOptionID); outcome != "" {
+		return outcome
+	}
+
 	outcome := strings.TrimSpace(strings.ToLower(result.Outcome))
 	if outcome == "" {
 		outcome = strings.TrimSpace(strings.ToLower(result.Decision))
@@ -5186,6 +5193,8 @@ func normalizePermissionOutcome(result SessionRequestPermissionResult) permissio
 	switch outcome {
 	case "approve", "approved", "allow", "allowed":
 		return permissionOutcomeApproved
+	case "acceptforsession", "approveforsession", "approved_for_session", "allow_always":
+		return permissionOutcomeApprovedForSession
 	case "decline", "declined", "deny", "denied":
 		return permissionOutcomeDeclined
 	case "cancel", "cancelled", "canceled":
@@ -5205,11 +5214,219 @@ func mapDecisionToAppServer(outcome permissionOutcome) codex.ApprovalDecision {
 	switch outcome {
 	case permissionOutcomeApproved:
 		return codex.ApprovalDecisionApproved
+	case permissionOutcomeApprovedForSession:
+		return codex.ApprovalDecisionApprovedForSession
 	case permissionOutcomeDeclined:
 		return codex.ApprovalDecisionDeclined
 	default:
 		return codex.ApprovalDecisionCancelled
 	}
+}
+
+func permissionOutcomeFromOptionID(optionID string) permissionOutcome {
+	switch normalizePermissionOptionID(optionID) {
+	case "accept", "approve", "allowonce":
+		return permissionOutcomeApproved
+	case "acceptforsession", "approveforsession", "approvedforsession", "allowalways":
+		return permissionOutcomeApprovedForSession
+	case "decline", "declined", "deny", "denied", "rejectonce", "rejectalways":
+		return permissionOutcomeDeclined
+	case "cancel", "cancelled", "canceled":
+		return permissionOutcomeCancelled
+	default:
+		return ""
+	}
+}
+
+func normalizePermissionOptionID(optionID string) string {
+	optionID = strings.TrimSpace(strings.ToLower(optionID))
+	optionID = strings.ReplaceAll(optionID, "-", "")
+	optionID = strings.ReplaceAll(optionID, "_", "")
+	return optionID
+}
+
+func permissionOutcomeAllowsExecution(outcome permissionOutcome) bool {
+	return outcome == permissionOutcomeApproved || outcome == permissionOutcomeApprovedForSession
+}
+
+func permissionOutcomeMessage(outcome permissionOutcome) string {
+	switch outcome {
+	case permissionOutcomeApproved:
+		return "permission approved"
+	case permissionOutcomeApprovedForSession:
+		return "permission approved for session"
+	case permissionOutcomeDeclined:
+		return "permission declined"
+	default:
+		return "permission cancelled"
+	}
+}
+
+func permissionRequestOptions(approval codex.ApprovalRequest) []PermissionOption {
+	options := []PermissionOption{
+		{
+			OptionID: "accept",
+			Name:     "Allow once",
+			Kind:     "allow_once",
+		},
+	}
+
+	switch approval.Kind {
+	case codex.ApprovalKindCommand, codex.ApprovalKindFile, codex.ApprovalKindNetwork:
+		options = append(options, PermissionOption{
+			OptionID: "acceptForSession",
+			Name:     "Allow for session",
+			Kind:     "allow_always",
+		})
+	}
+
+	options = append(options, PermissionOption{
+		OptionID: "decline",
+		Name:     "Reject",
+		Kind:     "reject_once",
+	})
+	return options
+}
+
+func permissionRequestToolCall(approval codex.ApprovalRequest) *PermissionToolCall {
+	toolCallID := strings.TrimSpace(approval.ToolCallID)
+	if toolCallID == "" {
+		toolCallID = strings.TrimSpace(approval.ApprovalID)
+	}
+	if toolCallID == "" {
+		return nil
+	}
+
+	toolCall := &PermissionToolCall{
+		ToolCallID: toolCallID,
+		Title:      permissionToolCallTitle(approval),
+		Kind:       permissionToolCallKind(approval),
+		Status:     "pending",
+		Locations:  permissionToolCallLocations(approval),
+		RawInput:   permissionToolCallRawInput(approval),
+	}
+	if toolCall.Title == "" {
+		toolCall.Title = "Permission required"
+	}
+	if len(toolCall.Locations) == 0 {
+		toolCall.Locations = nil
+	}
+	if len(toolCall.RawInput) == 0 {
+		toolCall.RawInput = nil
+	}
+	return toolCall
+}
+
+func permissionToolCallTitle(approval codex.ApprovalRequest) string {
+	switch approval.Kind {
+	case codex.ApprovalKindNetwork:
+		target := strings.TrimSpace(approval.Host)
+		protocol := strings.TrimSpace(approval.Protocol)
+		if target != "" {
+			if protocol != "" {
+				target = protocol + "://" + target
+			}
+			if approval.Port > 0 {
+				target = fmt.Sprintf("%s:%d", target, approval.Port)
+			}
+			return "Access " + target
+		}
+		if strings.TrimSpace(approval.Command) != "" {
+			return approval.Command
+		}
+	case codex.ApprovalKindCommand:
+		if strings.TrimSpace(approval.Command) != "" {
+			return approval.Command
+		}
+	case codex.ApprovalKindFile:
+		if len(approval.Files) == 1 {
+			return "Modify " + approval.Files[0]
+		}
+		if len(approval.Files) > 1 {
+			return fmt.Sprintf("Modify %d files", len(approval.Files))
+		}
+		return "Modify files"
+	case codex.ApprovalKindMCP:
+		if approval.MCPServer != "" && approval.MCPTool != "" {
+			return fmt.Sprintf("Call %s/%s", approval.MCPServer, approval.MCPTool)
+		}
+		if approval.MCPTool != "" {
+			return "Call " + approval.MCPTool
+		}
+	}
+	return strings.TrimSpace(approval.Message)
+}
+
+func permissionToolCallKind(approval codex.ApprovalRequest) string {
+	switch approval.Kind {
+	case codex.ApprovalKindCommand:
+		return "execute"
+	case codex.ApprovalKindFile:
+		return "edit"
+	case codex.ApprovalKindNetwork:
+		return "fetch"
+	default:
+		return "other"
+	}
+}
+
+func permissionToolCallLocations(approval codex.ApprovalRequest) []PermissionLocation {
+	if len(approval.Files) == 0 {
+		return nil
+	}
+	out := make([]PermissionLocation, 0, len(approval.Files))
+	for _, path := range approval.Files {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		out = append(out, PermissionLocation{Path: path})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func permissionToolCallRawInput(approval codex.ApprovalRequest) map[string]any {
+	raw := map[string]any{}
+	if approval.Command != "" {
+		raw["command"] = approval.Command
+	}
+	if len(approval.CommandActions) > 0 {
+		raw["commandActions"] = approval.CommandActions
+	}
+	if approval.CWD != "" {
+		raw["cwd"] = approval.CWD
+	}
+	if len(approval.Files) > 0 {
+		raw["files"] = approval.Files
+	}
+	if approval.Host != "" {
+		raw["host"] = approval.Host
+	}
+	if approval.Protocol != "" {
+		raw["protocol"] = approval.Protocol
+	}
+	if approval.Port > 0 {
+		raw["port"] = approval.Port
+	}
+	if approval.MCPServer != "" {
+		raw["mcpServer"] = approval.MCPServer
+	}
+	if approval.MCPTool != "" {
+		raw["mcpTool"] = approval.MCPTool
+	}
+	if approval.Message != "" {
+		raw["message"] = approval.Message
+	}
+	if len(approval.ProposedExecpolicyAmendment) > 0 {
+		raw["proposedExecpolicyAmendment"] = approval.ProposedExecpolicyAmendment
+	}
+	if len(approval.ProposedNetworkPolicyAmendments) > 0 {
+		raw["proposedNetworkPolicyAmendments"] = approval.ProposedNetworkPolicyAmendments
+	}
+	return raw
 }
 
 func textTurnInput(text string) []codex.UserInput {
